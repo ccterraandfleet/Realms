@@ -45,6 +45,9 @@ export class Renderer {
   private ownerCv: HTMLCanvasElement;
   private borderCv: HTMLCanvasElement;
   private g: Game;
+  /** Border tiles, rebuilt a few times a second: the standing lines. */
+  private frontier: number[] = [];
+  private frontierTimer = 0;
 
   constructor(public canvas: HTMLCanvasElement, game: Game) {
     this.g = game;
@@ -176,6 +179,26 @@ export class Renderer {
     for (let t = 0; t < w * h; t++) this.paintTile(t);
   }
 
+  private rebuildFrontier() {
+    const { w, h, terrain } = this.g.world;
+    const out: number[] = [];
+    for (let t = 0; t < w * h; t++) {
+      const owner = this.g.ownerAt(t);
+      if (owner < 0 || terrain[t] === 0) continue;
+      const x = t % w;
+      const y = (t / w) | 0;
+      if (
+        (x > 0 && this.g.ownerAt(t - 1) !== owner) ||
+        (x < w - 1 && this.g.ownerAt(t + 1) !== owner) ||
+        (y > 0 && this.g.ownerAt(t - w) !== owner) ||
+        (y < h - 1 && this.g.ownerAt(t + w) !== owner)
+      ) {
+        out.push(t);
+      }
+    }
+    this.frontier = out;
+  }
+
   /** Flush tiles that changed ownership since the last frame. */
   flushDirty() {
     const dirty = this.g.dirty;
@@ -214,27 +237,98 @@ export class Renderer {
       return [cam.x + x * cam.scale, cam.y + y * cam.scale];
     };
 
-    // Marching columns.
-    for (const a of this.g.attacks) {
-      const [ax, ay] = toScreen(a.from);
+    // Standing lines: soldiers holding every stretch of border, on both sides.
+    if (cam.scale >= 2.6) {
+      this.frontierTimer -= 1;
+      if (this.frontierTimer <= 0) {
+        this.frontierTimer = 20; // rebuild about every 20 frames
+        this.rebuildFrontier();
+      }
+      const r = Math.max(0.7, cam.scale * 0.085);
+      for (const t of this.frontier) {
+        const owner = this.g.ownerAt(t);
+        if (owner < 0) continue;
+        const x = t % w;
+        const y = (t / w) | 0;
+        const sx = cam.x + (x + 0.5) * cam.scale;
+        const sy = cam.y + (y + 0.5) * cam.scale;
+        if (sx < -20 || sy < -20 || sx > this.canvas.width / dpr + 20 || sy > this.canvas.height / dpr + 20) continue;
+        // Pick the side of the tile that faces hostile ground and stand there.
+        let ox = 0;
+        let oy = 0;
+        for (const n of this.g.neighbors4(t)) {
+          if (this.g.ownerAt(n) === owner) continue;
+          const nx = n % w;
+          const ny = (n / w) | 0;
+          ox += Math.sign(nx - x) * 0.26;
+          oy += Math.sign(ny - y) * 0.26;
+        }
+        // Picket line: one soldier every other border tile, so a front reads
+        // as held ground without turning the border into mush.
+        if (((x + y) & 1) === 0) continue;
+        const px = sx + ox * cam.scale;
+        const py = sy + oy * cam.scale;
+        ctx.fillStyle = "rgba(20,16,10,0.45)";
+        ctx.beginPath();
+        ctx.arc(px, py + r * 0.5, r * 1.35, 0, 6.283);
+        ctx.fill();
+        ctx.fillStyle = "#f6efd9";
+        ctx.beginPath();
+        ctx.arc(px, py, r * 1.3, 0, 6.283);
+        ctx.fill();
+        ctx.fillStyle = PALETTE[owner % PALETTE.length];
+        ctx.beginPath();
+        ctx.arc(px, py, r * 0.8, 0, 6.283);
+        ctx.fill();
+      }
+    }
+
+    // Columns in the field.
+    for (const a of this.g.armies) {
+      const col = PALETTE[a.owner % PALETTE.length];
+      const [ax, ay] = toScreen(a.tile);
       const [bx, by] = toScreen(a.target);
-      const col = PALETTE[a.attacker % PALETTE.length];
-      ctx.strokeStyle = "rgba(20,16,10,0.35)";
-      ctx.lineWidth = Math.max(1, cam.scale * 0.22);
+      if (ax < -80 || ay < -80 || ax > this.canvas.width / dpr + 80 || ay > this.canvas.height / dpr + 80) continue;
+
+      // Line of advance toward the objective.
+      ctx.strokeStyle = "rgba(18,14,8,0.4)";
+      ctx.lineWidth = Math.max(1, cam.scale * 0.12);
+      ctx.setLineDash([Math.max(3, cam.scale * 0.5), Math.max(3, cam.scale * 0.45)]);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.stroke();
-      const t = Math.min(1, a.progress / a.duration);
-      const dots = Math.min(5, 2 + Math.floor(Math.log10(1 + a.troops) ));
+      ctx.setLineDash([]);
+
+      // The column itself: dots, one per slice of strength.
+      const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
+      const r = Math.max(1.2, cam.scale * 0.16);
       for (let i = 0; i < dots; i++) {
-        const f = Math.max(0, Math.min(1, t - i * 0.07));
-        const px = ax + (bx - ax) * f;
-        const py = ay + (by - ay) * f;
-        ctx.fillStyle = i === 0 ? "#fbf3df" : col;
+        const ang = (i / dots) * 6.283;
+        const rad = cam.scale * (0.3 + 0.11 * (i % 3));
+        const px = ax + Math.cos(ang) * rad;
+        const py = ay - cam.scale * 0.1 + Math.sin(ang) * rad * 0.7;
+        ctx.fillStyle = i === 0 ? "#fdf6e4" : col;
         ctx.beginPath();
-        ctx.arc(px, py, Math.max(1.1, cam.scale * 0.15), 0, 6.283);
+        ctx.arc(px, py, r, 0, 6.283);
         ctx.fill();
+      }
+
+      if (a.cutOff) {
+        // Cut off from home: ring it, so the rout is no surprise.
+        ctx.strokeStyle = "rgba(240,90,80,0.9)";
+        ctx.lineWidth = Math.max(1.2, cam.scale * 0.11);
+        ctx.setLineDash([Math.max(2, cam.scale * 0.25), Math.max(2, cam.scale * 0.2)]);
+        ctx.beginPath();
+        ctx.arc(ax, ay, cam.scale * 0.9, 0, 6.283);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (a.holding) {
+        ctx.strokeStyle = "rgba(250,240,205,0.75)";
+        ctx.lineWidth = Math.max(1, cam.scale * 0.08);
+        ctx.beginPath();
+        ctx.arc(ax, ay, cam.scale * 0.72, 0, 6.283);
+        ctx.stroke();
       }
     }
 

@@ -204,7 +204,7 @@ function click(tile: number) {
 function attack(tile: number) {
   const me = game.players[game.human];
   if (!me || game.phase !== "playing") return;
-  game.attack(me, tile, Number(ratioInput.value) / 100);
+  game.orderArmy(me, tile, Number(ratioInput.value) / 100);
 }
 
 ratioInput.addEventListener("input", () => {

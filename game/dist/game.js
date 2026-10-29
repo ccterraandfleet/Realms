@@ -170,7 +170,9 @@
     "Lord Ashen",
     "Earl Dunmore"
   ];
-  var ATTACK_TIME = 0.7;
+  var MAX_ARMIES_PER_PLAYER = 5;
+  var MAX_ARMIES = 90;
+  var HOLD_BEFORE_ABSORB = 8;
   var IMMUNITY = 20;
   var SPAWN_RADIUS = 5;
   var BOT_SPAWN_RADIUS = 4;
@@ -179,7 +181,7 @@
       this.seed = seed2;
       this.players = [];
       this.structs = /* @__PURE__ */ new Map();
-      this.attacks = [];
+      this.armies = [];
       this.time = 0;
       this.phase = "spawn";
       this.winner = -1;
@@ -188,7 +190,7 @@
       this.structDirty = true;
       this.messages = [];
       this.human = 0;
-      this.nextAttackId = 1;
+      this.nextArmyId = 1;
       this.world = generateWorld(seed2, w, h);
       this.owners = new Int16Array(w * h).fill(-1);
       this.rng = mulberry32(seed2 ^ 2654435769);
@@ -388,27 +390,23 @@
       this.note(`${this.players.length - 1} rival lords have taken the field.`);
     }
     /* ------------------------------------------------------------------ */
-    /* War                                                                 */
+    /* War: standing fronts, pushes, and supply                            */
     /* ------------------------------------------------------------------ */
-    /** A tile may be attacked if it is land, unowned by the attacker, and
-     *  touches the attacker's territory. */
+    /** A tile can be targeted if it is land you do not already hold. */
     canAttack(p, t) {
       if (t < 0 || !this.isLand(t)) return false;
       if (this.owners[t] === p.id) return false;
       const owner = this.owners[t];
       if (owner >= 0 && this.players[owner].immune > 0) return false;
-      for (const n of this.neighbors8(t)) {
-        if (this.owners[n] === p.id) return true;
-      }
-      return false;
+      return true;
     }
-    /** Cost in troops to take an unowned tile. */
+    /** Troops needed to walk over unclaimed ground (scouts, not soldiers). */
     neutralDefense(t) {
       return DEFENSE[this.world.terrain[t]];
     }
     towerBonus(t, defender) {
       let bonus = 0;
-      const { w, h } = this.world;
+      const { w } = this.world;
       const x = t % w;
       const y = t / w | 0;
       for (const s of this.structs.values()) {
@@ -417,69 +415,223 @@
         const sy = s.tile / w | 0;
         if (Math.hypot(sx - x, sy - y) <= 18) bonus += 0.3;
       }
-      if (this.structs.get(t)?.kind === "castle") bonus += 0.8;
+      const here = this.structs.get(t);
+      if (here && here.owner === defender && here.kind === "castle") bonus += 0.35 * here.level;
       return bonus;
     }
-    attack(p, target, ratio) {
+    /**
+     * The standing line. Every border tile is held by soldiers, drawn from the
+     * realm's host, so a front exists on both sides even in peacetime. A garrison
+     * parked next to it reinforces that stretch.
+     */
+    lineStrength(p) {
+      return Math.max(4, p.troops * 0.28);
+    }
+    /** Defence of a held tile: its share of the line, terrain, works, garrisons. */
+    defenseAt(t, defender) {
+      if (defender < 0) return this.neutralDefense(t);
+      const p = this.players[defender];
+      const terrainMul = this.world.terrain[t] === 4 ? 1.5 : this.world.terrain[t] === 3 ? 1.15 : 1;
+      let def = this.lineStrength(p) * terrainMul * (1 + this.towerBonus(t, defender));
+      for (const a of this.armies) {
+        if (a.owner !== defender || !a.holding) continue;
+        if (this.tileDistance(a.tile, t) <= 1) def += a.troops * 0.6;
+      }
+      return def;
+    }
+    tileDistance(a, b) {
+      const { w } = this.world;
+      const ax = a % w;
+      const ay = a / w | 0;
+      const bx = b % w;
+      const by = b / w | 0;
+      return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+    }
+    /**
+     * Click a point, and an army launches toward it and pushes inward from
+     * there. Bigger detachments move faster and hit harder.
+     */
+    orderArmy(p, target, ratio) {
       if (this.phase !== "playing" || !p.alive) return false;
       if (!this.canAttack(p, target)) return false;
-      for (const a of this.attacks) {
-        if (a.attacker === p.id && a.target === target) return false;
-      }
-      const share = Math.max(0.02, Math.min(1, ratio));
+      const share = Math.max(0.05, Math.min(1, ratio));
       const send = Math.floor(p.troops * share);
-      if (send < 10) return false;
-      p.troops -= send;
-      let from = target;
-      let best = Infinity;
-      for (const n of this.neighbors8(target)) {
-        if (this.owners[n] !== p.id) continue;
-        const d = Math.abs(n % this.world.w - target % this.world.w);
-        if (d < best) {
-          best = d;
-          from = n;
+      if (send < 12) return false;
+      let launch = -1;
+      let bestD = Infinity;
+      for (const t of p.tiles) {
+        const d = this.tileDistance(t, target);
+        if (d < bestD) {
+          bestD = d;
+          launch = t;
         }
       }
-      this.attacks.push({
-        id: this.nextAttackId++,
-        attacker: p.id,
-        from,
-        target,
+      if (launch < 0 || bestD > 40) return false;
+      const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
+      if (mine >= MAX_ARMIES_PER_PLAYER || this.armies.length >= MAX_ARMIES) return false;
+      for (const a of this.armies) {
+        if (a.owner === p.id && a.target === target) return false;
+      }
+      p.troops -= send;
+      this.armies.push({
+        id: this.nextArmyId++,
+        owner: p.id,
         troops: send,
+        tile: launch,
+        target,
         progress: 0,
-        duration: ATTACK_TIME
+        taken: 0,
+        cutOff: false,
+        speed: this.armySpeed(send),
+        supplyTimer: 0,
+        holding: false,
+        holdTimer: 0
       });
       return true;
     }
-    resolveAttack(a) {
-      const p = this.players[a.attacker];
-      if (!p.alive) return;
-      const owner = this.owners[a.target];
-      if (owner === a.attacker) return;
-      if (owner >= 0) {
-        const d = this.players[owner];
-        if (d.immune > 0) {
-          p.troops += a.troops;
-          return;
+    /** Stronger columns advance faster; rough ground slows them. */
+    armySpeed(troops) {
+      return Math.max(0.45, Math.min(3.4, 0.5 + Math.sqrt(Math.max(1, troops)) * 0.035));
+    }
+    armyTick(dt) {
+      for (let i = this.armies.length - 1; i >= 0; i--) {
+        const a = this.armies[i];
+        const p = this.players[a.owner];
+        if (!p.alive) {
+          this.armies.splice(i, 1);
+          continue;
         }
-        const effective = d.troops * (1 + this.towerBonus(a.target, owner));
-        if (effective > a.troops) {
-          d.troops = Math.max(0, d.troops - a.troops * 0.8);
-          p.troops += Math.floor(a.troops * 0.85);
-          return;
+        a.supplyTimer -= dt;
+        if (a.supplyTimer <= 0) {
+          a.supplyTimer = 0.35;
+          const connected = this.traceHome(a);
+          if (a.cutOff !== !connected) {
+            a.cutOff = !connected;
+            if (a.cutOff && !p.isBot) this.note("A push has been cut off from home.");
+          }
         }
-        d.troops = Math.max(0, d.troops - a.troops);
-        this.capture(a.target, a.attacker);
-        p.troops += Math.floor(a.troops * 0.35);
+        if (a.cutOff) {
+          a.troops *= 1 - 0.16 * dt;
+          if (a.troops < 45) {
+            this.armies.splice(i, 1);
+            if (!p.isBot) this.note("An isolated push has been routed.");
+            continue;
+          }
+        }
+        if (a.holding) {
+          a.holdTimer += dt;
+          if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
+            p.troops = Math.min(this.capacity(p), p.troops + a.troops);
+            this.armies.splice(i, 1);
+          }
+          continue;
+        }
+        const terrain = this.world.terrain[a.tile];
+        const ground = terrain === 4 ? 0.62 : terrain === 3 ? 0.85 : 1;
+        a.speed = this.armySpeed(a.troops) * ground * (a.cutOff ? 0.55 : 1);
+        a.progress += a.speed * dt;
+        while (a.progress >= 1 && !a.holding) {
+          a.progress -= 1;
+          this.armyStep(a, p);
+        }
+      }
+    }
+    /** One tile of the push: survey open ground, or fight for held ground. */
+    armyStep(a, p) {
+      const next = this.nextTile(a);
+      if (next < 0) {
+        a.holding = true;
         return;
       }
-      const need = this.neutralDefense(a.target);
-      if (a.troops >= need) {
-        this.capture(a.target, a.attacker);
-        p.troops += a.troops - need;
-      } else {
-        p.troops += Math.floor(a.troops * 0.9);
+      const owner = this.owners[next];
+      if (owner === a.owner) {
+        a.tile = next;
+        if (next === a.target) a.holding = true;
+        return;
       }
+      if (owner < 0) {
+        const toll = Math.max(1, this.neutralDefense(next) * 0.06);
+        if (a.troops > toll) {
+          a.troops -= toll;
+          this.capture(next, a.owner);
+          a.tile = next;
+          a.taken++;
+          if (next === a.target) a.holding = true;
+          return;
+        }
+        a.holding = true;
+        return;
+      }
+      const def = this.defenseAt(next, owner);
+      if (a.troops > def) {
+        a.troops -= def * 0.7;
+        const defender = this.players[owner];
+        defender.troops = Math.max(0, defender.troops - def * 0.45);
+        this.capture(next, a.owner);
+        a.tile = next;
+        a.taken++;
+        if (next === a.target) a.holding = true;
+        if (!p.isBot && a.taken === 1) this.note("The line has been broken.");
+      } else {
+        const defender = this.players[owner];
+        defender.troops = Math.max(0, defender.troops - a.troops * 0.35);
+        a.troops -= Math.min(a.troops, def * 0.8);
+        a.holding = true;
+        if (a.troops < 45) {
+          const idx2 = this.armies.indexOf(a);
+          if (idx2 >= 0) this.armies.splice(idx2, 1);
+          if (!p.isBot) this.note("A push has broken against the line.");
+        }
+      }
+    }
+    /** Next tile for a push: toward the objective, never onto own ground. */
+    nextTile(a) {
+      let best = -1;
+      let bestScore = Infinity;
+      const curDist = this.tileDistance(a.tile, a.target);
+      for (const n of this.neighbors8(a.tile)) {
+        if (!this.isLand(n)) continue;
+        if (this.owners[n] === a.owner) continue;
+        const d = this.tileDistance(n, a.target);
+        const score = d + (d >= curDist ? 0.6 : 0) + (this.owners[n] >= 0 ? 0.15 : 0);
+        if (score < bestScore) {
+          bestScore = score;
+          best = n;
+        }
+      }
+      return best;
+    }
+    /**
+     * True when the column can still walk home over friendly ground. Reaching a
+     * friendly castle is what counts as being in supply; a column whose corridor
+     * has been severed and surrounded is on its own.
+     */
+    traceHome(a) {
+      const owner = a.owner;
+      const p = this.players[owner];
+      let hasCastle = false;
+      for (const s of this.structs.values()) {
+        if (s.owner === owner && s.kind === "castle") {
+          hasCastle = true;
+          break;
+        }
+      }
+      const seen = /* @__PURE__ */ new Set([a.tile]);
+      const queue = [a.tile];
+      while (queue.length && seen.size < 1500) {
+        const t = queue.pop();
+        const s = this.structs.get(t);
+        if (s && s.owner === owner && s.kind === "castle") return true;
+        for (const n of this.neighbors8(t)) {
+          if (seen.has(n)) continue;
+          if (!this.isLand(n)) continue;
+          if (this.owners[n] !== owner) continue;
+          seen.add(n);
+          queue.push(n);
+        }
+      }
+      if (!hasCastle) return seen.size >= Math.min(25, Math.max(6, p.tileCount * 0.5));
+      return false;
     }
     capture(t, playerId) {
       const prev = this.owners[t];
@@ -555,17 +707,12 @@
         const cap = Math.max(1, this.capacity(p));
         if (p.troops < cap) {
           p.troops = Math.min(cap, p.troops + Math.max(1.5, (cap - p.troops) * 0.06) * dt);
+        } else if (p.troops > cap) {
+          p.troops = cap;
         }
         p.gold += this.income(p) * dt;
       }
-      for (let i = this.attacks.length - 1; i >= 0; i--) {
-        const a = this.attacks[i];
-        a.progress += dt;
-        if (a.progress >= a.duration) {
-          this.attacks.splice(i, 1);
-          this.resolveAttack(a);
-        }
-      }
+      this.armyTick(dt);
       for (const p of this.players) {
         if (p.isBot && p.alive) this.botThink(p, dt);
       }
@@ -597,11 +744,9 @@
       }
       if (!targets.length) return;
       targets.sort((a, b) => a.cost - b.cost);
-      const picks = Math.min(targets.length, 3);
-      for (let k = 0; k < picks; k++) {
-        const ratio = 0.12 + this.rng() * 0.18;
-        this.attack(p, targets[k].t, ratio);
-      }
+      const pick = targets[Math.floor(this.rng() * Math.min(4, targets.length))];
+      const ratio = 0.25 + this.rng() * 0.3;
+      this.orderArmy(p, pick.t, ratio);
     }
     /** Fraction of the world's land a player holds. */
     landShare(p) {
@@ -633,6 +778,9 @@
   var Renderer = class {
     constructor(canvas2, game2) {
       this.canvas = canvas2;
+      /** Border tiles, rebuilt a few times a second: the standing lines. */
+      this.frontier = [];
+      this.frontierTimer = 0;
       this.g = game2;
       const { w, h } = game2.world;
       const mk = () => {
@@ -750,6 +898,20 @@
       this.borderCv.getContext("2d").clearRect(0, 0, w * P, h * P);
       for (let t = 0; t < w * h; t++) this.paintTile(t);
     }
+    rebuildFrontier() {
+      const { w, h, terrain } = this.g.world;
+      const out = [];
+      for (let t = 0; t < w * h; t++) {
+        const owner = this.g.ownerAt(t);
+        if (owner < 0 || terrain[t] === 0) continue;
+        const x = t % w;
+        const y = t / w | 0;
+        if (x > 0 && this.g.ownerAt(t - 1) !== owner || x < w - 1 && this.g.ownerAt(t + 1) !== owner || y > 0 && this.g.ownerAt(t - w) !== owner || y < h - 1 && this.g.ownerAt(t + w) !== owner) {
+          out.push(t);
+        }
+      }
+      this.frontier = out;
+    }
     /** Flush tiles that changed ownership since the last frame. */
     flushDirty() {
       const dirty = this.g.dirty;
@@ -782,26 +944,86 @@
         const y = (t / w | 0) + 0.5;
         return [cam2.x + x * cam2.scale, cam2.y + y * cam2.scale];
       };
-      for (const a of this.g.attacks) {
-        const [ax, ay] = toScreen(a.from);
+      if (cam2.scale >= 2.6) {
+        this.frontierTimer -= 1;
+        if (this.frontierTimer <= 0) {
+          this.frontierTimer = 20;
+          this.rebuildFrontier();
+        }
+        const r = Math.max(0.7, cam2.scale * 0.085);
+        for (const t of this.frontier) {
+          const owner = this.g.ownerAt(t);
+          if (owner < 0) continue;
+          const x = t % w;
+          const y = t / w | 0;
+          const sx = cam2.x + (x + 0.5) * cam2.scale;
+          const sy = cam2.y + (y + 0.5) * cam2.scale;
+          if (sx < -20 || sy < -20 || sx > this.canvas.width / dpr2 + 20 || sy > this.canvas.height / dpr2 + 20) continue;
+          let ox = 0;
+          let oy = 0;
+          for (const n of this.g.neighbors4(t)) {
+            if (this.g.ownerAt(n) === owner) continue;
+            const nx = n % w;
+            const ny = n / w | 0;
+            ox += Math.sign(nx - x) * 0.26;
+            oy += Math.sign(ny - y) * 0.26;
+          }
+          if ((x + y & 1) === 0) continue;
+          const px = sx + ox * cam2.scale;
+          const py = sy + oy * cam2.scale;
+          ctx.fillStyle = "rgba(20,16,10,0.45)";
+          ctx.beginPath();
+          ctx.arc(px, py + r * 0.5, r * 1.35, 0, 6.283);
+          ctx.fill();
+          ctx.fillStyle = "#f6efd9";
+          ctx.beginPath();
+          ctx.arc(px, py, r * 1.3, 0, 6.283);
+          ctx.fill();
+          ctx.fillStyle = PALETTE[owner % PALETTE.length];
+          ctx.beginPath();
+          ctx.arc(px, py, r * 0.8, 0, 6.283);
+          ctx.fill();
+        }
+      }
+      for (const a of this.g.armies) {
+        const col = PALETTE[a.owner % PALETTE.length];
+        const [ax, ay] = toScreen(a.tile);
         const [bx, by] = toScreen(a.target);
-        const col = PALETTE[a.attacker % PALETTE.length];
-        ctx.strokeStyle = "rgba(20,16,10,0.35)";
-        ctx.lineWidth = Math.max(1, cam2.scale * 0.22);
+        if (ax < -80 || ay < -80 || ax > this.canvas.width / dpr2 + 80 || ay > this.canvas.height / dpr2 + 80) continue;
+        ctx.strokeStyle = "rgba(18,14,8,0.4)";
+        ctx.lineWidth = Math.max(1, cam2.scale * 0.12);
+        ctx.setLineDash([Math.max(3, cam2.scale * 0.5), Math.max(3, cam2.scale * 0.45)]);
         ctx.beginPath();
         ctx.moveTo(ax, ay);
         ctx.lineTo(bx, by);
         ctx.stroke();
-        const t = Math.min(1, a.progress / a.duration);
-        const dots = Math.min(5, 2 + Math.floor(Math.log10(1 + a.troops)));
+        ctx.setLineDash([]);
+        const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
+        const r = Math.max(1.2, cam2.scale * 0.16);
         for (let i = 0; i < dots; i++) {
-          const f = Math.max(0, Math.min(1, t - i * 0.07));
-          const px = ax + (bx - ax) * f;
-          const py = ay + (by - ay) * f;
-          ctx.fillStyle = i === 0 ? "#fbf3df" : col;
+          const ang = i / dots * 6.283;
+          const rad = cam2.scale * (0.3 + 0.11 * (i % 3));
+          const px = ax + Math.cos(ang) * rad;
+          const py = ay - cam2.scale * 0.1 + Math.sin(ang) * rad * 0.7;
+          ctx.fillStyle = i === 0 ? "#fdf6e4" : col;
           ctx.beginPath();
-          ctx.arc(px, py, Math.max(1.1, cam2.scale * 0.15), 0, 6.283);
+          ctx.arc(px, py, r, 0, 6.283);
           ctx.fill();
+        }
+        if (a.cutOff) {
+          ctx.strokeStyle = "rgba(240,90,80,0.9)";
+          ctx.lineWidth = Math.max(1.2, cam2.scale * 0.11);
+          ctx.setLineDash([Math.max(2, cam2.scale * 0.25), Math.max(2, cam2.scale * 0.2)]);
+          ctx.beginPath();
+          ctx.arc(ax, ay, cam2.scale * 0.9, 0, 6.283);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else if (a.holding) {
+          ctx.strokeStyle = "rgba(250,240,205,0.75)";
+          ctx.lineWidth = Math.max(1, cam2.scale * 0.08);
+          ctx.beginPath();
+          ctx.arc(ax, ay, cam2.scale * 0.72, 0, 6.283);
+          ctx.stroke();
         }
       }
       for (const s of this.g.structs.values()) {
@@ -1105,7 +1327,7 @@
   function attack(tile) {
     const me = game.players[game.human];
     if (!me || game.phase !== "playing") return;
-    game.attack(me, tile, Number(ratioInput.value) / 100);
+    game.orderArmy(me, tile, Number(ratioInput.value) / 100);
   }
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
