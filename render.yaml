@@ -1,0 +1,28 @@
+# Realms on Render (free tier). Blueprint: https://render.com/docs/blueprint-spec
+# Deploys the stock Dockerfile. All game rules live in the code; nothing here
+# changes behaviour except environment selection.
+services:
+  - type: web
+    name: realms
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: GAME_ENV
+        value: dev            # self-contained: lobbies made by this server, no closed OpenFront API
+      - key: NUM_WORKERS
+        value: "1"
+      - key: DOMAIN
+        value: localhost
+      - key: GIT_COMMIT
+        value: realms
+      - key: TURNSTILE_SITE_KEY
+        value: 1x00000000000000000000AA   # Cloudflare's always-pass test key
+      - key: API_KEY
+        generateValue: true
+      - key: ADMIN_BOT_API_KEY
+        generateValue: true
+      - key: PORT
+        value: "10000"

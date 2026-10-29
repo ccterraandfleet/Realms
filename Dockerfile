@@ -106,6 +106,12 @@ RUN <<'EOF' tee /usr/local/bin/start.sh
 # Generate the create-game nginx upstream from NUM_WORKERS before nginx starts.
 /usr/local/bin/generate-nginx-upstream.sh
 
+# Realms: PaaS hosts (Render, Koyeb, Railway) hand the public port in $PORT.
+# nginx.conf listens on 80; rewrite it at start so one image runs anywhere.
+if [ -n "$PORT" ] && [ "$PORT" != 80 ]; then
+    sed -i "s/listen 80 default_server;/listen ${PORT} default_server;/" /etc/nginx/conf.d/default.conf
+fi
+
 if [ "$DOMAIN" = openfront.dev ] && [ "$SUBDOMAIN" != main ]; then
     exec timeout 25h /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
 else
