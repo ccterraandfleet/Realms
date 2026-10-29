@@ -244,6 +244,17 @@ body {
   backdrop-filter: blur(2px);
 }
 
+/* The spawn prompt must never eat the click that plants your castle: it is a
+   hint banner over the map, not a modal. */
+#spawn-overlay {
+  pointer-events: none;
+  background: rgba(6, 10, 14, 0.18);
+  backdrop-filter: none;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 108px;
+}
+
 .overlay.hidden {
   display: none;
 }

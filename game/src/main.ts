@@ -1,7 +1,7 @@
 /**
  * Realms boot + input + HUD.
  *
- * Left click / drag: send armies at bordering land. Build buttons or Q/W/E/R:
+ * Double left click: launch an advance toward that point. Build buttons or Q/W/E/R:
  * place a structure on your own ground. Wheel zooms, right-drag or space-drag
  * pans. The whole world is a seed, so "New world" is just another number.
  */
@@ -84,7 +84,6 @@ let panning = false;
 let cameFromPan = false;
 let panStart = { x: 0, y: 0, cx: 0, cy: 0 };
 let spaceDown = false;
-let lastAttackAt = 0;
 
 const keys: Record<string, StructureKind> = {
   q: "castle",
@@ -110,6 +109,10 @@ window.addEventListener("keyup", (e) => {
   if (e.code === "Space") spaceDown = false;
 });
 
+const DOUBLE_MS = 340;   // two clicks within this window are one order
+const DOUBLE_PX = 26;    // ...if they land on the same spot
+const lastClick = { at: 0, x: 0, y: 0 };
+
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -123,7 +126,23 @@ canvas.addEventListener("pointerdown", (e) => {
   cameFromPan = false;
   const tile = screenToTile(e.clientX, e.clientY);
   hover = tile;
-  click(tile);
+  // Placing your capital and placing a building are still single clicks.
+  if (game.phase === "spawn" || buildKind) {
+    click(tile);
+    return;
+  }
+  // Everything else is deliberate: two quick left clicks on the same spot
+  // collect an advance toward it. A lone click only selects and reads.
+  const now = performance.now();
+  const near = Math.abs(e.clientX - lastClick.x) <= DOUBLE_PX && Math.abs(e.clientY - lastClick.y) <= DOUBLE_PX;
+  if (now - lastClick.at <= DOUBLE_MS && near) {
+    lastClick.at = 0;
+    attack(tile);
+  } else {
+    lastClick.at = now;
+    lastClick.x = e.clientX;
+    lastClick.y = e.clientY;
+  }
 });
 
 canvas.addEventListener("pointermove", (e) => {
@@ -136,14 +155,6 @@ canvas.addEventListener("pointermove", (e) => {
     cam.y = panStart.cy + dy;
     clampCamera();
     return;
-  }
-  // Holding the left button floods armies at everything the cursor crosses.
-  if (e.buttons & 1) {
-    const now = performance.now();
-    if (now - lastAttackAt > 55) {
-      lastAttackAt = now;
-      if (!buildKind) attack(hover);
-    }
   }
 });
 
@@ -198,7 +209,8 @@ function click(tile: number) {
     }
     return;
   }
-  attack(tile);
+  // A single click in play does not commit anything; it is a read of the
+  // ground under the cursor. The double click above sends the advance.
 }
 
 function attack(tile: number) {

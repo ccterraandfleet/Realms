@@ -435,10 +435,6 @@ export class Game {
     // stays on the line. Keeps the field readable and the sim cheap.
     const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
     if (mine >= MAX_ARMIES_PER_PLAYER || this.armies.length >= MAX_ARMIES) return false;
-    // One push per objective at a time; stacking them just wastes soldiers.
-    for (const a of this.armies) {
-      if (a.owner === p.id && a.target === target) return false;
-    }
 
     p.troops -= send;
     this.armies.push({

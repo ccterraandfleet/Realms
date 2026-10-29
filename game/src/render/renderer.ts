@@ -300,6 +300,22 @@ export class Renderer {
       ctx.stroke();
       ctx.setLineDash([]);
 
+      // Where the advance is headed.
+      const cs = Math.max(3, cam.scale * 0.52);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(1, cam.scale * 0.1);
+      ctx.globalAlpha = 0.85;
+      ctx.beginPath();
+      ctx.moveTo(bx - cs, by);
+      ctx.lineTo(bx + cs, by);
+      ctx.moveTo(bx, by - cs);
+      ctx.lineTo(bx, by + cs);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(bx, by, cs * 0.62, 0, 6.283);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
       // The column itself: dots, one per slice of strength.
       const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
       const r = Math.max(1.2, cam.scale * 0.16);

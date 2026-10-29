@@ -469,9 +469,6 @@
       if (launch < 0 || bestD > 40) return false;
       const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
       if (mine >= MAX_ARMIES_PER_PLAYER || this.armies.length >= MAX_ARMIES) return false;
-      for (const a of this.armies) {
-        if (a.owner === p.id && a.target === target) return false;
-      }
       p.troops -= send;
       this.armies.push({
         id: this.nextArmyId++,
@@ -998,6 +995,20 @@
         ctx.lineTo(bx, by);
         ctx.stroke();
         ctx.setLineDash([]);
+        const cs = Math.max(3, cam2.scale * 0.52);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1, cam2.scale * 0.1);
+        ctx.globalAlpha = 0.85;
+        ctx.beginPath();
+        ctx.moveTo(bx - cs, by);
+        ctx.lineTo(bx + cs, by);
+        ctx.moveTo(bx, by - cs);
+        ctx.lineTo(bx, by + cs);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(bx, by, cs * 0.62, 0, 6.283);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
         const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
         const r = Math.max(1.2, cam2.scale * 0.16);
         for (let i = 0; i < dots; i++) {
@@ -1219,7 +1230,6 @@
   var cameFromPan = false;
   var panStart = { x: 0, y: 0, cx: 0, cy: 0 };
   var spaceDown = false;
-  var lastAttackAt = 0;
   var keys = {
     q: "castle",
     w: "tower",
@@ -1242,6 +1252,9 @@
   window.addEventListener("keyup", (e) => {
     if (e.code === "Space") spaceDown = false;
   });
+  var DOUBLE_MS = 340;
+  var DOUBLE_PX = 26;
+  var lastClick = { at: 0, x: 0, y: 0 };
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
@@ -1254,7 +1267,20 @@
     cameFromPan = false;
     const tile = screenToTile(e.clientX, e.clientY);
     hover = tile;
-    click(tile);
+    if (game.phase === "spawn" || buildKind) {
+      click(tile);
+      return;
+    }
+    const now = performance.now();
+    const near = Math.abs(e.clientX - lastClick.x) <= DOUBLE_PX && Math.abs(e.clientY - lastClick.y) <= DOUBLE_PX;
+    if (now - lastClick.at <= DOUBLE_MS && near) {
+      lastClick.at = 0;
+      attack(tile);
+    } else {
+      lastClick.at = now;
+      lastClick.x = e.clientX;
+      lastClick.y = e.clientY;
+    }
   });
   canvas.addEventListener("pointermove", (e) => {
     hover = screenToTile(e.clientX, e.clientY);
@@ -1266,13 +1292,6 @@
       cam.y = panStart.cy + dy;
       clampCamera();
       return;
-    }
-    if (e.buttons & 1) {
-      const now = performance.now();
-      if (now - lastAttackAt > 55) {
-        lastAttackAt = now;
-        if (!buildKind) attack(hover);
-      }
     }
   });
   canvas.addEventListener("pointerup", (e) => {
@@ -1322,7 +1341,6 @@
       }
       return;
     }
-    attack(tile);
   }
   function attack(tile) {
     const me = game.players[game.human];
