@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realms</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <canvas id="map"></canvas>
+
+    <header id="topbar">
+      <div class="brand">
+        <span class="crest">&#9670;</span>
+        <span class="title">REALMS</span>
+        <span id="seed-badge" class="seed"></span>
+      </div>
+      <div class="stats">
+        <div class="stat"><span class="k">Gold</span><span id="stat-gold" class="v">0</span></div>
+        <div class="stat"><span class="k">Host</span><span id="stat-troops" class="v">0</span></div>
+        <div class="stat"><span class="k">Land</span><span id="stat-land" class="v">0%</span></div>
+        <div class="stat"><span class="k">Castles</span><span id="stat-castles" class="v">0</span></div>
+        <div class="stat"><span class="k">Rivals</span><span id="stat-lords" class="v">0</span></div>
+      </div>
+    </header>
+
+    <div id="log"></div>
+
+    <footer id="bottom">
+      <div id="build-bar">
+        <button data-kind="castle"><span class="label">Castle</span><span class="cost">150g</span><span class="key">Q</span></button>
+        <button data-kind="tower"><span class="label">Watchtower</span><span class="cost">120g</span><span class="key">W</span></button>
+        <button data-kind="harbor"><span class="label">Harbour</span><span class="cost">200g</span><span class="key">E</span></button>
+        <button data-kind="siege"><span class="label">Siege Camp</span><span class="cost">400g</span><span class="key">R</span></button>
+      </div>
+      <div id="ratio-box">
+        <span class="k">Host sent</span>
+        <input id="ratio" type="range" min="5" max="100" step="5" value="30" />
+        <span id="ratio-val">30%</span>
+      </div>
+    </footer>
+
+    <div id="spawn-overlay" class="overlay">
+      <div class="card">
+        <h1>Take a seat</h1>
+        <p id="spawn-hint">Click open land to plant your castle.</p>
+        <p class="faint">Left click / drag sends your host at bordering land. Wheel zooms, right-drag pans.</p>
+      </div>
+    </div>
+
+    <div id="end-overlay" class="overlay hidden">
+      <div class="card">
+        <h1 id="end-title">The realm is yours</h1>
+        <p id="end-body"></p>
+        <button id="new-world" class="primary">Raise a new world</button>
+      </div>
+    </div>
+
+    <script src="dist/game.js"></script>
+  </body>
+</html>
