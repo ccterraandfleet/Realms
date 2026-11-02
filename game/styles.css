@@ -305,3 +305,23 @@ button.primary {
 button.primary:hover {
   background: rgba(146, 116, 56, 1);
 }
+
+/* ---- economy readouts (v3) ---- */
+.stat .k { letter-spacing: 0.06em; }
+.r-grain .k, i.r-grain { color: #d9c07c; }
+.r-timber .k, i.r-timber { color: #b08b5a; }
+.r-ore .k, i.r-ore { color: #9aa6b1; }
+.r-gold .k, i.r-gold { color: #e2b93f; }
+.stat .v { font-variant-numeric: tabular-nums; }
+.stat.starving .v { color: #e2705a; }
+#build-bar button { min-width: 78px; }
+#build-bar .hint {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7d8a95;
+  margin-top: 1px;
+}
+#build-bar .cost i { font-style: normal; margin-right: 3px; font-size: 9px; }
+#build-bar button.active { border-color: #e2b93f; }

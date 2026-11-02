@@ -9,9 +9,16 @@
  * income from land and harbours, and rival lords doing all of it too.
  */
 
-import { DENSITY, DEFENSE, OCEAN, World, generateWorld, idx, mulberry32 } from "./world";
+import { DENSITY, DEFENSE, FOREST, MOUNTAIN, OCEAN, PLAINS, World, generateWorld, idx, mulberry32 } from "./world";
 
-export type StructureKind = "castle" | "tower" | "harbor" | "siege";
+export type StructureKind =
+  | "castle"
+  | "farm"
+  | "lumber"
+  | "mine"
+  | "market"
+  | "tower"
+  | "siege";
 
 export interface Structure {
   kind: StructureKind;
@@ -27,6 +34,17 @@ export interface Player {
   isBot: boolean;
   alive: boolean;
   gold: number;
+  grain: number;
+  timber: number;
+  ore: number;
+  /** Soldiers in the host plus every column in the field. */
+  soldiers: number;
+  /** True when stores are empty and the army is bigger than the harvest. */
+  starving: boolean;
+  /** Gross grain per second, before the army eats. */
+  grainProd: number;
+  /** Net production per second, recomputed every tick. */
+  rates: { grain: number; timber: number; ore: number; gold: number };
   troops: number;
   tileCount: number;
   castles: number;
@@ -63,19 +81,62 @@ export interface Army {
 
 export type Phase = "spawn" | "playing" | "over";
 
-export const COSTS: Record<StructureKind, number> = {
-  castle: 150,
-  tower: 120,
-  harbor: 200,
-  siege: 400,
+/**
+ * Late-game economy. Every realm runs on four flows instead of one currency:
+ * grain feeds soldiers, timber builds, iron arms, gold buys. Production is
+ * bound to terrain, so who wins is decided by which ground you hold and what
+ * you build on it, not by how fast you click.
+ */
+export interface Bundle {
+  grain: number;
+  timber: number;
+  ore: number;
+  gold: number;
+}
+
+export const BUILD: Record<StructureKind, Bundle> = {
+  castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
+  farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
+  lumber: { grain: 35, timber: 0, ore: 0, gold: 10 },
+  mine: { grain: 45, timber: 70, ore: 0, gold: 15 },
+  market: { grain: 25, timber: 55, ore: 0, gold: 20 },
+  tower: { grain: 0, timber: 55, ore: 25, gold: 30 },
+  siege: { grain: 35, timber: 65, ore: 70, gold: 40 },
 };
 
 export const STRUCTURE_LABEL: Record<StructureKind, string> = {
   castle: "Castle",
+  farm: "Farm",
+  lumber: "Lumber Camp",
+  mine: "Iron Mine",
+  market: "Market",
   tower: "Watchtower",
-  harbor: "Harbour",
   siege: "Siege Camp",
 };
+
+/** What each building pays out per second. */
+export const YIELD: Partial<Record<StructureKind, Partial<Bundle>>> = {
+  farm: { grain: 0.55 },
+  lumber: { timber: 0.45 },
+  mine: { ore: 0.32 },
+  market: { gold: 0.5 },
+};
+
+/** Building is bound to ground: this is what makes terrain worth taking. */
+export const TERRAIN_FOR: Partial<Record<StructureKind, number>> = {
+  farm: PLAINS,
+  lumber: FOREST,
+  mine: MOUNTAIN,
+};
+
+/** Grain a soldier eats per second, in the host or in the field. */
+export const UPKEEP_PER_TROOP = 0.001;
+/** Share of the harvest a realm may commit to soldiers before it eats itself. */
+export const FEED_SHARE = 0.8;
+/** Iron spent per soldier who takes the field. Offensives run on iron. */
+export const ORE_PER_TROOP = 0.004;
+/** Field rations drawn from the granary when a column marches. */
+export const RATIONS_PER_TROOP = 0.004;
 
 /** Heraldic colours, one per realm. */
 export const PALETTE = [
@@ -100,8 +161,9 @@ const LORD_NAMES = [
   "Lord Ashen", "Earl Dunmore",
 ];
 
-const MAX_ARMIES_PER_PLAYER = 5;
-const MAX_ARMIES = 90;
+const MIN_ARMIES_PER_PLAYER = 3;
+const MAX_ARMIES_PER_PLAYER = 10;
+const MAX_ARMIES = 220;
 const HOLD_BEFORE_ABSORB = 8;  // seconds a column garrisons before folding back
 const IMMUNITY = 20;          // seconds of protection after choosing a start
 const SPAWN_RADIUS = 5;       // starting holding radius, in tiles
@@ -143,6 +205,13 @@ export class Game {
       isBot,
       alive: true,
       gold: 60,
+      grain: 90,
+      timber: 110,
+      ore: 55,
+      soldiers: 0,
+      starving: false,
+      grainProd: 0,
+      rates: { grain: 0, timber: 0, ore: 0, gold: 0 },
       troops: 0,
       tileCount: 0,
       castles: 0,
@@ -214,20 +283,46 @@ export class Game {
     return false;
   }
 
-  /** Army ceiling: the land you hold plus the castles that hold it. */
+  /**
+   * Army ceiling. Keeps raise it directly, but the real ceiling is how many
+   * mouths the realm can feed, so farms are what let you field a big host.
+   */
   capacity(p: Player): number {
-    return Math.round(p.density * 1.15 + p.castles * 700);
+    // What land and keeps can physically hold, against what the harvest can
+    // feed. Food is the binding constraint, so an army is grown, not clicked.
+    // Land and keeps set a generous physical ceiling; food is what binds.
+    const military = p.density * 2 + p.castles * 4000;
+    const foodCap = (Math.max(0, p.grainProd) / UPKEEP_PER_TROOP) * FEED_SHARE;
+    return Math.round(Math.max(60, Math.min(military, foodCap)));
+  }
+
+  /** Recompute production and upkeep. Once per realm per tick. */
+  refreshRates(p: Player) {
+    // Bare ground yields a trickle of everything, so no realm can be locked
+    // out of a resource; buildings on the right ground are what make it scale.
+    let grain = 0.8 + p.tileCount * 0.004;
+    let timber = 0.14 + p.tileCount * 0.002;
+    let ore = 0.11 + p.tileCount * 0.0015;
+    let gold = 0.35 + p.tileCount * 0.003;
+    for (const st of this.structs.values()) {
+      if (st.owner !== p.id) continue;
+      const y = YIELD[st.kind];
+      if (!y) continue;
+      grain += (y.grain ?? 0) * st.level;
+      timber += (y.timber ?? 0) * st.level;
+      ore += (y.ore ?? 0) * st.level;
+      gold += (y.gold ?? 0) * st.level;
+    }
+    let soldiers = p.troops;
+    for (const a of this.armies) if (a.owner === p.id) soldiers += a.troops;
+    p.soldiers = soldiers;
+    p.grainProd = grain;
+    // Grain is income minus what the army eats; a negative flow starves it.
+    p.rates = { grain: grain - soldiers * UPKEEP_PER_TROOP, timber, ore, gold };
   }
 
   income(p: Player): number {
-    let harbors = 0;
-    let siege = 0;
-    for (const s of this.structs.values()) {
-      if (s.owner !== p.id) continue;
-      if (s.kind === "harbor") harbors++;
-      if (s.kind === "siege") siege++;
-    }
-    return (1 + p.tileCount * 0.06) * 0.35 + harbors * 1.5 + siege * 0.4;
+    return p.rates.gold;
   }
 
   /* ------------------------------------------------------------------ */
@@ -285,6 +380,25 @@ export class Game {
     return out;
   }
 
+  /**
+   * How good a patch of ground is as a seat. Farms, camps and mines can only
+   * go on their own terrain, so a realm that spawns inside one biome can never
+   * build a real economy. Score a seat by the mix it gives you.
+   */
+  siteQuality(t: number, radius: number): number {
+    let plains = 0;
+    let forest = 0;
+    let mountain = 0;
+    for (const x of this.blob(t, radius)) {
+      const ter = this.world.terrain[x];
+      if (ter === PLAINS) plains++;
+      else if (ter === FOREST) forest++;
+      else if (ter === MOUNTAIN) mountain++;
+    }
+    const viable = [plains, forest, mountain].filter((n) => n >= 3).length;
+    return viable * 1000 + plains * 3 + forest * 2 + mountain;
+  }
+
   /** The human picks a seat: a small castle plus the ground around it. */
   chooseStart(tile: number): boolean {
     if (this.phase !== "spawn") return false;
@@ -304,6 +418,7 @@ export class Game {
     this.structs.set(tile, { kind: "castle", owner: p.id, tile, level: 1 });
     p.castles += 1;
     p.immune = immunity;
+    this.refreshRates(p);
     p.troops = Math.round(this.capacity(p) * 0.5);
     this.structDirty = true;
   }
@@ -326,11 +441,13 @@ export class Game {
           const sy = (s / w) | 0;
           nearest = Math.min(nearest, Math.hypot(sx - x, sy - y));
         }
-        if (nearest > bestScore) {
-          bestScore = nearest;
+        if (nearest < 40) continue;
+        const score = nearest + this.siteQuality(t, BOT_SPAWN_RADIUS) * 0.05;
+        if (score > bestScore) {
+          bestScore = score;
           best = t;
         }
-        if (nearest > 55) break;
+        if (nearest > 55 && this.siteQuality(t, BOT_SPAWN_RADIUS) >= 2000) break;
       }
       if (best < 0) continue;
       const p = this.addPlayer(
@@ -419,6 +536,12 @@ export class Game {
     const share = Math.max(0.05, Math.min(1, ratio));
     const send = Math.floor(p.troops * share);
     if (send < 12) return false;
+    // Every campaign draws on the economy twice: iron to arm the column and
+    // grain to feed it on the road. Lose either and the offensive stops.
+    const equip = Math.ceil(send * ORE_PER_TROOP);
+    if (p.ore < equip) return false;
+    const rations = Math.ceil(send * RATIONS_PER_TROOP);
+    if (p.grain < rations) return false;
 
     // Launch from the own tile closest to the objective.
     let launch = -1;
@@ -433,10 +556,18 @@ export class Game {
     if (launch < 0 || bestD > 40) return false;
     // A realm can only command so many columns at once; the rest of the host
     // stays on the line. Keeps the field readable and the sim cheap.
+    // A larger economy commands more columns at once: how much you produce
+    // decides how many fronts you can hold.
+    const limit = Math.min(
+      MAX_ARMIES_PER_PLAYER,
+      MIN_ARMIES_PER_PLAYER + Math.floor(this.capacity(p) / 4000),
+    );
     const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
-    if (mine >= MAX_ARMIES_PER_PLAYER || this.armies.length >= MAX_ARMIES) return false;
+    if (mine >= limit || this.armies.length >= MAX_ARMIES) return false;
 
     p.troops -= send;
+    p.ore -= equip;
+    p.grain -= rations;
     this.armies.push({
       id: this.nextArmyId++,
       owner: p.id,
@@ -452,6 +583,25 @@ export class Game {
       holdTimer: 0,
     });
     return true;
+  }
+
+  /** The closest free tile beside a column, or -1 when it is walled in. */
+  nearestOpenTile(a: Army): number {
+    let best = -1;
+    let bestScore = Infinity;
+    for (const t of [a.tile, ...this.neighbors8(a.tile)]) {
+      for (const n of this.neighbors4(t)) {
+        if (!this.isLand(n) || this.owners[n] === a.owner) continue;
+        const who = this.owners[n];
+        if (who >= 0 && this.players[who].immune > 0) continue;
+        const d = this.tileDistance(n, a.target);
+        if (d < bestScore) {
+          bestScore = d;
+          best = n;
+        }
+      }
+    }
+    return best;
   }
 
   /** Stronger columns advance faster; rough ground slows them. */
@@ -491,8 +641,15 @@ export class Game {
 
       if (a.holding) {
         a.holdTimer += dt;
-        if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
-          // The objective is held; the survivors rejoin the host.
+        // A column that takes its objective keeps pressing outward while it
+        // still has men, which is what turns one order into a real front.
+        const nextPush = this.nearestOpenTile(a);
+        if (a.troops >= 40 && nextPush >= 0) {
+          a.target = nextPush;
+          a.holding = false;
+          a.holdTimer = 0;
+        } else if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
+          // Nothing left to take: the survivors rejoin the host.
           p.troops = Math.min(this.capacity(p), p.troops + a.troops);
           this.armies.splice(i, 1);
         }
@@ -646,22 +803,44 @@ export class Game {
   /* Building                                                            */
   /* ------------------------------------------------------------------ */
 
-  buildCost(kind: StructureKind, level: number): number {
-    return kind === "castle" ? COSTS.castle * level : COSTS[kind];
+  buildCost(kind: StructureKind, level: number): Bundle {
+    const b = BUILD[kind];
+    const m = kind === "castle" ? Math.max(1, level) : 1;
+    return { grain: b.grain * m, timber: b.timber * m, ore: b.ore * m, gold: b.gold * m };
+  }
+
+  canAfford(p: Player, cost: Bundle): boolean {
+    return p.grain >= cost.grain && p.timber >= cost.timber &&
+      p.ore >= cost.ore && p.gold >= cost.gold;
+  }
+
+  private pay(p: Player, cost: Bundle) {
+    p.grain -= cost.grain;
+    p.timber -= cost.timber;
+    p.ore -= cost.ore;
+    p.gold -= cost.gold;
+  }
+
+  /** Why this building cannot go here, or null when it can. */
+  blockReason(p: Player, kind: StructureKind, t: number): string | null {
+    if (this.phase !== "playing" || !p.alive) return "not now";
+    if (t < 0 || this.owners[t] !== p.id) return "own ground";
+    const existing = this.structs.get(t);
+    if (kind === "castle") {
+      if (existing?.kind === "castle") return existing.level < 8 ? null : "max level";
+      return existing ? "occupied" : null;
+    }
+    if (existing) return "occupied";
+    const need = TERRAIN_FOR[kind];
+    if (need !== undefined && this.world.terrain[t] !== need) {
+      return kind === "farm" ? "plains only" : kind === "lumber" ? "forest only" : "mountains only";
+    }
+    if (kind === "market" && !this.isCoastal(t)) return "coast only";
+    return null;
   }
 
   canBuild(p: Player, kind: StructureKind, t: number): boolean {
-    if (this.phase !== "playing" || !p.alive) return false;
-    if (t < 0 || this.owners[t] !== p.id) return false;
-    const existing = this.structs.get(t);
-    if (kind === "castle") {
-      // Castle on empty ground, or an upgrade of an existing castle.
-      if (existing?.kind === "castle") return existing.level < 8;
-      return !existing;
-    }
-    if (existing) return false;
-    if (kind === "harbor" && !this.isCoastal(t)) return false;
-    return true;
+    return this.blockReason(p, kind, t) === null;
   }
 
   build(p: Player, kind: StructureKind, t: number): boolean {
@@ -669,8 +848,8 @@ export class Game {
     const existing = this.structs.get(t);
     const level = existing?.kind === "castle" ? existing.level + 1 : 1;
     const cost = this.buildCost(kind, existing?.kind === "castle" ? level - 1 : 1);
-    if (p.gold < cost) return false;
-    p.gold -= cost;
+    if (!this.canAfford(p, cost)) return false;
+    this.pay(p, cost);
     if (existing?.kind === "castle") {
       existing.level = level;
       p.castles += 1;
@@ -679,6 +858,7 @@ export class Game {
       if (kind === "castle") p.castles += 1;
     }
     this.structDirty = true;
+    this.refreshRates(p);
     if (!p.isBot) this.note(`${STRUCTURE_LABEL[kind]} raised.`);
     return true;
   }
@@ -700,14 +880,33 @@ export class Game {
     for (const p of this.players) {
       if (!p.alive) continue;
       if (p.immune > 0) p.immune = Math.max(0, p.immune - dt);
-      const cap = Math.max(1, this.capacity(p));
-      if (p.troops < cap) {
-        p.troops = Math.min(cap, p.troops + Math.max(1.5, (cap - p.troops) * 0.06) * dt);
+      this.refreshRates(p);
+      // Production first: every flow moves at its own rate.
+      p.grain += p.rates.grain * dt;
+      p.timber += p.rates.timber * dt;
+      p.ore += p.rates.ore * dt;
+      p.gold += p.rates.gold * dt;
+      // Famine: stores empty while the army still wants feeding.
+      let starving = false;
+      if (p.grain <= 0) {
+        p.grain = 0;
+        starving = p.rates.grain < -0.01 && p.soldiers > 0;
+      }
+      p.starving = starving;
+      if (starving) {
+        const bleed = 0.02 * dt;
+        p.troops = Math.max(0, p.troops * (1 - bleed));
+        for (const a of this.armies) {
+          if (a.owner === p.id) a.troops = Math.max(0, a.troops * (1 - bleed * 1.5));
+        }
+      }
+      const cap = Math.max(1, Math.round(this.capacity(p) * (starving ? 0.6 : 1)));
+      if (!starving && p.troops < cap) {
+        p.troops = Math.min(cap, p.troops + Math.max(1.2, (cap - p.troops) * 0.05) * dt);
       } else if (p.troops > cap) {
         // Columns folding back into a shrunken realm cannot bank a surplus.
         p.troops = cap;
       }
-      p.gold += this.income(p) * dt;
     }
 
     // Columns on the march.
@@ -728,15 +927,34 @@ export class Game {
     if (p.aiTimer > 0) return;
     p.aiTimer = 0.5 + this.rng() * 0.9;
 
-    // Spend gold: castles first, then the occasional tower.
-    const castleReady =
-      p.gold >= this.buildCost("castle", 1) && p.castles < 7 && this.rng() < 0.6;
+    // Grow the economy in the order a realm actually grows: food first,
+    // then wood and iron, then walls once the harvest can carry them.
     const own = [...p.tiles];
-    if (castleReady && own.length) {
-      this.build(p, "castle", own[(this.rng() * own.length) | 0]);
-    } else if (p.gold >= COSTS.tower && this.rng() < 0.2 && own.length) {
-      this.build(p, "tower", own[(this.rng() * own.length) | 0]);
+    const empty = (t: number) => !this.structs.has(t);
+    const wants: StructureKind[] = [];
+    if (p.rates.grain < 1.4) wants.push("farm");
+    if (p.rates.timber < 0.6) wants.push("lumber");
+    if (p.rates.ore < 0.4) wants.push("mine");
+    if (p.rates.gold < 0.9) wants.push("market");
+    if (p.rates.grain > 1.8 && p.castles < 8) wants.push("castle");
+
+    for (const kind of wants) {
+      const cost = this.buildCost(kind, 1);
+      if (!this.canAfford(p, cost)) continue;
+      let t = -1;
+      if (kind === "castle") {
+        t = own.find((x) => empty(x)) ?? -1;
+      } else if (kind === "market") {
+        t = own.find((x) => empty(x) && this.isCoastal(x)) ?? -1;
+      } else {
+        const terr = TERRAIN_FOR[kind];
+        t = own.find((x) => empty(x) && this.world.terrain[x] === terr) ?? -1;
+      }
+      if (t >= 0 && this.build(p, kind, t)) return;
     }
+
+    // No food in the granary means no campaign.
+    if (p.rates.grain <= 0.05) return;
 
     // Move on the cheapest neighbouring ground.
     const targets: { t: number; cost: number }[] = [];

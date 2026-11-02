@@ -17,7 +17,10 @@
         <span id="seed-badge" class="seed"></span>
       </div>
       <div class="stats">
-        <div class="stat"><span class="k">Gold</span><span id="stat-gold" class="v">0</span></div>
+        <div class="stat r-grain"><span class="k">Grain</span><span id="stat-grain" class="v">0</span></div>
+        <div class="stat r-timber"><span class="k">Timber</span><span id="stat-timber" class="v">0</span></div>
+        <div class="stat r-ore"><span class="k">Iron</span><span id="stat-ore" class="v">0</span></div>
+        <div class="stat r-gold"><span class="k">Gold</span><span id="stat-gold" class="v">0</span></div>
         <div class="stat"><span class="k">Host</span><span id="stat-troops" class="v">0</span></div>
         <div class="stat"><span class="k">Land</span><span id="stat-land" class="v">0%</span></div>
         <div class="stat"><span class="k">Castles</span><span id="stat-castles" class="v">0</span></div>
@@ -28,12 +31,7 @@
     <div id="log"></div>
 
     <footer id="bottom">
-      <div id="build-bar">
-        <button data-kind="castle"><span class="label">Castle</span><span class="cost">150g</span><span class="key">Q</span></button>
-        <button data-kind="tower"><span class="label">Watchtower</span><span class="cost">120g</span><span class="key">W</span></button>
-        <button data-kind="harbor"><span class="label">Harbour</span><span class="cost">200g</span><span class="key">E</span></button>
-        <button data-kind="siege"><span class="label">Siege Camp</span><span class="cost">400g</span><span class="key">R</span></button>
-      </div>
+      <div id="build-bar"></div>
       <div id="ratio-box">
         <span class="k">Host sent</span>
         <input id="ratio" type="range" min="5" max="100" step="5" value="30" />

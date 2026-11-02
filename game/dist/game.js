@@ -114,18 +114,39 @@
   }
 
   // src/sim/game.ts
-  var COSTS = {
-    castle: 150,
-    tower: 120,
-    harbor: 200,
-    siege: 400
+  var BUILD = {
+    castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
+    farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
+    lumber: { grain: 35, timber: 0, ore: 0, gold: 10 },
+    mine: { grain: 45, timber: 70, ore: 0, gold: 15 },
+    market: { grain: 25, timber: 55, ore: 0, gold: 20 },
+    tower: { grain: 0, timber: 55, ore: 25, gold: 30 },
+    siege: { grain: 35, timber: 65, ore: 70, gold: 40 }
   };
   var STRUCTURE_LABEL = {
     castle: "Castle",
+    farm: "Farm",
+    lumber: "Lumber Camp",
+    mine: "Iron Mine",
+    market: "Market",
     tower: "Watchtower",
-    harbor: "Harbour",
     siege: "Siege Camp"
   };
+  var YIELD = {
+    farm: { grain: 0.55 },
+    lumber: { timber: 0.45 },
+    mine: { ore: 0.32 },
+    market: { gold: 0.5 }
+  };
+  var TERRAIN_FOR = {
+    farm: PLAINS,
+    lumber: FOREST,
+    mine: MOUNTAIN
+  };
+  var UPKEEP_PER_TROOP = 1e-3;
+  var FEED_SHARE = 0.8;
+  var ORE_PER_TROOP = 4e-3;
+  var RATIONS_PER_TROOP = 4e-3;
   var PALETTE = [
     "#c0392b",
     // crimson
@@ -170,8 +191,9 @@
     "Lord Ashen",
     "Earl Dunmore"
   ];
-  var MAX_ARMIES_PER_PLAYER = 5;
-  var MAX_ARMIES = 90;
+  var MIN_ARMIES_PER_PLAYER = 3;
+  var MAX_ARMIES_PER_PLAYER = 10;
+  var MAX_ARMIES = 220;
   var HOLD_BEFORE_ABSORB = 8;
   var IMMUNITY = 20;
   var SPAWN_RADIUS = 5;
@@ -207,6 +229,13 @@
         isBot,
         alive: true,
         gold: 60,
+        grain: 90,
+        timber: 110,
+        ore: 55,
+        soldiers: 0,
+        starving: false,
+        grainProd: 0,
+        rates: { grain: 0, timber: 0, ore: 0, gold: 0 },
         troops: 0,
         tileCount: 0,
         castles: 0,
@@ -269,19 +298,38 @@
       }
       return false;
     }
-    /** Army ceiling: the land you hold plus the castles that hold it. */
+    /**
+     * Army ceiling. Keeps raise it directly, but the real ceiling is how many
+     * mouths the realm can feed, so farms are what let you field a big host.
+     */
     capacity(p) {
-      return Math.round(p.density * 1.15 + p.castles * 700);
+      const military = p.density * 2 + p.castles * 4e3;
+      const foodCap = Math.max(0, p.grainProd) / UPKEEP_PER_TROOP * FEED_SHARE;
+      return Math.round(Math.max(60, Math.min(military, foodCap)));
+    }
+    /** Recompute production and upkeep. Once per realm per tick. */
+    refreshRates(p) {
+      let grain = 0.8 + p.tileCount * 4e-3;
+      let timber = 0.14 + p.tileCount * 2e-3;
+      let ore = 0.11 + p.tileCount * 15e-4;
+      let gold = 0.35 + p.tileCount * 3e-3;
+      for (const st of this.structs.values()) {
+        if (st.owner !== p.id) continue;
+        const y = YIELD[st.kind];
+        if (!y) continue;
+        grain += (y.grain ?? 0) * st.level;
+        timber += (y.timber ?? 0) * st.level;
+        ore += (y.ore ?? 0) * st.level;
+        gold += (y.gold ?? 0) * st.level;
+      }
+      let soldiers = p.troops;
+      for (const a of this.armies) if (a.owner === p.id) soldiers += a.troops;
+      p.soldiers = soldiers;
+      p.grainProd = grain;
+      p.rates = { grain: grain - soldiers * UPKEEP_PER_TROOP, timber, ore, gold };
     }
     income(p) {
-      let harbors = 0;
-      let siege = 0;
-      for (const s of this.structs.values()) {
-        if (s.owner !== p.id) continue;
-        if (s.kind === "harbor") harbors++;
-        if (s.kind === "siege") siege++;
-      }
-      return (1 + p.tileCount * 0.06) * 0.35 + harbors * 1.5 + siege * 0.4;
+      return p.rates.gold;
     }
     /* ------------------------------------------------------------------ */
     /* Claiming land                                                       */
@@ -333,6 +381,24 @@
       }
       return out;
     }
+    /**
+     * How good a patch of ground is as a seat. Farms, camps and mines can only
+     * go on their own terrain, so a realm that spawns inside one biome can never
+     * build a real economy. Score a seat by the mix it gives you.
+     */
+    siteQuality(t, radius) {
+      let plains = 0;
+      let forest = 0;
+      let mountain = 0;
+      for (const x of this.blob(t, radius)) {
+        const ter = this.world.terrain[x];
+        if (ter === PLAINS) plains++;
+        else if (ter === FOREST) forest++;
+        else if (ter === MOUNTAIN) mountain++;
+      }
+      const viable = [plains, forest, mountain].filter((n) => n >= 3).length;
+      return viable * 1e3 + plains * 3 + forest * 2 + mountain;
+    }
     /** The human picks a seat: a small castle plus the ground around it. */
     chooseStart(tile) {
       if (this.phase !== "spawn") return false;
@@ -351,6 +417,7 @@
       this.structs.set(tile, { kind: "castle", owner: p.id, tile, level: 1 });
       p.castles += 1;
       p.immune = immunity;
+      this.refreshRates(p);
       p.troops = Math.round(this.capacity(p) * 0.5);
       this.structDirty = true;
     }
@@ -372,11 +439,13 @@
             const sy = s / w | 0;
             nearest = Math.min(nearest, Math.hypot(sx - x, sy - y));
           }
-          if (nearest > bestScore) {
-            bestScore = nearest;
+          if (nearest < 40) continue;
+          const score = nearest + this.siteQuality(t, BOT_SPAWN_RADIUS) * 0.05;
+          if (score > bestScore) {
+            bestScore = score;
             best = t;
           }
-          if (nearest > 55) break;
+          if (nearest > 55 && this.siteQuality(t, BOT_SPAWN_RADIUS) >= 2e3) break;
         }
         if (best < 0) continue;
         const p = this.addPlayer(
@@ -457,6 +526,10 @@
       const share = Math.max(0.05, Math.min(1, ratio));
       const send = Math.floor(p.troops * share);
       if (send < 12) return false;
+      const equip = Math.ceil(send * ORE_PER_TROOP);
+      if (p.ore < equip) return false;
+      const rations = Math.ceil(send * RATIONS_PER_TROOP);
+      if (p.grain < rations) return false;
       let launch = -1;
       let bestD = Infinity;
       for (const t of p.tiles) {
@@ -467,9 +540,15 @@
         }
       }
       if (launch < 0 || bestD > 40) return false;
+      const limit = Math.min(
+        MAX_ARMIES_PER_PLAYER,
+        MIN_ARMIES_PER_PLAYER + Math.floor(this.capacity(p) / 4e3)
+      );
       const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
-      if (mine >= MAX_ARMIES_PER_PLAYER || this.armies.length >= MAX_ARMIES) return false;
+      if (mine >= limit || this.armies.length >= MAX_ARMIES) return false;
       p.troops -= send;
+      p.ore -= equip;
+      p.grain -= rations;
       this.armies.push({
         id: this.nextArmyId++,
         owner: p.id,
@@ -485,6 +564,24 @@
         holdTimer: 0
       });
       return true;
+    }
+    /** The closest free tile beside a column, or -1 when it is walled in. */
+    nearestOpenTile(a) {
+      let best = -1;
+      let bestScore = Infinity;
+      for (const t of [a.tile, ...this.neighbors8(a.tile)]) {
+        for (const n of this.neighbors4(t)) {
+          if (!this.isLand(n) || this.owners[n] === a.owner) continue;
+          const who = this.owners[n];
+          if (who >= 0 && this.players[who].immune > 0) continue;
+          const d = this.tileDistance(n, a.target);
+          if (d < bestScore) {
+            bestScore = d;
+            best = n;
+          }
+        }
+      }
+      return best;
     }
     /** Stronger columns advance faster; rough ground slows them. */
     armySpeed(troops) {
@@ -517,7 +614,12 @@
         }
         if (a.holding) {
           a.holdTimer += dt;
-          if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
+          const nextPush = this.nearestOpenTile(a);
+          if (a.troops >= 40 && nextPush >= 0) {
+            a.target = nextPush;
+            a.holding = false;
+            a.holdTimer = 0;
+          } else if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
             p.troops = Math.min(this.capacity(p), p.troops + a.troops);
             this.armies.splice(i, 1);
           }
@@ -655,27 +757,46 @@
     /* Building                                                            */
     /* ------------------------------------------------------------------ */
     buildCost(kind, level) {
-      return kind === "castle" ? COSTS.castle * level : COSTS[kind];
+      const b = BUILD[kind];
+      const m = kind === "castle" ? Math.max(1, level) : 1;
+      return { grain: b.grain * m, timber: b.timber * m, ore: b.ore * m, gold: b.gold * m };
     }
-    canBuild(p, kind, t) {
-      if (this.phase !== "playing" || !p.alive) return false;
-      if (t < 0 || this.owners[t] !== p.id) return false;
+    canAfford(p, cost) {
+      return p.grain >= cost.grain && p.timber >= cost.timber && p.ore >= cost.ore && p.gold >= cost.gold;
+    }
+    pay(p, cost) {
+      p.grain -= cost.grain;
+      p.timber -= cost.timber;
+      p.ore -= cost.ore;
+      p.gold -= cost.gold;
+    }
+    /** Why this building cannot go here, or null when it can. */
+    blockReason(p, kind, t) {
+      if (this.phase !== "playing" || !p.alive) return "not now";
+      if (t < 0 || this.owners[t] !== p.id) return "own ground";
       const existing = this.structs.get(t);
       if (kind === "castle") {
-        if (existing?.kind === "castle") return existing.level < 8;
-        return !existing;
+        if (existing?.kind === "castle") return existing.level < 8 ? null : "max level";
+        return existing ? "occupied" : null;
       }
-      if (existing) return false;
-      if (kind === "harbor" && !this.isCoastal(t)) return false;
-      return true;
+      if (existing) return "occupied";
+      const need = TERRAIN_FOR[kind];
+      if (need !== void 0 && this.world.terrain[t] !== need) {
+        return kind === "farm" ? "plains only" : kind === "lumber" ? "forest only" : "mountains only";
+      }
+      if (kind === "market" && !this.isCoastal(t)) return "coast only";
+      return null;
+    }
+    canBuild(p, kind, t) {
+      return this.blockReason(p, kind, t) === null;
     }
     build(p, kind, t) {
       if (!this.canBuild(p, kind, t)) return false;
       const existing = this.structs.get(t);
       const level = existing?.kind === "castle" ? existing.level + 1 : 1;
       const cost = this.buildCost(kind, existing?.kind === "castle" ? level - 1 : 1);
-      if (p.gold < cost) return false;
-      p.gold -= cost;
+      if (!this.canAfford(p, cost)) return false;
+      this.pay(p, cost);
       if (existing?.kind === "castle") {
         existing.level = level;
         p.castles += 1;
@@ -684,6 +805,7 @@
         if (kind === "castle") p.castles += 1;
       }
       this.structDirty = true;
+      this.refreshRates(p);
       if (!p.isBot) this.note(`${STRUCTURE_LABEL[kind]} raised.`);
       return true;
     }
@@ -701,13 +823,30 @@
       for (const p of this.players) {
         if (!p.alive) continue;
         if (p.immune > 0) p.immune = Math.max(0, p.immune - dt);
-        const cap = Math.max(1, this.capacity(p));
-        if (p.troops < cap) {
-          p.troops = Math.min(cap, p.troops + Math.max(1.5, (cap - p.troops) * 0.06) * dt);
+        this.refreshRates(p);
+        p.grain += p.rates.grain * dt;
+        p.timber += p.rates.timber * dt;
+        p.ore += p.rates.ore * dt;
+        p.gold += p.rates.gold * dt;
+        let starving = false;
+        if (p.grain <= 0) {
+          p.grain = 0;
+          starving = p.rates.grain < -0.01 && p.soldiers > 0;
+        }
+        p.starving = starving;
+        if (starving) {
+          const bleed = 0.02 * dt;
+          p.troops = Math.max(0, p.troops * (1 - bleed));
+          for (const a of this.armies) {
+            if (a.owner === p.id) a.troops = Math.max(0, a.troops * (1 - bleed * 1.5));
+          }
+        }
+        const cap = Math.max(1, Math.round(this.capacity(p) * (starving ? 0.6 : 1)));
+        if (!starving && p.troops < cap) {
+          p.troops = Math.min(cap, p.troops + Math.max(1.2, (cap - p.troops) * 0.05) * dt);
         } else if (p.troops > cap) {
           p.troops = cap;
         }
-        p.gold += this.income(p) * dt;
       }
       this.armyTick(dt);
       for (const p of this.players) {
@@ -722,13 +861,29 @@
       p.aiTimer -= dt;
       if (p.aiTimer > 0) return;
       p.aiTimer = 0.5 + this.rng() * 0.9;
-      const castleReady = p.gold >= this.buildCost("castle", 1) && p.castles < 7 && this.rng() < 0.6;
       const own = [...p.tiles];
-      if (castleReady && own.length) {
-        this.build(p, "castle", own[this.rng() * own.length | 0]);
-      } else if (p.gold >= COSTS.tower && this.rng() < 0.2 && own.length) {
-        this.build(p, "tower", own[this.rng() * own.length | 0]);
+      const empty = (t) => !this.structs.has(t);
+      const wants = [];
+      if (p.rates.grain < 1.4) wants.push("farm");
+      if (p.rates.timber < 0.6) wants.push("lumber");
+      if (p.rates.ore < 0.4) wants.push("mine");
+      if (p.rates.gold < 0.9) wants.push("market");
+      if (p.rates.grain > 1.8 && p.castles < 8) wants.push("castle");
+      for (const kind of wants) {
+        const cost = this.buildCost(kind, 1);
+        if (!this.canAfford(p, cost)) continue;
+        let t = -1;
+        if (kind === "castle") {
+          t = own.find((x) => empty(x)) ?? -1;
+        } else if (kind === "market") {
+          t = own.find((x) => empty(x) && this.isCoastal(x)) ?? -1;
+        } else {
+          const terr = TERRAIN_FOR[kind];
+          t = own.find((x) => empty(x) && this.world.terrain[x] === terr) ?? -1;
+        }
+        if (t >= 0 && this.build(p, kind, t)) return;
       }
+      if (p.rates.grain <= 0.05) return;
       const targets = [];
       for (const i of p.tiles) {
         for (const n of this.neighbors4(i)) {
@@ -1136,22 +1291,69 @@
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-      } else if (s.kind === "harbor") {
-        ctx.strokeStyle = "#3b2d1e";
-        ctx.lineWidth = Math.max(1, 1.2 * k);
+      } else if (s.kind === "farm") {
+        ctx.fillStyle = "#8d7a3f";
+        ctx.fillRect(x - 5 * k, y - 3.5 * k, 10 * k, 7 * k);
+        ctx.strokeStyle = "#4b3d1c";
+        ctx.lineWidth = Math.max(1, 0.8 * k);
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.moveTo(x - 4.4 * k, y - 2.2 * k + i * 2.2 * k);
+          ctx.lineTo(x + 4.4 * k, y - 2.2 * k + i * 2.2 * k);
+          ctx.stroke();
+        }
+        ctx.fillStyle = shade(col, 1.15);
+        ctx.fillRect(x - 5 * k, y - 3.5 * k, 10 * k, 1.2 * k);
+      } else if (s.kind === "lumber") {
+        ctx.fillStyle = shade(col, 0.5);
+        ctx.strokeStyle = "#241a10";
+        ctx.lineWidth = Math.max(1, 0.9 * k);
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.rect(x - 5 * k, y + (i - 1) * 2.4 * k, 8 * k, 1.9 * k);
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.fillStyle = "#c8a86a";
         ctx.beginPath();
-        ctx.moveTo(x, y + 3.5 * k);
-        ctx.lineTo(x, y - 5 * k);
-        ctx.stroke();
-        ctx.fillStyle = col;
-        ctx.beginPath();
-        ctx.moveTo(x + 0.8 * k, y - 5 * k);
-        ctx.lineTo(x + 5.5 * k, y - 1.6 * k);
-        ctx.lineTo(x + 0.8 * k, y - 1.6 * k);
-        ctx.closePath();
+        ctx.arc(x + 4.2 * k, y, 1.7 * k, 0, 6.283);
         ctx.fill();
-        ctx.fillStyle = "#6b5334";
-        ctx.fillRect(x - 5 * k, y + 3.5 * k, 10 * k, 1.8 * k);
+        ctx.stroke();
+      } else if (s.kind === "mine") {
+        ctx.fillStyle = "#2b2620";
+        ctx.beginPath();
+        ctx.arc(x, y + 2.4 * k, 2.6 * k, 0, 6.283);
+        ctx.fill();
+        ctx.strokeStyle = shade(col, 0.55);
+        ctx.lineWidth = Math.max(1, 1.1 * k);
+        ctx.beginPath();
+        ctx.moveTo(x - 3.4 * k, y + 1.6 * k);
+        ctx.lineTo(x, y - 6.2 * k);
+        ctx.lineTo(x + 3.4 * k, y + 1.6 * k);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - 1.8 * k, y - 2.6 * k);
+        ctx.lineTo(x + 1.8 * k, y - 2.6 * k);
+        ctx.stroke();
+      } else if (s.kind === "market") {
+        ctx.strokeStyle = "#3b2d1e";
+        ctx.lineWidth = Math.max(1, 1 * k);
+        ctx.beginPath();
+        ctx.moveTo(x - 4.4 * k, y + 3.6 * k);
+        ctx.lineTo(x - 4.4 * k, y - 2.4 * k);
+        ctx.moveTo(x + 4.4 * k, y + 3.6 * k);
+        ctx.lineTo(x + 4.4 * k, y - 2.4 * k);
+        ctx.stroke();
+        for (let i = 0; i < 4; i++) {
+          ctx.fillStyle = i % 2 ? "#f0e2c0" : shade(col, 0.85);
+          ctx.beginPath();
+          ctx.moveTo(x - 5 * k + i * 2.5 * k, y - 2.4 * k);
+          ctx.lineTo(x - 5 * k + (i + 1) * 2.5 * k, y - 2.4 * k);
+          ctx.lineTo(x - 5 * k + (i + 1) * 2.5 * k, y - 5.2 * k);
+          ctx.lineTo(x - 5 * k + i * 2.5 * k, y - 5.2 * k);
+          ctx.closePath();
+          ctx.fill();
+        }
       } else {
         ctx.strokeStyle = "#4a3623";
         ctx.fillStyle = shade(col, 0.45);
@@ -1179,6 +1381,9 @@
   var game = new Game(seed);
   var renderer = new Renderer(canvas, game);
   var el = (id) => document.getElementById(id);
+  var statGrain = el("stat-grain");
+  var statTimber = el("stat-timber");
+  var statOre = el("stat-ore");
   var statGold = el("stat-gold");
   var statTroops = el("stat-troops");
   var statLand = el("stat-land");
@@ -1232,9 +1437,12 @@
   var spaceDown = false;
   var keys = {
     q: "castle",
-    w: "tower",
-    e: "harbor",
-    r: "siege"
+    w: "farm",
+    e: "lumber",
+    r: "mine",
+    t: "market",
+    y: "tower",
+    u: "siege"
   };
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") spaceDown = true;
@@ -1334,10 +1542,9 @@
     if (!me) return;
     if (buildKind) {
       if (!game.build(me, buildKind, tile)) {
-        const cost = game.buildCost(buildKind, 1);
-        if (me.gold < cost) log(`Not enough gold for a ${STRUCTURE_LABEL[buildKind].toLowerCase()} (${cost}).`);
-        else if (game.structs.has(tile)) log("Something already stands there.");
-        else if (game.ownerAt(tile) !== me.id) log("You can only build on your own ground.");
+        const why = game.blockReason(me, buildKind, tile);
+        if (why) log(`Cannot build there: ${why}.`);
+        else log(`Not enough resources for a ${STRUCTURE_LABEL[buildKind].toLowerCase()}.`);
       }
       return;
     }
@@ -1350,6 +1557,34 @@
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
   });
+  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "siege"];
+  var BUILD_HINT = {
+    farm: "plains",
+    lumber: "forest",
+    mine: "mountains",
+    market: "coast"
+  };
+  function hotkeyFor(kind) {
+    for (const [k, v] of Object.entries(keys)) if (v === kind) return k.toUpperCase();
+    return "";
+  }
+  function fmtCost(cost) {
+    const parts = [];
+    if (cost.grain) parts.push(`<i class="r-grain">${cost.grain}gr</i>`);
+    if (cost.timber) parts.push(`<i class="r-timber">${cost.timber}tm</i>`);
+    if (cost.ore) parts.push(`<i class="r-ore">${cost.ore}or</i>`);
+    if (cost.gold) parts.push(`<i class="r-gold">${cost.gold}au</i>`);
+    return parts.join(" ");
+  }
+  var buildBarEl = el("build-bar");
+  buildBarEl.innerHTML = "";
+  for (const kind of BUILD_ORDER) {
+    const b = document.createElement("button");
+    b.dataset.kind = kind;
+    const hint2 = BUILD_HINT[kind];
+    b.innerHTML = `<span class="label">${STRUCTURE_LABEL[kind]}</span><span class="cost"></span>` + (hint2 ? `<span class="hint">${hint2}</span>` : "") + `<span class="key">${hotkeyFor(kind)}</span>`;
+    buildBarEl.appendChild(b);
+  }
   var buildButtons = [...document.querySelectorAll("#build-bar button")];
   for (const b of buildButtons) {
     b.addEventListener("click", () => {
@@ -1362,6 +1597,10 @@
     for (const b of buildButtons) {
       b.classList.toggle("active", b.dataset.kind === buildKind);
     }
+  }
+  function flow(stock, rate) {
+    const sign = rate >= 0 ? "+" : "";
+    return `${fmt(Math.max(0, stock))} ${sign}${rate.toFixed(2)}/s`;
   }
   function fmt(n) {
     if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
@@ -1378,18 +1617,23 @@
   function refreshHud() {
     const me = game.players[game.human];
     if (!me) return;
-    statGold.textContent = fmt(me.gold);
+    statGrain.textContent = flow(me.grain, me.rates.grain);
+    statTimber.textContent = flow(me.timber, me.rates.timber);
+    statOre.textContent = flow(me.ore, me.rates.ore);
+    statGold.textContent = flow(me.gold, me.rates.gold);
     statTroops.textContent = `${fmt(me.troops)} / ${fmt(game.capacity(me))}`;
     statLand.textContent = `${(game.landShare(me) * 100).toFixed(1)}%`;
     statCastles.textContent = `${me.castles}`;
+    statTroops.classList.toggle("starving", me.starving);
     const alive = game.players.filter((p) => p.alive).length - 1;
     statLords.textContent = `${alive}`;
     for (const b of buildButtons) {
       const kind = b.dataset.kind;
       const cost = game.buildCost(kind, 1);
-      b.classList.toggle("poor", me.gold < cost);
+      b.classList.toggle("poor", !game.canAfford(me, cost));
       const costEl = b.querySelector(".cost");
-      if (costEl) costEl.textContent = `${cost}g`;
+      if (costEl) costEl.innerHTML = fmtCost(cost);
+      b.classList.toggle("active", buildKind === kind);
     }
     if (game.phase === "over" && endOverlay.classList.contains("hidden")) {
       const won = game.winner === game.human;

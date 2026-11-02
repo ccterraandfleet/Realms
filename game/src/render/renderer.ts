@@ -469,22 +469,73 @@ export class Renderer {
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
-    } else if (s.kind === "harbor") {
-      ctx.strokeStyle = "#3b2d1e";
-      ctx.lineWidth = Math.max(1, 1.2 * k);
+    } else if (s.kind === "farm") {
+      // Field strips with a furrow between them.
+      ctx.fillStyle = "#8d7a3f";
+      ctx.fillRect(x - 5 * k, y - 3.5 * k, 10 * k, 7 * k);
+      ctx.strokeStyle = "#4b3d1c";
+      ctx.lineWidth = Math.max(1, 0.8 * k);
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.moveTo(x - 4.4 * k, y - 2.2 * k + i * 2.2 * k);
+        ctx.lineTo(x + 4.4 * k, y - 2.2 * k + i * 2.2 * k);
+        ctx.stroke();
+      }
+      ctx.fillStyle = shade(col, 1.15);
+      ctx.fillRect(x - 5 * k, y - 3.5 * k, 10 * k, 1.2 * k);
+    } else if (s.kind === "lumber") {
+      // Stacked logs and a stump.
+      ctx.fillStyle = shade(col, 0.5);
+      ctx.strokeStyle = "#241a10";
+      ctx.lineWidth = Math.max(1, 0.9 * k);
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath();
+        ctx.rect(x - 5 * k, y + (i - 1) * 2.4 * k, 8 * k, 1.9 * k);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.fillStyle = "#c8a86a";
       ctx.beginPath();
-      ctx.moveTo(x, y + 3.5 * k);
-      ctx.lineTo(x, y - 5 * k);
-      ctx.stroke();
-      ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.moveTo(x + 0.8 * k, y - 5 * k);
-      ctx.lineTo(x + 5.5 * k, y - 1.6 * k);
-      ctx.lineTo(x + 0.8 * k, y - 1.6 * k);
-      ctx.closePath();
+      ctx.arc(x + 4.2 * k, y, 1.7 * k, 0, 6.283);
       ctx.fill();
-      ctx.fillStyle = "#6b5334";
-      ctx.fillRect(x - 5 * k, y + 3.5 * k, 10 * k, 1.8 * k);
+      ctx.stroke();
+    } else if (s.kind === "mine") {
+      // Pit head: a headframe over a dark shaft.
+      ctx.fillStyle = "#2b2620";
+      ctx.beginPath();
+      ctx.arc(x, y + 2.4 * k, 2.6 * k, 0, 6.283);
+      ctx.fill();
+      ctx.strokeStyle = shade(col, 0.55);
+      ctx.lineWidth = Math.max(1, 1.1 * k);
+      ctx.beginPath();
+      ctx.moveTo(x - 3.4 * k, y + 1.6 * k);
+      ctx.lineTo(x, y - 6.2 * k);
+      ctx.lineTo(x + 3.4 * k, y + 1.6 * k);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - 1.8 * k, y - 2.6 * k);
+      ctx.lineTo(x + 1.8 * k, y - 2.6 * k);
+      ctx.stroke();
+    } else if (s.kind === "market") {
+      // Striped awning on posts.
+      ctx.strokeStyle = "#3b2d1e";
+      ctx.lineWidth = Math.max(1, 1 * k);
+      ctx.beginPath();
+      ctx.moveTo(x - 4.4 * k, y + 3.6 * k);
+      ctx.lineTo(x - 4.4 * k, y - 2.4 * k);
+      ctx.moveTo(x + 4.4 * k, y + 3.6 * k);
+      ctx.lineTo(x + 4.4 * k, y - 2.4 * k);
+      ctx.stroke();
+      for (let i = 0; i < 4; i++) {
+        ctx.fillStyle = i % 2 ? "#f0e2c0" : shade(col, 0.85);
+        ctx.beginPath();
+        ctx.moveTo(x - 5 * k + i * 2.5 * k, y - 2.4 * k);
+        ctx.lineTo(x - 5 * k + (i + 1) * 2.5 * k, y - 2.4 * k);
+        ctx.lineTo(x - 5 * k + (i + 1) * 2.5 * k, y - 5.2 * k);
+        ctx.lineTo(x - 5 * k + i * 2.5 * k, y - 5.2 * k);
+        ctx.closePath();
+        ctx.fill();
+      }
     } else {
       // Siege camp: a trebuchet arm.
       ctx.strokeStyle = "#4a3623";

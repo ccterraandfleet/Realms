@@ -7,7 +7,7 @@
  */
 
 import { Camera, Renderer } from "./render/renderer";
-import { COSTS, Game, PALETTE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
+import { BUILD, Bundle, Game, PALETTE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
 import { OCEAN } from "./sim/world";
 
 const params = new URLSearchParams(location.search);
@@ -18,6 +18,9 @@ const game = new Game(seed);
 const renderer = new Renderer(canvas, game);
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const statGrain = el("stat-grain");
+const statTimber = el("stat-timber");
+const statOre = el("stat-ore");
 const statGold = el("stat-gold");
 const statTroops = el("stat-troops");
 const statLand = el("stat-land");
@@ -87,9 +90,12 @@ let spaceDown = false;
 
 const keys: Record<string, StructureKind> = {
   q: "castle",
-  w: "tower",
-  e: "harbor",
-  r: "siege",
+  w: "farm",
+  e: "lumber",
+  r: "mine",
+  t: "market",
+  y: "tower",
+  u: "siege",
 };
 
 window.addEventListener("keydown", (e) => {
@@ -202,10 +208,9 @@ function click(tile: number) {
   if (!me) return;
   if (buildKind) {
     if (!game.build(me, buildKind, tile)) {
-      const cost = game.buildCost(buildKind, 1);
-      if (me.gold < cost) log(`Not enough gold for a ${STRUCTURE_LABEL[buildKind].toLowerCase()} (${cost}).`);
-      else if (game.structs.has(tile)) log("Something already stands there.");
-      else if (game.ownerAt(tile) !== me.id) log("You can only build on your own ground.");
+      const why = game.blockReason(me, buildKind, tile);
+      if (why) log(`Cannot build there: ${why}.`);
+      else log(`Not enough resources for a ${STRUCTURE_LABEL[buildKind].toLowerCase()}.`);
     }
     return;
   }
@@ -227,6 +232,42 @@ ratioInput.addEventListener("input", () => {
 /* Build bar                                                           */
 /* ------------------------------------------------------------------ */
 
+const BUILD_ORDER: StructureKind[] = ["castle", "farm", "lumber", "mine", "market", "tower", "siege"];
+const BUILD_HINT: Partial<Record<StructureKind, string>> = {
+  farm: "plains",
+  lumber: "forest",
+  mine: "mountains",
+  market: "coast",
+};
+
+function hotkeyFor(kind: StructureKind) {
+  for (const [k, v] of Object.entries(keys)) if (v === kind) return k.toUpperCase();
+  return "";
+}
+
+function fmtCost(cost: Bundle) {
+  const parts: string[] = [];
+  if (cost.grain) parts.push(`<i class="r-grain">${cost.grain}gr</i>`);
+  if (cost.timber) parts.push(`<i class="r-timber">${cost.timber}tm</i>`);
+  if (cost.ore) parts.push(`<i class="r-ore">${cost.ore}or</i>`);
+  if (cost.gold) parts.push(`<i class="r-gold">${cost.gold}au</i>`);
+  return parts.join(" ");
+}
+
+const buildBarEl = el("build-bar");
+buildBarEl.innerHTML = "";
+for (const kind of BUILD_ORDER) {
+  const b = document.createElement("button");
+  b.dataset.kind = kind;
+  const hint = BUILD_HINT[kind];
+  b.innerHTML =
+    `<span class="label">${STRUCTURE_LABEL[kind]}</span>` +
+    `<span class="cost"></span>` +
+    (hint ? `<span class="hint">${hint}</span>` : "") +
+    `<span class="key">${hotkeyFor(kind)}</span>`;
+  buildBarEl.appendChild(b);
+}
+
 const buildButtons = [...document.querySelectorAll<HTMLButtonElement>("#build-bar button")];
 for (const b of buildButtons) {
   b.addEventListener("click", () => {
@@ -246,6 +287,12 @@ function syncBuildButtons() {
 /* HUD                                                                 */
 /* ------------------------------------------------------------------ */
 
+/** "1.2k  +0.55/s" — stock first, then the flow that decides the game. */
+function flow(stock: number, rate: number): string {
+  const sign = rate >= 0 ? "+" : "";
+  return `${fmt(Math.max(0, stock))} ${sign}${rate.toFixed(2)}/s`;
+}
+
 function fmt(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
   if (n >= 1e4) return `${(n / 1e3).toFixed(1)}k`;
@@ -263,19 +310,24 @@ function log(text: string) {
 function refreshHud() {
   const me = game.players[game.human];
   if (!me) return;
-  statGold.textContent = fmt(me.gold);
+  statGrain.textContent = flow(me.grain, me.rates.grain);
+  statTimber.textContent = flow(me.timber, me.rates.timber);
+  statOre.textContent = flow(me.ore, me.rates.ore);
+  statGold.textContent = flow(me.gold, me.rates.gold);
   statTroops.textContent = `${fmt(me.troops)} / ${fmt(game.capacity(me))}`;
   statLand.textContent = `${(game.landShare(me) * 100).toFixed(1)}%`;
   statCastles.textContent = `${me.castles}`;
+  statTroops.classList.toggle("starving", me.starving);
   const alive = game.players.filter((p) => p.alive).length - 1;
   statLords.textContent = `${alive}`;
 
   for (const b of buildButtons) {
     const kind = b.dataset.kind as StructureKind;
     const cost = game.buildCost(kind, 1);
-    b.classList.toggle("poor", me.gold < cost);
+    b.classList.toggle("poor", !game.canAfford(me, cost));
     const costEl = b.querySelector(".cost");
-    if (costEl) costEl.textContent = `${cost}g`;
+    if (costEl) costEl.innerHTML = fmtCost(cost);
+    b.classList.toggle("active", buildKind === kind);
   }
 
   if (game.phase === "over" && endOverlay.classList.contains("hidden")) {
