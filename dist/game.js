@@ -2433,7 +2433,6 @@
     localPlayer = isHost ? 0 : 1;
     const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
     game.startMultiplayer(2);
-    game.startMultiplayer(2);
     game.human = localPlayer;
     spawnOverlay.classList.add("hidden");
     const mine = game.players[localPlayer];
@@ -2509,6 +2508,8 @@
   }
   var lastSnapshotAt = 0;
   var syncFailures = 0;
+  var lastChangeAt = Date.now();
+  var lastPayload = "";
   var joinedAt = Date.now();
   var myName = "";
   var myFaction = null;
@@ -2516,6 +2517,10 @@
   function guestTick() {
     void getSnapshot(roomCode).then((res) => {
       if (!res.state) return;
+      if (res.state !== lastPayload) {
+        lastPayload = res.state;
+        lastChangeAt = Date.now();
+      }
       game.applySnapshot(res.state);
       const slot = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
       game.human = slot >= 0 ? slot : localPlayer;
@@ -2538,7 +2543,7 @@
       flag.className = "sync-ok";
       return;
     }
-    if (!promoted && lastSnapshotAt === 0 && Date.now() - joinedAt > 6e3) {
+    if (!promoted && Date.now() - lastChangeAt > 8e3 && Date.now() - joinedAt > 8e3) {
       promoted = true;
       isHost = true;
       isGuest = false;
@@ -2560,7 +2565,7 @@
       }
       return;
     }
-    const stale = Date.now() - lastSnapshotAt > 5e3;
+    const stale = Date.now() - lastChangeAt > 6e3;
     if (stale) {
       flag.textContent = "\xB7 NOT SYNCED \u2014 waiting for the host";
       flag.className = "sync-bad";
