@@ -57,6 +57,28 @@
       </div>
     </div>
 
-    <script src="dist/game.js?v=20261104.130149"></script>
+    <script>
+      // The page itself can come out of the browser cache, so the stale copy has
+      // to be the one that notices. It compares its own build with the published
+      // one and re-requests the document under a fresh cache key, keeping any
+      // ?room= pin, so a tab can never sit on an old bundle.
+      (function () {
+        var BUILD = "20261104.130346";
+        function check(first) {
+          fetch("dist/version.json?t=" + Date.now(), { cache: "no-store" })
+            .then(function (r) { return r.json(); })
+            .then(function (v) {
+              if (!v || !v.build || v.build === BUILD) return;
+              var q = new URLSearchParams(location.search);
+              q.set("b", v.build);
+              location.replace(location.pathname + "?" + q.toString());
+            })
+            .catch(function () {});
+        }
+        check(true);
+        setInterval(check, 45000);
+      })();
+    </script>
+    <script src="dist/game.js?v=20261104.130346"></script>
   </body>
 </html>
