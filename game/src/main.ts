@@ -433,27 +433,64 @@ function showNetbar(html: string) {
 }
 
 async function boot() {
-  // Matches snap to the minute. Both of you landing in the same minute compute
-  // the same code, and the invite link carries it, so the link pins the match.
-  const nextMinute = Math.ceil(Date.now() / 60000) * 60000;
-  const joining = Boolean(roomParam);
-  const matchCode = joining ? roomParam : net.minuteCode(nextMinute);
-  const link = joining
-    ? `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`
-    : `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
+  // Real matchmaking: the plain link joins whatever match is currently live,
+  // and the invite link carries an explicit code. No clock-based guesses.
+  let clientId = "";
+  try {
+    clientId = localStorage.getItem("realms.client") ?? "";
+    if (!clientId) {
+      clientId = `c${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem("realms.client", clientId);
+    }
+  } catch {
+    clientId = `c${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  let matchCode = roomParam;
+  let host = false;
+  let matchReady = true;
+  if (roomParam) {
+    host = false;
+    try {
+      const found = await net.matchByCode(roomParam);
+      if (found.room) matchCode = found.room.code;
+    } catch {
+      /* a stale code still works: the relay keys on the code alone */
+    }
+  } else {
+    try {
+      const opened = await net.openMatch(seed, clientId);
+      matchCode = opened.code;
+      host = opened.host;
+      // Two players can open at the same instant. Settle on the earliest match
+      // so both of us end up in the same world rather than two of our own.
+      await new Promise((r) => window.setTimeout(r, 900));
+      const cur = await net.currentMatch(clientId);
+      if (cur.room && cur.room.code !== matchCode) {
+        matchCode = cur.room.code;
+        host = cur.room.host;
+      }
+    } catch (err) {
+      matchReady = false;
+      console.warn("matchmaking failed", err);
+    }
+  }
+
+  const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
 
   const faction = await openLobby({
     roomCode: matchCode,
-    startAt: joining ? Date.now() : nextMinute,
-    role: joining ? "guest" : "host",
+    startAt: Date.now(),
+    role: host ? "host" : "guest",
     link,
   });
 
-  isHost = !joining;
-  isGuest = joining;
+  isHost = host;
+  isGuest = !host;
   roomCode = matchCode;
   localPlayer = isHost ? 0 : 1;
 
+  game.startMultiplayer(2);
   game.startMultiplayer(2);
   game.human = localPlayer;
   spawnOverlay.classList.add("hidden");
@@ -470,6 +507,8 @@ async function boot() {
       color: faction.color,
     });
   }
+  myName = faction.name;
+  myFaction = { name: faction.name, color: faction.color };
   showIdentity(faction);
 
   for (const st of game.structs.values()) {
@@ -492,6 +531,7 @@ async function boot() {
     inviteBtn.addEventListener("click", () => void copyText(link, inviteBtn, "Link copied"));
   }
   window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
+  window.setInterval(watchSync, 2000);
   log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
 }
 
@@ -535,15 +575,80 @@ function hostTick() {
   void net.postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot()).catch(() => {});
 }
 
+let lastSnapshotAt = 0;
+let syncFailures = 0;
+let joinedAt = Date.now();
+let myName = "";
+let myFaction: { name: string; color: string } | null = null;
+let promoted = false;
+
 function guestTick() {
   void net
     .getSnapshot(roomCode)
     .then((res) => {
       if (!res.state) return;
       game.applySnapshot(res.state);
-      game.human = localPlayer;
+      // Find ourselves by the name the host actually recorded, so a takeover or
+      // a swapped slot can never label us as the other player.
+      const slot = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
+      game.human = slot >= 0 ? slot : localPlayer;
+      lastSnapshotAt = Date.now();
     })
-    .catch(() => {});
+    .catch(() => {
+      syncFailures++;
+    });
+}
+
+/** Say out loud whether this client is actually in the host's world. */
+function watchSync() {
+  const bar = document.getElementById("netbar");
+  if (!bar) return;
+  let flag = document.getElementById("sync-flag");
+  if (!flag) {
+    flag = document.createElement("span");
+    flag.id = "sync-flag";
+    bar.append(flag);
+  }
+  if (isHost) {
+    flag.textContent = "· hosting";
+    flag.className = "sync-ok";
+    return;
+  }
+  // If the match's original host never shows up (their tab closed, or the
+  // match outlived them), take the world over instead of sitting on a dead
+  // code showing our own private copy of the map.
+  if (!promoted && lastSnapshotAt === 0 && Date.now() - joinedAt > 6000) {
+    promoted = true;
+    isHost = true;
+    isGuest = false;
+    // Taking the world over means taking the host's slot, so the two of us
+    // cannot both sit on the guest slot with the same name.
+    localPlayer = 0;
+    const mine0 = game.players[0];
+    if (mine0 && myFaction) {
+      mine0.name = myFaction.name;
+      mine0.color = myFaction.color;
+    }
+    game.human = 0;
+    window.setInterval(hostTick, 250);
+    log("No host publishing in this match. You are hosting it now.");
+    const banner = document.getElementById("netbar");
+    if (banner) {
+      const note = document.createElement("span");
+      note.className = "sync-ok";
+      note.textContent = " · hosting (took over)";
+      banner.append(note);
+    }
+    return;
+  }
+  const stale = Date.now() - lastSnapshotAt > 5000;
+  if (stale) {
+    flag.textContent = "· NOT SYNCED — waiting for the host";
+    flag.className = "sync-bad";
+  } else {
+    flag.textContent = "· synced";
+    flag.className = "sync-ok";
+  }
 }
 
 void boot();

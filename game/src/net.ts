@@ -69,3 +69,35 @@ export const postSnapshot = (code: string, tick: number, state: string) =>
 
 export const getSnapshot = (code: string) =>
   call<{ state: string | null; tick?: number }>({ action: "view", code });
+
+/* ------------------------------------------------------------------ */
+/* Matchmaking (separate function so the relay stays small)            */
+/* ------------------------------------------------------------------ */
+
+const LOBBY = "https://lyra-01a6009e.base44.app/functions/realmsLobby";
+
+async function lobbyCall<T>(payload: Record<string, unknown>): Promise<T> {
+  const res = await fetch(LOBBY, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`lobby ${res.status}`);
+  return (await res.json()) as T;
+}
+
+export interface MatchInfo {
+  code: string;
+  seed?: number;
+  host: boolean;
+}
+
+/** Open a match, or adopt the live one if somebody opened it first. */
+export const openMatch = (seed: number, client: string) =>
+  lobbyCall<MatchInfo>({ action: "open", seed, client });
+
+export const currentMatch = (client: string) =>
+  lobbyCall<{ room: MatchInfo | null }>({ action: "current", client });
+
+export const matchByCode = (code: string) =>
+  lobbyCall<{ room: MatchInfo | null }>({ action: "byCode", code });
