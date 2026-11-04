@@ -412,3 +412,16 @@ button.primary:hover {
 
 .sync-ok { color: #86a86f; margin-left: 4px; }
 .sync-bad { color: #e2705a; font-weight: 700; margin-left: 4px; letter-spacing: 0.08em; }
+
+/* ---- lobby: match choice ---- */
+.lobby-matchline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; grid-column: 2; }
+.lobby-match { grid-template-columns: 60px 1fr; }
+.lobby-actions { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 2; margin-top: 8px; }
+.lobby-alt {
+  background: transparent; border: 1px solid #4a5a42; color: #a9b5a0; padding: 12px 18px;
+  font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; cursor: pointer;
+}
+.lobby-alt:hover { border-color: #c9a85e; color: #e9ddb8; }
+.lobby-alt:disabled, .lobby-go:disabled { opacity: 0.6; cursor: default; }
+.lobby-hint { font-size: 10px; color: #6f7c68; letter-spacing: 0.06em; }
