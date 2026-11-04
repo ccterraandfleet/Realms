@@ -202,6 +202,7 @@
     lumber: FOREST,
     mine: MOUNTAIN
   };
+  var BASE_YIELD = 10;
   var TILE_YIELD = {
     grain: 0.02,
     timber: 8e-3,
@@ -392,10 +393,10 @@
     /** Recompute production and upkeep. Once per realm per tick. */
     refreshRates(p) {
       const held = Math.max(0, p.yieldSum);
-      let grain = TILE_YIELD.grain * held;
-      let timber = TILE_YIELD.timber * held;
-      let ore = TILE_YIELD.ore * held;
-      let gold = TILE_YIELD.gold * held;
+      let grain = BASE_YIELD + TILE_YIELD.grain * held;
+      let timber = BASE_YIELD + TILE_YIELD.timber * held;
+      let ore = BASE_YIELD + TILE_YIELD.ore * held;
+      let gold = BASE_YIELD + TILE_YIELD.gold * held;
       for (const st of this.structs.values()) {
         if (st.owner !== p.id) continue;
         const y = YIELD[st.kind];

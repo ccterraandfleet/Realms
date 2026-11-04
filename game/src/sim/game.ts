@@ -193,6 +193,14 @@ export const TERRAIN_FOR: Partial<Record<StructureKind, number>> = {
  * slows you down, it does not end you, because a bigger realm always out-earns
  * a smaller one in every resource.
  */
+/**
+ * Flat base production every realm gets, per second, per resource. This is the
+ * floor that lets a brand new realm build at all, and the same number across
+ * all four resources so nothing is starved at the start. Land and buildings
+ * stack on top of it.
+ */
+export const BASE_YIELD = 10;
+
 export const TILE_YIELD = {
   grain: 0.02,
   timber: 0.008,
@@ -401,10 +409,10 @@ export class Game {
     // Wealth is measured per tile of GROUND, and a middle-ground tile is worth
     // several pocket tiles, so taking the middle is what grows a realm.
     const held = Math.max(0, p.yieldSum);
-    let grain = TILE_YIELD.grain * held;
-    let timber = TILE_YIELD.timber * held;
-    let ore = TILE_YIELD.ore * held;
-    let gold = TILE_YIELD.gold * held;
+    let grain = BASE_YIELD + TILE_YIELD.grain * held;
+    let timber = BASE_YIELD + TILE_YIELD.timber * held;
+    let ore = BASE_YIELD + TILE_YIELD.ore * held;
+    let gold = BASE_YIELD + TILE_YIELD.gold * held;
     for (const st of this.structs.values()) {
       if (st.owner !== p.id) continue;
       const y = YIELD[st.kind];
