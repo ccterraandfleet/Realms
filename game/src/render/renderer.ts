@@ -49,6 +49,13 @@ export class Renderer {
   private swirlTile = -1;
   private swirlFrom = 0;
 
+  /** Which formation the player has picked, by its home castle tile. */
+  private selectedHome: number | null = null;
+
+  setSelection(home: number | null) {
+    this.selectedHome = home;
+  }
+
   beginSwirl(tile: number, fromMs: number) {
     this.swirlTile = tile;
     this.swirlFrom = fromMs;
@@ -354,6 +361,33 @@ export class Renderer {
         ctx.arc(ax, ay, cam.scale * 0.72, 0, 6.283);
         ctx.stroke();
       }
+
+      // Picked formation: a bright ring you cannot miss.
+      if (this.selectedHome !== null && a.home === this.selectedHome) {
+        ctx.strokeStyle = "rgba(255,246,214,0.95)";
+        ctx.lineWidth = Math.max(1.6, cam.scale * 0.14);
+        ctx.beginPath();
+        ctx.arc(ax, ay, cam.scale * 1.15, 0, 6.283);
+        ctx.stroke();
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1.2, cam.scale * 0.09);
+        ctx.beginPath();
+        ctx.arc(ax, ay, cam.scale * 1.45, 0, 6.283);
+        ctx.stroke();
+      }
+
+      // How many men are in it.
+      if (cam.scale > 2.4) {
+        const label = String(Math.round(a.troops));
+        ctx.font = `${Math.max(9, Math.round(cam.scale * 0.78))}px ui-monospace, monospace`;
+        ctx.textAlign = "center";
+        ctx.lineWidth = Math.max(2, cam.scale * 0.2);
+        ctx.strokeStyle = "rgba(12,10,6,0.85)";
+        ctx.strokeText(label, ax, ay - cam.scale * 1.5);
+        ctx.fillStyle = "#fdf6e4";
+        ctx.fillText(label, ax, ay - cam.scale * 1.5);
+        ctx.textAlign = "start";
+      }
     }
 
     // Claim nodes: the seeds of expansion, one per double click on open ground.
@@ -517,6 +551,39 @@ export class Renderer {
           ctx.fillRect(x - 4 * k + i * 1.6 * k, y + wallH * 0.62, 1.2 * k, 1.2 * k);
         }
       }
+    } else if (s.kind === "camp") {
+      // A war camp: a ring of stakes with the banner planted in the middle.
+      const r = 6.5 * k;
+      ctx.strokeStyle = "#2a2015";
+      ctx.lineWidth = Math.max(1, 0.9 * k);
+      ctx.fillStyle = shade(col, 0.34);
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, 6.283);
+      ctx.fill();
+      ctx.stroke();
+      const stakes = 9;
+      ctx.strokeStyle = shade(col, 0.86);
+      ctx.lineWidth = Math.max(1, 0.8 * k);
+      for (let i = 0; i < stakes; i++) {
+        const ang = (i / stakes) * 6.283;
+        ctx.beginPath();
+        ctx.moveTo(x + Math.cos(ang) * r * 0.72, y + Math.sin(ang) * r * 0.72);
+        ctx.lineTo(x + Math.cos(ang) * r * 1.22, y + Math.sin(ang) * r * 1.22);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "#231a10";
+      ctx.lineWidth = Math.max(1, 0.85 * k);
+      ctx.beginPath();
+      ctx.moveTo(x, y + r * 0.6);
+      ctx.lineTo(x, y - r * 1.25);
+      ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.moveTo(x, y - r * 1.25);
+      ctx.lineTo(x + r * 0.85, y - r * 0.95);
+      ctx.lineTo(x, y - r * 0.6);
+      ctx.closePath();
+      ctx.fill();
     } else if (s.kind === "tower") {
       ctx.fillStyle = shade(col, 0.4);
       ctx.strokeStyle = "#1c1710";

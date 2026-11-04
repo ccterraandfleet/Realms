@@ -7,7 +7,7 @@
  */
 
 import { Camera, Renderer } from "./render/renderer";
-import { BUILD, Bundle, Game, PALETTE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
+import { ARMY_CAP, BUILD, Bundle, Game, PALETTE, PRICE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
 import { OCEAN } from "./sim/world";
 import * as net from "./net";
 import { badgeDataUrl } from "./faction";
@@ -36,6 +36,7 @@ const statTroops = el("stat-troops");
 const statLand = el("stat-land");
 const statCastles = el("stat-castles");
 const statLords = el("stat-lords");
+const armyNote = el("army-note");
 const logEl = el("log");
 const spawnOverlay = el("spawn-overlay");
 const endOverlay = el("end-overlay");
@@ -200,6 +201,49 @@ canvas.addEventListener(
   { passive: false },
 );
 
+/** The formation the player has picked, by the castle that raised it. */
+let selectedHome: number | null = null;
+
+function myArmyAt(tile: number) {
+  const me = game.players[game.human];
+  if (!me) return undefined;
+  return game.armies.find(
+    (a) => a.owner === me.id && (a.tile === tile || game.tileDistance(a.tile, tile) <= 1),
+  );
+}
+
+function select(home: number | null) {
+  selectedHome = home;
+  renderer.setSelection(home);
+  refreshHud();
+}
+
+/** Send the picked formation somewhere. Guests post the order; hosts run it. */
+function orderSelected(tile: number) {
+  const me = game.players[game.human];
+  if (!me || selectedHome === null) return false;
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "armyMove", home: selectedHome, tile });
+    return true;
+  }
+  return game.moveArmy(me, selectedHome, tile);
+}
+
+function raiseCamp() {
+  const me = game.players[game.human];
+  if (!me || selectedHome === null) {
+    log("Pick one of your hosts first, then raise the camp.");
+    return;
+  }
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "camp", home: selectedHome });
+    return;
+  }
+  if (!game.establishCamp(me, selectedHome)) {
+    log("A camp needs a host holding ground at least three tiles from its castle.");
+  }
+}
+
 function click(tile: number) {
   if (tile < 0) return;
   const me = game.players[game.human];
@@ -228,8 +272,16 @@ function click(tile: number) {
     }
     return;
   }
-  // A single click in play does not commit anything; it is a read of the
-  // ground under the cursor. The double click above sends the advance.
+  // Clicking one of your hosts picks it up; with a host picked, the next click
+  // is where you send it. That is the whole order system.
+  const mine = myArmyAt(tile);
+  if (mine) {
+    select(mine.home);
+    return;
+  }
+  if (selectedHome !== null) {
+    if (!orderSelected(tile)) log("That host cannot march there.");
+  }
 }
 
 function attack(tile: number) {
@@ -239,6 +291,9 @@ function attack(tile: number) {
   if (isGuest) {
     void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
     return;
+  }
+  if (selectedHome !== null) {
+    if (orderSelected(tile)) return;
   }
   const ok = game.orderArmy(me, tile, ratio);
   if (!ok && game.ownerAt(tile) === me.id) log("That is already your ground.");
@@ -255,7 +310,7 @@ ratioInput.addEventListener("input", () => {
 /* Build bar                                                           */
 /* ------------------------------------------------------------------ */
 
-const BUILD_ORDER: StructureKind[] = ["castle", "farm", "lumber", "mine", "market", "tower", "siege"];
+const BUILD_ORDER: StructureKind[] = ["castle", "farm", "lumber", "mine", "market", "tower", "camp"];
 const BUILD_HINT: Partial<Record<StructureKind, string>> = {
   farm: "plains",
   lumber: "forest",
@@ -295,6 +350,10 @@ const buildButtons = [...document.querySelectorAll<HTMLButtonElement>("#build-ba
 for (const b of buildButtons) {
   b.addEventListener("click", () => {
     const kind = b.dataset.kind as StructureKind;
+    if (kind === "camp") {
+      raiseCamp();
+      return;
+    }
     buildKind = buildKind === kind ? null : kind;
     syncBuildButtons();
   });
@@ -330,6 +389,15 @@ function log(text: string) {
   while (logEl.children.length > 6) logEl.lastElementChild!.remove();
 }
 
+function costText(b: { grain: number; ore: number; gold: number; timber: number }) {
+  const bits: string[] = [];
+  if (b.grain) bits.push(`${Math.ceil(b.grain)} grain`);
+  if (b.timber) bits.push(`${Math.ceil(b.timber)} timber`);
+  if (b.ore) bits.push(`${Math.ceil(b.ore)} iron`);
+  if (b.gold) bits.push(`${Math.ceil(b.gold)} gold`);
+  return bits.join(" + ");
+}
+
 function refreshHud() {
   const me = game.players[game.human];
   if (!me) return;
@@ -343,6 +411,20 @@ function refreshHud() {
   statTroops.classList.toggle("starving", me.starving);
   const alive = game.players.filter((p) => p.alive).length - 1;
   statLords.textContent = `${alive}`;
+
+  // What the next host costs, so "need x to do x" is on screen.
+  if (armyNote) {
+    const castle = [...game.structs.values()].find((s) => s.owner === me.id && s.kind === "castle");
+    if (castle) {
+      const cap = ARMY_CAP(castle.level);
+      const kit = game.scaleCost(PRICE.perMan, cap);
+      const short = !game.canAfford(me, kit);
+      armyNote.textContent = `Next host: ${cap} men for ${costText(kit)}${short ? " (short)" : ""}`;
+      armyNote.classList.toggle("short", short);
+    } else {
+      armyNote.textContent = "No castle: raise one to field a host.";
+    }
+  }
 
   for (const b of buildButtons) {
     const kind = b.dataset.kind as StructureKind;
@@ -375,6 +457,12 @@ let last = performance.now();
 /* ------------------------------------------------------------------ */
 
 const STEP = 0.1;
+/**
+ * Sim seconds per real second. Half speed: production is the clock now, so a
+ * store fills over a real stretch of play instead of in a single click.
+ */
+const SPEED_PARAM = Number(new URLSearchParams(location.search).get("speed"));
+const GAME_SPEED = Number.isFinite(SPEED_PARAM) && SPEED_PARAM > 0 ? SPEED_PARAM : 0.5;
 let simAcc = 0;
 let lastWall = performance.now();
 let lastPostAt = 0;
@@ -396,7 +484,7 @@ function advance() {
   lastWall = now;
   if (dt < 0) dt = 0;
   if (dt > 2) dt = 2;
-  simAcc += dt;
+  simAcc += dt * GAME_SPEED;
 
   const started = Date.now() >= playFrom;
   let steps = 0;
@@ -603,6 +691,8 @@ function hostTick() {
           continue;
         }
         if (it.data.kind === "order") game.orderArmy(p, it.data.tile as number, (it.data.ratio as number) ?? 0.3);
+        else if (it.data.kind === "armyMove") game.moveArmy(p, it.data.home as number, it.data.tile as number);
+        else if (it.data.kind === "camp") game.establishCamp(p, it.data.home as number);
         else if (it.data.kind === "build") game.build(p, it.data.k as StructureKind, it.data.tile as number);
       }
     })
@@ -619,7 +709,7 @@ let joinedAt = Date.now();
 let myName = "";
 /** Wall clock when the world starts moving; a short grace at match start. */
 let playFrom = 0;
-const MATCH_DELAY_MS = 4500;
+const MATCH_DELAY_MS = 30000;
 let countdownEl: HTMLElement | null = null;
 let myFaction: { name: string; color: string } | null = null;
 let promoted = false;

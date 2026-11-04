@@ -18,7 +18,8 @@ export type StructureKind =
   | "mine"
   | "market"
   | "tower"
-  | "siege";
+  | "siege"
+  | "camp";
 
 /** Index order used by compact netcode snapshots. */
 export const STRUCT_ORDER: StructureKind[] = [
@@ -29,6 +30,7 @@ export const STRUCT_ORDER: StructureKind[] = [
   "market",
   "tower",
   "siege",
+  "camp",
 ];
 
 export interface ClaimNode {
@@ -38,6 +40,8 @@ export interface ClaimNode {
   seen: Set<number>;
   acc: number;
   done: boolean;
+  /** True when the owner could not pay for the next tile. */
+  stalled?: boolean;
 }
 
 /** How far from your own land a claim node can be planted. */
@@ -50,6 +54,8 @@ export interface Structure {
   owner: number;
   tile: number;
   level: number;
+  /** Fractional progress for camps, which creep one tile at a time. */
+  acc?: number;
 }
 
 export interface Player {
@@ -81,11 +87,18 @@ export interface Player {
   tiles: Set<number>;
   /** Fractional progress of the automatic border spread. */
   spreadAcc: number;
+  /** Tiles of this realm's border, refreshed about once a second. */
+  frontTiles: number;
+  frontTimer: number;
+  /** Seconds until the "not enough kit" note may fire again. */
+  kitWarn: number;
 }
 
 export interface Army {
   id: number;
   owner: number;
+  /** The castle this formation belongs to; stable across snapshots. */
+  home: number;
   /** Soldiers in this push. Speed and hitting power both come from here. */
   troops: number;
   /** Head of the push: the tile the army currently holds. */
@@ -129,6 +142,7 @@ export const BUILD: Record<StructureKind, Bundle> = {
   market: { grain: 25, timber: 55, ore: 0, gold: 20 },
   tower: { grain: 0, timber: 55, ore: 25, gold: 30 },
   siege: { grain: 35, timber: 65, ore: 70, gold: 40 },
+  camp: { grain: 20, timber: 60, ore: 30, gold: 40 },
 };
 
 export const STRUCTURE_LABEL: Record<StructureKind, string> = {
@@ -139,7 +153,14 @@ export const STRUCTURE_LABEL: Record<StructureKind, string> = {
   market: "Market",
   tower: "Watchtower",
   siege: "Siege Camp",
+  camp: "War Camp",
 };
+
+/**
+ * A formation holds one castle's worth of men. Level 1 fields 100, level 2
+ * fields 250, level 3 fields 500, and it keeps climbing from there.
+ */
+export const ARMY_CAP = (level: number) => 50 * (level * level + 1);
 
 /** What each building pays out per second. */
 export const YIELD: Partial<Record<StructureKind, Partial<Bundle>>> = {
@@ -155,6 +176,19 @@ export const TERRAIN_FOR: Partial<Record<StructureKind, number>> = {
   lumber: FOREST,
   mine: MOUNTAIN,
 };
+
+/**
+ * Everything costs something. There is no free land and no free army: what your
+ * land produces is the only thing that lets you do anything at all.
+ */
+export const PRICE = {
+  /** Settling one unclaimed tile: seed, stakes and a survey. */
+  claimTile: { grain: 2, timber: 1, ore: 0, gold: 0.25 },
+  /** Raising one man into a host: rations for the march and iron for a spear. */
+  perMan: { grain: 0.5, timber: 0, ore: 0.3, gold: 0.15 },
+  /** Taking one tile of somebody else's ground: munitions spent doing it. */
+  pushTile: { grain: 8, timber: 0, ore: 4, gold: 2 },
+} as const;
 
 /** Grain a soldier eats per second, in the host or in the field. */
 export const UPKEEP_PER_TROOP = 0.001;
@@ -246,6 +280,9 @@ export class Game {
       tileCount: 0,
       castles: 0,
       immune: 0,
+      frontTiles: 1,
+      frontTimer: 0,
+      kitWarn: 0,
       aiTimer: 0,
       density: 0,
       tiles: new Set<number>(),
@@ -331,10 +368,12 @@ export class Game {
   refreshRates(p: Player) {
     // Bare ground yields a trickle of everything, so no realm can be locked
     // out of a resource; buildings on the right ground are what make it scale.
-    let grain = 0.8 + p.tileCount * 0.004;
-    let timber = 0.14 + p.tileCount * 0.002;
-    let ore = 0.11 + p.tileCount * 0.0015;
-    let gold = 0.35 + p.tileCount * 0.003;
+    // Bare ground yields a working baseline, so a realm can always afford to
+    // grow slowly; every priced action still has to be earned from here.
+    let grain = 2.0 + p.tileCount * 0.004;
+    let timber = 0.5 + p.tileCount * 0.002;
+    let ore = 0.3 + p.tileCount * 0.0015;
+    let gold = 0.6 + p.tileCount * 0.003;
     for (const st of this.structs.values()) {
       if (st.owner !== p.id) continue;
       const y = YIELD[st.kind];
@@ -571,8 +610,29 @@ export class Game {
    * realm's host, so a front exists on both sides even in peacetime. A garrison
    * parked next to it reinforces that stretch.
    */
+  /**
+   * Men standing on one tile of front. The pool is spread along the border
+   * rather than stacked on every tile, so what holds a line is depth, and a
+   * concentrated host can break a stretch of it. This is the number a push has
+   * to beat locally, and the number the pickets on screen represent.
+   */
   lineStrength(p: Player): number {
-    return Math.max(4, p.troops * 0.28);
+    const front = Math.max(1, p.frontTiles);
+    return Math.max(3, (p.troops / front) * 3);
+  }
+
+  /** Count how much border a realm actually has to hold. */
+  private refreshFront(p: Player) {
+    let front = 0;
+    for (const t of p.tiles) {
+      for (const n of this.neighbors4(t)) {
+        if (this.owners[n] !== p.id) {
+          front++;
+          break;
+        }
+      }
+    }
+    p.frontTiles = Math.max(1, front);
   }
 
   /** Defence of a held tile: its share of the line, terrain, works, garrisons. */
@@ -588,7 +648,7 @@ export class Game {
     return def;
   }
 
-  private tileDistance(a: number, b: number): number {
+  tileDistance(a: number, b: number): number {
     const { w } = this.world;
     const ax = a % w;
     const ay = (a / w) | 0;
@@ -633,6 +693,12 @@ export class Game {
         node.done = true;
         continue;
       }
+      // How fast a node settles is set by what the realm produces, and it stops
+      // dead when the stores run dry.
+      if (node.stalled) {
+        if (!this.canAfford(p, PRICE.claimTile)) continue;
+        node.stalled = false;
+      }
       const rate = Math.min(14, 4 + Math.max(0, p.grainProd) * 0.5);
       node.acc = Math.min(node.acc + rate * dt, 24);
       while (node.acc >= 1) {
@@ -642,6 +708,14 @@ export class Game {
         }
         const t = node.frontier.shift() as number;
         if (this.owners[t] === -1 && this.isLand(t)) {
+          // Settling ground is bought tile by tile out of your stores.
+          const cost = PRICE.claimTile;
+          if (!this.canAfford(p, cost)) {
+            node.stalled = true;
+            break;
+          }
+          this.pay(p, cost);
+          node.stalled = false;
           this.capture(t, node.owner);
         }
         for (const n of this.neighbors4(t)) {
@@ -717,61 +791,202 @@ export class Game {
   orderArmy(p: Player, target: number, ratio: number): boolean {
     if (this.phase !== "playing" || !p.alive) return false;
     // Unclaimed ground is settled, never invaded: plant a node and let it eat
-    // outward. Columns only ever march into somebody else's land.
+    // outward. Formations only ever march into somebody else's land.
     if (target < 0 || !this.isLand(target)) return false;
     if (this.owners[target] === -1) return this.startClaimNode(p, target);
     if (this.owners[target] === p.id) return false;
     if (!this.canAttack(p, target)) return false;
-    const share = Math.max(0.05, Math.min(1, ratio));
-    const send = Math.floor(p.troops * share);
-    if (send < 12) return false;
-    // Every campaign draws on the economy twice: iron to arm the column and
-    // grain to feed it on the road. Lose either and the offensive stops.
-    const equip = Math.ceil(send * ORE_PER_TROOP);
-    if (p.ore < equip) return false;
-    const rations = Math.ceil(send * RATIONS_PER_TROOP);
-    if (p.grain < rations) return false;
 
-    // Launch from the own tile closest to the objective.
-    let launch = -1;
+    // A push is your formations, not your border. If nothing is formed up yet,
+    // the order becomes the muster itself.
+    const mine = this.armies.filter((a) => a.owner === p.id);
+    if (!mine.length) return this.muster(p);
+
+    // Send the formation closest to the point you picked.
+    let best = mine[0];
     let bestD = Infinity;
-    for (const t of p.tiles) {
-      const d = this.tileDistance(t, target);
+    for (const a of mine) {
+      const d = this.tileDistance(a.tile, target);
       if (d < bestD) {
         bestD = d;
-        launch = t;
+        best = a;
       }
     }
-    if (launch < 0 || bestD > 40) return false;
-    // A realm can only command so many columns at once; the rest of the host
-    // stays on the line. Keeps the field readable and the sim cheap.
-    // A larger economy commands more columns at once: how much you produce
-    // decides how many fronts you can hold.
-    const limit = Math.min(
-      MAX_ARMIES_PER_PLAYER,
-      MIN_ARMIES_PER_PLAYER + Math.floor(this.capacity(p) / 4000),
-    );
-    const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
-    if (mine >= limit || this.armies.length >= MAX_ARMIES) return false;
+    void ratio;
+    return this.moveArmy(p, best.home, target);
+  }
 
-    p.troops -= send;
-    p.ore -= equip;
-    p.grain -= rations;
-    this.armies.push({
-      id: this.nextArmyId++,
-      owner: p.id,
-      troops: send,
-      tile: launch,
-      target,
-      progress: 0,
-      taken: 0,
-      cutOff: false,
-      speed: this.armySpeed(send),
-      supplyTimer: 0,
-      holding: false,
-      holdTimer: 0,
-    });
+  /**
+   * Formations group themselves. Every castle fields one host, filled to what
+   * that castle's level can carry, drawn straight out of the pool standing on
+   * the border. Bigger castles hold bigger hosts; more castles hold more of
+   * them. What the harvest feeds is still the outer limit.
+   */
+  muster(p: Player): boolean {
+    if (!p.alive || this.phase !== "playing") return false;
+    for (const st of this.structs.values()) {
+      if (st.owner !== p.id || st.kind !== "castle") continue;
+      if (this.armies.some((a) => a.owner === p.id && a.home === st.tile)) continue;
+      const cap = ARMY_CAP(st.level);
+      if (p.troops < cap) continue;
+      if (this.armies.length >= MAX_ARMIES) return false;
+      // Kit and rations for every man, paid before he takes the field.
+      const kit = this.scaleCost(PRICE.perMan, cap);
+      if (!this.canAfford(p, kit)) {
+        if (!p.isBot && p.kitWarn <= 0) {
+          this.note(`${cap} men need ${Math.ceil(kit.ore)} iron and ${Math.ceil(kit.grain)} grain to take the field.`);
+          p.kitWarn = 12;
+        }
+        return false;
+      }
+      this.pay(p, kit);
+      p.troops -= cap;
+      this.armies.push({
+        id: this.nextArmyId++,
+        owner: p.id,
+        home: st.tile,
+        troops: cap,
+        tile: st.tile,
+        target: st.tile,
+        progress: 0,
+        taken: 0,
+        cutOff: false,
+        speed: 0,
+        supplyTimer: 0,
+        holding: true,
+        holdTimer: 0,
+      });
+      if (!p.isBot) this.note(`${cap} men form up at your castle.`);
+      return true;
+    }
+    return false;
+  }
+
+  /** The formation raised by a particular castle. */
+  armyOf(p: Player, home: number): Army | undefined {
+    return this.armies.find((a) => a.owner === p.id && a.home === home);
+  }
+
+  /** March a formation at a point. It stops where you clicked. */
+  moveArmy(p: Player, home: number, target: number): boolean {
+    if (this.phase !== "playing" || !p.alive) return false;
+    const a = this.armyOf(p, home);
+    if (!a) return false;
+    if (target < 0 || !this.isLand(target)) return false;
+    if (target === a.tile && a.holding) return false;
+    a.target = target;
+    a.holding = false;
+    a.progress = 0;
     return true;
+  }
+
+  /**
+   * Pitch a war camp where a formation is standing. From there it eats the
+   * ground around it one tile at a time, which is how you take land you could
+   * never take by walking through it.
+   */
+  establishCamp(p: Player, home: number): boolean {
+    if (this.phase !== "playing" || !p.alive) return false;
+    const a = this.armyOf(p, home);
+    if (!a || !a.holding) return false;
+    // A formation takes the ground it stands on, so ownership is the wrong
+    // test. A camp goes up where a host has marched out and is holding, which
+    // covers both ground it just took and enemy land it is standing in.
+    if (a.tile === a.home || this.tileDistance(a.tile, a.home) < 3) return false;
+    if (this.structs.has(a.tile)) return false;
+    const cost = BUILD.camp;
+    if (!this.canAfford(p, cost)) return false;
+    this.pay(p, cost);
+    this.structs.set(a.tile, { kind: "camp", owner: p.id, tile: a.tile, level: 1, acc: 0 });
+    this.structDirty = true;
+    this.capture(a.tile, p.id);
+    if (!p.isBot) this.note("A war camp is raised. The ground around it is yours to take.");
+    return true;
+  }
+
+  /** Men standing at a camp: its garrison is whatever formation guards it. */
+  campGarrison(st: Structure): number {
+    let g = st.level * 120;
+    for (const a of this.armies) {
+      if (a.owner !== st.owner) continue;
+      if (this.tileDistance(a.tile, st.tile) <= 1) g += a.troops;
+    }
+    return g;
+  }
+
+  /** Camps creep outward, taking the weakest ground beside them first. */
+  private campTick(dt: number) {
+    for (const st of [...this.structs.values()]) {
+      if (st.kind !== "camp") continue;
+      const p = this.players[st.owner];
+      if (!p || !p.alive) {
+        this.structs.delete(st.tile);
+        this.structDirty = true;
+        continue;
+      }
+      const g = this.campGarrison(st);
+      st.acc = (st.acc ?? 0) + dt * (1 + g / 900);
+      if (st.acc < 1) continue;
+      st.acc -= 1;
+      let bestT = -1;
+      let bestDef = Infinity;
+      for (const n of this.neighbors4(st.tile)) {
+        if (!this.isLand(n) || this.owners[n] === st.owner) continue;
+        const o = this.owners[n];
+        if (o >= 0 && this.players[o].immune > 0) continue;
+        const d = o >= 0 ? this.defenseAt(n, o) : this.neutralDefense(n);
+        if (d < bestDef) {
+          bestDef = d;
+          bestT = n;
+        }
+      }
+      if (bestT >= 0 && g * 0.5 >= bestDef * 0.2) this.capture(bestT, st.owner);
+    }
+  }
+
+  /** Two hosts on the same ground: the bigger one carries the field. */
+  private armyBattle(a: Army, p: Player, foe: Army) {
+    if (a.troops > foe.troops) {
+      a.troops -= foe.troops * 0.55;
+      const i = this.armies.indexOf(foe);
+      if (i >= 0) this.armies.splice(i, 1);
+      // The men we just broke were standing on a camp: it falls with them.
+      const st = this.structs.get(foe.tile);
+      if (st && st.kind === "camp" && st.owner === foe.owner) {
+        const garrison = this.campGarrison(st);
+        if (a.troops > garrison) {
+          a.troops -= garrison * 0.4;
+          this.structs.delete(st.tile);
+          this.structDirty = true;
+          if (!p.isBot) this.note("The camp falls with its garrison.");
+        }
+      }
+      this.capture(foe.tile, a.owner);
+      a.tile = foe.tile;
+      if (!p.isBot) this.note("Two hosts meet. Yours holds the field.");
+    } else {
+      foe.troops = Math.max(1, foe.troops - a.troops * 0.55);
+      const i = this.armies.indexOf(a);
+      if (i >= 0) this.armies.splice(i, 1);
+      if (!p.isBot) this.note("Your host is broken in the open field.");
+    }
+  }
+
+  /** Assaulting a war camp: beat the men holding it and the camp falls. */
+  private campBattle(a: Army, p: Player, st: Structure) {
+    const garrison = this.campGarrison(st);
+    if (a.troops > garrison) {
+      a.troops -= garrison * 0.6;
+      this.structs.delete(st.tile);
+      this.structDirty = true;
+      this.capture(st.tile, a.owner);
+      a.tile = st.tile;
+      if (!p.isBot) this.note("The war camp is broken and your ground is yours again.");
+    } else {
+      const i = this.armies.indexOf(a);
+      if (i >= 0) this.armies.splice(i, 1);
+      if (!p.isBot) this.note("Your host breaks on the camp's palisade.");
+    }
   }
 
   /** The closest free tile beside a column, or -1 when it is walled in. */
@@ -829,19 +1044,9 @@ export class Game {
       }
 
       if (a.holding) {
+        // A formation stands exactly where it was sent. It does not wander on
+        // its own: taking ground from there is a camp or another order.
         a.holdTimer += dt;
-        // A column that takes its objective keeps pressing outward while it
-        // still has men, which is what turns one order into a real front.
-        const nextPush = this.nearestOpenTile(a);
-        if (a.troops >= 40 && nextPush >= 0) {
-          a.target = nextPush;
-          a.holding = false;
-          a.holdTimer = 0;
-        } else if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
-          // Nothing left to take: the survivors rejoin the host.
-          p.troops = Math.min(this.capacity(p), p.troops + a.troops);
-          this.armies.splice(i, 1);
-        }
         continue;
       }
 
@@ -858,12 +1063,43 @@ export class Game {
   }
 
   /** One tile of the push: survey open ground, or fight for held ground. */
+  /**
+   * Anything already standing on a tile a host walks into. Returns true when
+   * the move became a fight, so the caller does not also move the host.
+   */
+  private contestTile(a: Army, p: Player, t: number): boolean {
+    const foe = this.armies.find((x) => x !== a && x.owner !== a.owner && x.tile === t);
+    if (foe) {
+      this.armyBattle(a, p, foe);
+      return true;
+    }
+    const st = this.structs.get(t);
+    if (st && st.kind === "camp" && st.owner !== a.owner) {
+      this.campBattle(a, p, st);
+      return true;
+    }
+    return false;
+  }
+
   private armyStep(a: Army, p: Player) {
     const next = this.nextTile(a);
     if (next < 0) {
+      // Nothing to cross yet, so walk your own ground toward the order. A host
+      // standing deep inside its own realm used to read as "arrived" and stop
+      // still at its castle.
+      const through = this.nextOwnTile(a);
+      if (through >= 0) {
+        // Home ground is not automatically safe: an enemy host or camp can be
+        // sitting on it, and walking into it is a battle.
+        if (this.contestTile(a, p, through)) return;
+        a.tile = through;
+        if (a.tile === a.target) a.holding = true;
+        return;
+      }
       a.holding = true;
       return;
     }
+    if (this.contestTile(a, p, next)) return;
     const owner = this.owners[next];
     if (owner === a.owner) {
       a.tile = next;
@@ -884,9 +1120,16 @@ export class Game {
       a.holding = true;
       return;
     }
-    // Battle for a held border tile.
+    // Battle for a held border tile. Taking ground costs munitions, so a realm
+    // with no iron and no grain simply cannot advance.
     const def = this.defenseAt(next, owner);
+    if (!this.canAfford(p, PRICE.pushTile)) {
+      a.holding = true;
+      if (!p.isBot) this.note("Your host is out of stores and cannot press the attack.");
+      return;
+    }
     if (a.troops > def) {
+      this.pay(p, PRICE.pushTile);
       a.troops -= def * 0.7;
       const defender = this.players[owner];
       defender.troops = Math.max(0, defender.troops - def * 0.45);
@@ -907,6 +1150,21 @@ export class Game {
         if (!p.isBot) this.note("A push has broken against the line.");
       }
     }
+  }
+
+  /** An adjacent friendly tile that is closer to the objective, if any. */
+  private nextOwnTile(a: Army): number {
+    let best = -1;
+    let bestD = this.tileDistance(a.tile, a.target);
+    for (const n of this.neighbors8(a.tile)) {
+      if (!this.isLand(n) || this.owners[n] !== a.owner) continue;
+      const d = this.tileDistance(n, a.target);
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+    return best;
   }
 
   /** Next tile for a push: toward the objective, never onto own ground. */
@@ -998,6 +1256,16 @@ export class Game {
     return { grain: b.grain * m, timber: b.timber * m, ore: b.ore * m, gold: b.gold * m };
   }
 
+  /** Cost of n copies of a price, so per-tile and per-man prices stay one line. */
+  scaleCost(cost: { grain: number; timber: number; ore: number; gold: number }, n: number): Bundle {
+    return {
+      grain: cost.grain * n,
+      timber: cost.timber * n,
+      ore: cost.ore * n,
+      gold: cost.gold * n,
+    };
+  }
+
   canAfford(p: Player, cost: Bundle): boolean {
     return p.grain >= cost.grain && p.timber >= cost.timber &&
       p.ore >= cost.ore && p.gold >= cost.gold;
@@ -1070,6 +1338,12 @@ export class Game {
     for (const p of this.players) {
       if (!p.alive) continue;
       if (p.immune > 0) p.immune = Math.max(0, p.immune - dt);
+      if (p.kitWarn > 0) p.kitWarn -= dt;
+      p.frontTimer -= dt;
+      if (p.frontTimer <= 0) {
+        p.frontTimer = 1;
+        this.refreshFront(p);
+      }
       this.refreshRates(p);
       // Production first: every flow moves at its own rate.
       p.grain += p.rates.grain * dt;
@@ -1095,13 +1369,16 @@ export class Game {
       if (!starving && p.troops < cap) {
         p.troops = Math.min(cap, p.troops + Math.max(1.2, (cap - p.troops) * 0.05) * dt);
       } else if (p.troops > cap) {
-        // Columns folding back into a shrunken realm cannot bank a surplus.
+        // A shrunken realm cannot bank a surplus.
         p.troops = cap;
       }
+      // The border pool forms up into hosts as it fills.
+      if (!starving) this.muster(p);
     }
 
-    // Columns on the march.
+    // Formations on the march, then the camps eating ground behind them.
     this.armyTick(dt);
+    this.campTick(dt);
 
     for (const p of this.players) {
       if (p.isBot && p.alive) this.botThink(p, dt);
@@ -1163,6 +1440,13 @@ export class Game {
     // Lords push on the weakest stretch they can see, with one column.
     const pick = targets[Math.floor(this.rng() * Math.min(4, targets.length))];
     const ratio = 0.25 + this.rng() * 0.3;
+    // Lords camp ground they are standing on, which is how they actually take
+    // a defended border instead of bouncing off it forever.
+    for (const a of this.armies) {
+      if (a.owner !== p.id || !a.holding) continue;
+      if (this.owners[a.tile] === p.id) continue;
+      if (this.rng() < 0.5 && this.establishCamp(p, a.home)) return;
+    }
     this.orderArmy(p, pick.t, ratio);
   }
 
@@ -1177,7 +1461,9 @@ export class Game {
    * for taking ground that is already claimed.
    */
   private spread(p: Player, dt: number) {
-    const rate = Math.min(1.2, 0.08 + Math.max(0, p.grainProd) * 0.06);
+    // Your output sets how fast the border creeps: with stores banked it moves,
+    // without them it stalls at the first unpaid tile.
+    const rate = Math.min(8, 0.25 + Math.max(0, p.grainProd) * 0.9);
     p.spreadAcc += rate * dt;
     if (p.spreadAcc < 1) return;
     const frontier: number[] = [];
@@ -1191,6 +1477,12 @@ export class Game {
       p.spreadAcc = 0;
       return;
     }
+    // Creeping into unclaimed ground costs the same as any other settled tile.
+    if (!this.canAfford(p, PRICE.claimTile)) {
+      p.spreadAcc = 0;
+      return;
+    }
+    this.pay(p, PRICE.claimTile);
     p.spreadAcc -= 1;
     this.claim(frontier[(this.rng() * frontier.length) | 0], p.id);
   }
@@ -1246,6 +1538,8 @@ export class Game {
       n: Math.round(a.troops),
       g: a.target,
       c: a.cutOff ? 1 : 0,
+      m: a.home,
+      h: a.holding ? 1 : 0,
     }));
     const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
     const structs = [...this.structs.values()].map((st) => [
@@ -1322,6 +1616,7 @@ export class Game {
       this.armies.push({
         id: 0,
         owner: d.o,
+        home: d.m ?? d.t,
         troops: d.n,
         tile: d.t,
         target: d.g,
@@ -1330,7 +1625,7 @@ export class Game {
         cutOff: !!d.c,
         speed: 0,
         supplyTimer: 0,
-        holding: false,
+        holding: d.h === 1,
         holdTimer: 0,
       });
     }
