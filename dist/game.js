@@ -121,7 +121,8 @@
     "mine",
     "market",
     "tower",
-    "siege"
+    "siege",
+    "camp"
   ];
   var CLAIM_REACH = 26;
   var NODE_RADIUS = 34;
@@ -132,7 +133,8 @@
     mine: { grain: 45, timber: 70, ore: 0, gold: 15 },
     market: { grain: 25, timber: 55, ore: 0, gold: 20 },
     tower: { grain: 0, timber: 55, ore: 25, gold: 30 },
-    siege: { grain: 35, timber: 65, ore: 70, gold: 40 }
+    siege: { grain: 35, timber: 65, ore: 70, gold: 40 },
+    camp: { grain: 20, timber: 60, ore: 30, gold: 40 }
   };
   var STRUCTURE_LABEL = {
     castle: "Castle",
@@ -141,8 +143,10 @@
     mine: "Iron Mine",
     market: "Market",
     tower: "Watchtower",
-    siege: "Siege Camp"
+    siege: "Siege Camp",
+    camp: "War Camp"
   };
+  var ARMY_CAP = (level) => 50 * (level * level + 1);
   var YIELD = {
     farm: { grain: 0.55 },
     lumber: { timber: 0.45 },
@@ -154,10 +158,16 @@
     lumber: FOREST,
     mine: MOUNTAIN
   };
+  var PRICE = {
+    /** Settling one unclaimed tile: seed, stakes and a survey. */
+    claimTile: { grain: 2, timber: 1, ore: 0, gold: 0.25 },
+    /** Raising one man into a host: rations for the march and iron for a spear. */
+    perMan: { grain: 0.5, timber: 0, ore: 0.3, gold: 0.15 },
+    /** Taking one tile of somebody else's ground: munitions spent doing it. */
+    pushTile: { grain: 8, timber: 0, ore: 4, gold: 2 }
+  };
   var UPKEEP_PER_TROOP = 1e-3;
   var FEED_SHARE = 0.8;
-  var ORE_PER_TROOP = 4e-3;
-  var RATIONS_PER_TROOP = 4e-3;
   var PALETTE = [
     "#c0392b",
     // crimson
@@ -202,10 +212,7 @@
     "Lord Ashen",
     "Earl Dunmore"
   ];
-  var MIN_ARMIES_PER_PLAYER = 3;
-  var MAX_ARMIES_PER_PLAYER = 10;
   var MAX_ARMIES = 220;
-  var HOLD_BEFORE_ABSORB = 8;
   var IMMUNITY = 20;
   var SPAWN_RADIUS = 5;
   var BOT_SPAWN_RADIUS = 4;
@@ -254,6 +261,9 @@
         tileCount: 0,
         castles: 0,
         immune: 0,
+        frontTiles: 1,
+        frontTimer: 0,
+        kitWarn: 0,
         aiTimer: 0,
         density: 0,
         tiles: /* @__PURE__ */ new Set(),
@@ -324,10 +334,10 @@
     }
     /** Recompute production and upkeep. Once per realm per tick. */
     refreshRates(p) {
-      let grain = 0.8 + p.tileCount * 4e-3;
-      let timber = 0.14 + p.tileCount * 2e-3;
-      let ore = 0.11 + p.tileCount * 15e-4;
-      let gold = 0.35 + p.tileCount * 3e-3;
+      let grain = 2 + p.tileCount * 4e-3;
+      let timber = 0.5 + p.tileCount * 2e-3;
+      let ore = 0.3 + p.tileCount * 15e-4;
+      let gold = 0.6 + p.tileCount * 3e-3;
       for (const st of this.structs.values()) {
         if (st.owner !== p.id) continue;
         const y = YIELD[st.kind];
@@ -546,8 +556,28 @@
      * realm's host, so a front exists on both sides even in peacetime. A garrison
      * parked next to it reinforces that stretch.
      */
+    /**
+     * Men standing on one tile of front. The pool is spread along the border
+     * rather than stacked on every tile, so what holds a line is depth, and a
+     * concentrated host can break a stretch of it. This is the number a push has
+     * to beat locally, and the number the pickets on screen represent.
+     */
     lineStrength(p) {
-      return Math.max(4, p.troops * 0.28);
+      const front = Math.max(1, p.frontTiles);
+      return Math.max(3, p.troops / front * 3);
+    }
+    /** Count how much border a realm actually has to hold. */
+    refreshFront(p) {
+      let front = 0;
+      for (const t of p.tiles) {
+        for (const n of this.neighbors4(t)) {
+          if (this.owners[n] !== p.id) {
+            front++;
+            break;
+          }
+        }
+      }
+      p.frontTiles = Math.max(1, front);
     }
     /** Defence of a held tile: its share of the line, terrain, works, garrisons. */
     defenseAt(t, defender) {
@@ -604,6 +634,10 @@
           node.done = true;
           continue;
         }
+        if (node.stalled) {
+          if (!this.canAfford(p, PRICE.claimTile)) continue;
+          node.stalled = false;
+        }
         const rate = Math.min(14, 4 + Math.max(0, p.grainProd) * 0.5);
         node.acc = Math.min(node.acc + rate * dt, 24);
         while (node.acc >= 1) {
@@ -613,6 +647,13 @@
           }
           const t = node.frontier.shift();
           if (this.owners[t] === -1 && this.isLand(t)) {
+            const cost = PRICE.claimTile;
+            if (!this.canAfford(p, cost)) {
+              node.stalled = true;
+              break;
+            }
+            this.pay(p, cost);
+            node.stalled = false;
             this.capture(t, node.owner);
           }
           for (const n of this.neighbors4(t)) {
@@ -686,47 +727,179 @@
       if (this.owners[target] === -1) return this.startClaimNode(p, target);
       if (this.owners[target] === p.id) return false;
       if (!this.canAttack(p, target)) return false;
-      const share = Math.max(0.05, Math.min(1, ratio));
-      const send = Math.floor(p.troops * share);
-      if (send < 12) return false;
-      const equip = Math.ceil(send * ORE_PER_TROOP);
-      if (p.ore < equip) return false;
-      const rations = Math.ceil(send * RATIONS_PER_TROOP);
-      if (p.grain < rations) return false;
-      let launch = -1;
+      const mine = this.armies.filter((a) => a.owner === p.id);
+      if (!mine.length) return this.muster(p);
+      let best = mine[0];
       let bestD = Infinity;
-      for (const t of p.tiles) {
-        const d = this.tileDistance(t, target);
+      for (const a of mine) {
+        const d = this.tileDistance(a.tile, target);
         if (d < bestD) {
           bestD = d;
-          launch = t;
+          best = a;
         }
       }
-      if (launch < 0 || bestD > 40) return false;
-      const limit = Math.min(
-        MAX_ARMIES_PER_PLAYER,
-        MIN_ARMIES_PER_PLAYER + Math.floor(this.capacity(p) / 4e3)
-      );
-      const mine = this.armies.reduce((n, a) => n + (a.owner === p.id ? 1 : 0), 0);
-      if (mine >= limit || this.armies.length >= MAX_ARMIES) return false;
-      p.troops -= send;
-      p.ore -= equip;
-      p.grain -= rations;
-      this.armies.push({
-        id: this.nextArmyId++,
-        owner: p.id,
-        troops: send,
-        tile: launch,
-        target,
-        progress: 0,
-        taken: 0,
-        cutOff: false,
-        speed: this.armySpeed(send),
-        supplyTimer: 0,
-        holding: false,
-        holdTimer: 0
-      });
+      void ratio;
+      return this.moveArmy(p, best.home, target);
+    }
+    /**
+     * Formations group themselves. Every castle fields one host, filled to what
+     * that castle's level can carry, drawn straight out of the pool standing on
+     * the border. Bigger castles hold bigger hosts; more castles hold more of
+     * them. What the harvest feeds is still the outer limit.
+     */
+    muster(p) {
+      if (!p.alive || this.phase !== "playing") return false;
+      for (const st of this.structs.values()) {
+        if (st.owner !== p.id || st.kind !== "castle") continue;
+        if (this.armies.some((a) => a.owner === p.id && a.home === st.tile)) continue;
+        const cap = ARMY_CAP(st.level);
+        if (p.troops < cap) continue;
+        if (this.armies.length >= MAX_ARMIES) return false;
+        const kit = this.scaleCost(PRICE.perMan, cap);
+        if (!this.canAfford(p, kit)) {
+          if (!p.isBot && p.kitWarn <= 0) {
+            this.note(`${cap} men need ${Math.ceil(kit.ore)} iron and ${Math.ceil(kit.grain)} grain to take the field.`);
+            p.kitWarn = 12;
+          }
+          return false;
+        }
+        this.pay(p, kit);
+        p.troops -= cap;
+        this.armies.push({
+          id: this.nextArmyId++,
+          owner: p.id,
+          home: st.tile,
+          troops: cap,
+          tile: st.tile,
+          target: st.tile,
+          progress: 0,
+          taken: 0,
+          cutOff: false,
+          speed: 0,
+          supplyTimer: 0,
+          holding: true,
+          holdTimer: 0
+        });
+        if (!p.isBot) this.note(`${cap} men form up at your castle.`);
+        return true;
+      }
+      return false;
+    }
+    /** The formation raised by a particular castle. */
+    armyOf(p, home) {
+      return this.armies.find((a) => a.owner === p.id && a.home === home);
+    }
+    /** March a formation at a point. It stops where you clicked. */
+    moveArmy(p, home, target) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      const a = this.armyOf(p, home);
+      if (!a) return false;
+      if (target < 0 || !this.isLand(target)) return false;
+      if (target === a.tile && a.holding) return false;
+      a.target = target;
+      a.holding = false;
+      a.progress = 0;
       return true;
+    }
+    /**
+     * Pitch a war camp where a formation is standing. From there it eats the
+     * ground around it one tile at a time, which is how you take land you could
+     * never take by walking through it.
+     */
+    establishCamp(p, home) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      const a = this.armyOf(p, home);
+      if (!a || !a.holding) return false;
+      if (a.tile === a.home || this.tileDistance(a.tile, a.home) < 3) return false;
+      if (this.structs.has(a.tile)) return false;
+      const cost = BUILD.camp;
+      if (!this.canAfford(p, cost)) return false;
+      this.pay(p, cost);
+      this.structs.set(a.tile, { kind: "camp", owner: p.id, tile: a.tile, level: 1, acc: 0 });
+      this.structDirty = true;
+      this.capture(a.tile, p.id);
+      if (!p.isBot) this.note("A war camp is raised. The ground around it is yours to take.");
+      return true;
+    }
+    /** Men standing at a camp: its garrison is whatever formation guards it. */
+    campGarrison(st) {
+      let g = st.level * 120;
+      for (const a of this.armies) {
+        if (a.owner !== st.owner) continue;
+        if (this.tileDistance(a.tile, st.tile) <= 1) g += a.troops;
+      }
+      return g;
+    }
+    /** Camps creep outward, taking the weakest ground beside them first. */
+    campTick(dt) {
+      for (const st of [...this.structs.values()]) {
+        if (st.kind !== "camp") continue;
+        const p = this.players[st.owner];
+        if (!p || !p.alive) {
+          this.structs.delete(st.tile);
+          this.structDirty = true;
+          continue;
+        }
+        const g = this.campGarrison(st);
+        st.acc = (st.acc ?? 0) + dt * (1 + g / 900);
+        if (st.acc < 1) continue;
+        st.acc -= 1;
+        let bestT = -1;
+        let bestDef = Infinity;
+        for (const n of this.neighbors4(st.tile)) {
+          if (!this.isLand(n) || this.owners[n] === st.owner) continue;
+          const o = this.owners[n];
+          if (o >= 0 && this.players[o].immune > 0) continue;
+          const d = o >= 0 ? this.defenseAt(n, o) : this.neutralDefense(n);
+          if (d < bestDef) {
+            bestDef = d;
+            bestT = n;
+          }
+        }
+        if (bestT >= 0 && g * 0.5 >= bestDef * 0.2) this.capture(bestT, st.owner);
+      }
+    }
+    /** Two hosts on the same ground: the bigger one carries the field. */
+    armyBattle(a, p, foe) {
+      if (a.troops > foe.troops) {
+        a.troops -= foe.troops * 0.55;
+        const i = this.armies.indexOf(foe);
+        if (i >= 0) this.armies.splice(i, 1);
+        const st = this.structs.get(foe.tile);
+        if (st && st.kind === "camp" && st.owner === foe.owner) {
+          const garrison = this.campGarrison(st);
+          if (a.troops > garrison) {
+            a.troops -= garrison * 0.4;
+            this.structs.delete(st.tile);
+            this.structDirty = true;
+            if (!p.isBot) this.note("The camp falls with its garrison.");
+          }
+        }
+        this.capture(foe.tile, a.owner);
+        a.tile = foe.tile;
+        if (!p.isBot) this.note("Two hosts meet. Yours holds the field.");
+      } else {
+        foe.troops = Math.max(1, foe.troops - a.troops * 0.55);
+        const i = this.armies.indexOf(a);
+        if (i >= 0) this.armies.splice(i, 1);
+        if (!p.isBot) this.note("Your host is broken in the open field.");
+      }
+    }
+    /** Assaulting a war camp: beat the men holding it and the camp falls. */
+    campBattle(a, p, st) {
+      const garrison = this.campGarrison(st);
+      if (a.troops > garrison) {
+        a.troops -= garrison * 0.6;
+        this.structs.delete(st.tile);
+        this.structDirty = true;
+        this.capture(st.tile, a.owner);
+        a.tile = st.tile;
+        if (!p.isBot) this.note("The war camp is broken and your ground is yours again.");
+      } else {
+        const i = this.armies.indexOf(a);
+        if (i >= 0) this.armies.splice(i, 1);
+        if (!p.isBot) this.note("Your host breaks on the camp's palisade.");
+      }
     }
     /** The closest free tile beside a column, or -1 when it is walled in. */
     nearestOpenTile(a) {
@@ -777,15 +950,6 @@
         }
         if (a.holding) {
           a.holdTimer += dt;
-          const nextPush = this.nearestOpenTile(a);
-          if (a.troops >= 40 && nextPush >= 0) {
-            a.target = nextPush;
-            a.holding = false;
-            a.holdTimer = 0;
-          } else if (a.holdTimer >= HOLD_BEFORE_ABSORB) {
-            p.troops = Math.min(this.capacity(p), p.troops + a.troops);
-            this.armies.splice(i, 1);
-          }
           continue;
         }
         const terrain = this.world.terrain[a.tile];
@@ -799,12 +963,37 @@
       }
     }
     /** One tile of the push: survey open ground, or fight for held ground. */
+    /**
+     * Anything already standing on a tile a host walks into. Returns true when
+     * the move became a fight, so the caller does not also move the host.
+     */
+    contestTile(a, p, t) {
+      const foe = this.armies.find((x) => x !== a && x.owner !== a.owner && x.tile === t);
+      if (foe) {
+        this.armyBattle(a, p, foe);
+        return true;
+      }
+      const st = this.structs.get(t);
+      if (st && st.kind === "camp" && st.owner !== a.owner) {
+        this.campBattle(a, p, st);
+        return true;
+      }
+      return false;
+    }
     armyStep(a, p) {
       const next = this.nextTile(a);
       if (next < 0) {
+        const through = this.nextOwnTile(a);
+        if (through >= 0) {
+          if (this.contestTile(a, p, through)) return;
+          a.tile = through;
+          if (a.tile === a.target) a.holding = true;
+          return;
+        }
         a.holding = true;
         return;
       }
+      if (this.contestTile(a, p, next)) return;
       const owner = this.owners[next];
       if (owner === a.owner) {
         a.tile = next;
@@ -825,7 +1014,13 @@
         return;
       }
       const def = this.defenseAt(next, owner);
+      if (!this.canAfford(p, PRICE.pushTile)) {
+        a.holding = true;
+        if (!p.isBot) this.note("Your host is out of stores and cannot press the attack.");
+        return;
+      }
       if (a.troops > def) {
+        this.pay(p, PRICE.pushTile);
         a.troops -= def * 0.7;
         const defender = this.players[owner];
         defender.troops = Math.max(0, defender.troops - def * 0.45);
@@ -845,6 +1040,20 @@
           if (!p.isBot) this.note("A push has broken against the line.");
         }
       }
+    }
+    /** An adjacent friendly tile that is closer to the objective, if any. */
+    nextOwnTile(a) {
+      let best = -1;
+      let bestD = this.tileDistance(a.tile, a.target);
+      for (const n of this.neighbors8(a.tile)) {
+        if (!this.isLand(n) || this.owners[n] !== a.owner) continue;
+        const d = this.tileDistance(n, a.target);
+        if (d < bestD) {
+          bestD = d;
+          best = n;
+        }
+      }
+      return best;
     }
     /** Next tile for a push: toward the objective, never onto own ground. */
     nextTile(a) {
@@ -924,6 +1133,15 @@
       const m = kind === "castle" ? Math.max(1, level) : 1;
       return { grain: b.grain * m, timber: b.timber * m, ore: b.ore * m, gold: b.gold * m };
     }
+    /** Cost of n copies of a price, so per-tile and per-man prices stay one line. */
+    scaleCost(cost, n) {
+      return {
+        grain: cost.grain * n,
+        timber: cost.timber * n,
+        ore: cost.ore * n,
+        gold: cost.gold * n
+      };
+    }
     canAfford(p, cost) {
       return p.grain >= cost.grain && p.timber >= cost.timber && p.ore >= cost.ore && p.gold >= cost.gold;
     }
@@ -987,6 +1205,12 @@
       for (const p of this.players) {
         if (!p.alive) continue;
         if (p.immune > 0) p.immune = Math.max(0, p.immune - dt);
+        if (p.kitWarn > 0) p.kitWarn -= dt;
+        p.frontTimer -= dt;
+        if (p.frontTimer <= 0) {
+          p.frontTimer = 1;
+          this.refreshFront(p);
+        }
         this.refreshRates(p);
         p.grain += p.rates.grain * dt;
         p.timber += p.rates.timber * dt;
@@ -1012,8 +1236,10 @@
         } else if (p.troops > cap) {
           p.troops = cap;
         }
+        if (!starving) this.muster(p);
       }
       this.armyTick(dt);
+      this.campTick(dt);
       for (const p of this.players) {
         if (p.isBot && p.alive) this.botThink(p, dt);
       }
@@ -1063,6 +1289,11 @@
       targets.sort((a, b) => a.cost - b.cost);
       const pick = targets[Math.floor(this.rng() * Math.min(4, targets.length))];
       const ratio = 0.25 + this.rng() * 0.3;
+      for (const a of this.armies) {
+        if (a.owner !== p.id || !a.holding) continue;
+        if (this.owners[a.tile] === p.id) continue;
+        if (this.rng() < 0.5 && this.establishCamp(p, a.home)) return;
+      }
       this.orderArmy(p, pick.t, ratio);
     }
     /** Fraction of the world's land a player holds. */
@@ -1075,7 +1306,7 @@
      * for taking ground that is already claimed.
      */
     spread(p, dt) {
-      const rate = Math.min(1.2, 0.08 + Math.max(0, p.grainProd) * 0.06);
+      const rate = Math.min(8, 0.25 + Math.max(0, p.grainProd) * 0.9);
       p.spreadAcc += rate * dt;
       if (p.spreadAcc < 1) return;
       const frontier = [];
@@ -1089,6 +1320,11 @@
         p.spreadAcc = 0;
         return;
       }
+      if (!this.canAfford(p, PRICE.claimTile)) {
+        p.spreadAcc = 0;
+        return;
+      }
+      this.pay(p, PRICE.claimTile);
       p.spreadAcc -= 1;
       this.claim(frontier[this.rng() * frontier.length | 0], p.id);
     }
@@ -1141,7 +1377,9 @@
         t: a.tile,
         n: Math.round(a.troops),
         g: a.target,
-        c: a.cutOff ? 1 : 0
+        c: a.cutOff ? 1 : 0,
+        m: a.home,
+        h: a.holding ? 1 : 0
       }));
       const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
@@ -1217,6 +1455,7 @@
         this.armies.push({
           id: 0,
           owner: d.o,
+          home: d.m ?? d.t,
           troops: d.n,
           tile: d.t,
           target: d.g,
@@ -1225,7 +1464,7 @@
           cutOff: !!d.c,
           speed: 0,
           supplyTimer: 0,
-          holding: false,
+          holding: d.h === 1,
           holdTimer: 0
         });
       }
@@ -1268,6 +1507,8 @@
       /** Start-of-match highlight: a swirl over your land. */
       this.swirlTile = -1;
       this.swirlFrom = 0;
+      /** Which formation the player has picked, by its home castle tile. */
+      this.selectedHome = null;
       /** Border tiles, rebuilt a few times a second: the standing lines. */
       this.frontier = [];
       this.frontierTimer = 0;
@@ -1284,6 +1525,9 @@
       this.borderCv = mk();
       this.paintTerrain();
       this.repaintAll();
+    }
+    setSelection(home) {
+      this.selectedHome = home;
     }
     beginSwirl(tile, fromMs) {
       this.swirlTile = tile;
@@ -1533,6 +1777,29 @@
           ctx.arc(ax, ay, cam2.scale * 0.72, 0, 6.283);
           ctx.stroke();
         }
+        if (this.selectedHome !== null && a.home === this.selectedHome) {
+          ctx.strokeStyle = "rgba(255,246,214,0.95)";
+          ctx.lineWidth = Math.max(1.6, cam2.scale * 0.14);
+          ctx.beginPath();
+          ctx.arc(ax, ay, cam2.scale * 1.15, 0, 6.283);
+          ctx.stroke();
+          ctx.strokeStyle = col;
+          ctx.lineWidth = Math.max(1.2, cam2.scale * 0.09);
+          ctx.beginPath();
+          ctx.arc(ax, ay, cam2.scale * 1.45, 0, 6.283);
+          ctx.stroke();
+        }
+        if (cam2.scale > 2.4) {
+          const label = String(Math.round(a.troops));
+          ctx.font = `${Math.max(9, Math.round(cam2.scale * 0.78))}px ui-monospace, monospace`;
+          ctx.textAlign = "center";
+          ctx.lineWidth = Math.max(2, cam2.scale * 0.2);
+          ctx.strokeStyle = "rgba(12,10,6,0.85)";
+          ctx.strokeText(label, ax, ay - cam2.scale * 1.5);
+          ctx.fillStyle = "#fdf6e4";
+          ctx.fillText(label, ax, ay - cam2.scale * 1.5);
+          ctx.textAlign = "start";
+        }
       }
       for (const n of this.g.claimNodes) {
         const [nx, ny] = toScreen(n.tile);
@@ -1668,6 +1935,38 @@
             ctx.fillRect(x - 4 * k + i * 1.6 * k, y + wallH * 0.62, 1.2 * k, 1.2 * k);
           }
         }
+      } else if (s.kind === "camp") {
+        const r = 6.5 * k;
+        ctx.strokeStyle = "#2a2015";
+        ctx.lineWidth = Math.max(1, 0.9 * k);
+        ctx.fillStyle = shade(col, 0.34);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 6.283);
+        ctx.fill();
+        ctx.stroke();
+        const stakes = 9;
+        ctx.strokeStyle = shade(col, 0.86);
+        ctx.lineWidth = Math.max(1, 0.8 * k);
+        for (let i = 0; i < stakes; i++) {
+          const ang = i / stakes * 6.283;
+          ctx.beginPath();
+          ctx.moveTo(x + Math.cos(ang) * r * 0.72, y + Math.sin(ang) * r * 0.72);
+          ctx.lineTo(x + Math.cos(ang) * r * 1.22, y + Math.sin(ang) * r * 1.22);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = "#231a10";
+        ctx.lineWidth = Math.max(1, 0.85 * k);
+        ctx.beginPath();
+        ctx.moveTo(x, y + r * 0.6);
+        ctx.lineTo(x, y - r * 1.25);
+        ctx.stroke();
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(x, y - r * 1.25);
+        ctx.lineTo(x + r * 0.85, y - r * 0.95);
+        ctx.lineTo(x, y - r * 0.6);
+        ctx.closePath();
+        ctx.fill();
       } else if (s.kind === "tower") {
         ctx.fillStyle = shade(col, 0.4);
         ctx.strokeStyle = "#1c1710";
@@ -2125,6 +2424,7 @@
   var statLand = el("stat-land");
   var statCastles = el("stat-castles");
   var statLords = el("stat-lords");
+  var armyNote = el("army-note");
   var logEl = el("log");
   var spawnOverlay = el("spawn-overlay");
   var endOverlay = el("end-overlay");
@@ -2260,6 +2560,42 @@
     },
     { passive: false }
   );
+  var selectedHome = null;
+  function myArmyAt(tile) {
+    const me = game.players[game.human];
+    if (!me) return void 0;
+    return game.armies.find(
+      (a) => a.owner === me.id && (a.tile === tile || game.tileDistance(a.tile, tile) <= 1)
+    );
+  }
+  function select(home) {
+    selectedHome = home;
+    renderer.setSelection(home);
+    refreshHud();
+  }
+  function orderSelected(tile) {
+    const me = game.players[game.human];
+    if (!me || selectedHome === null) return false;
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "armyMove", home: selectedHome, tile });
+      return true;
+    }
+    return game.moveArmy(me, selectedHome, tile);
+  }
+  function raiseCamp() {
+    const me = game.players[game.human];
+    if (!me || selectedHome === null) {
+      log("Pick one of your hosts first, then raise the camp.");
+      return;
+    }
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "camp", home: selectedHome });
+      return;
+    }
+    if (!game.establishCamp(me, selectedHome)) {
+      log("A camp needs a host holding ground at least three tiles from its castle.");
+    }
+  }
   function click(tile) {
     if (tile < 0) return;
     const me = game.players[game.human];
@@ -2288,6 +2624,14 @@
       }
       return;
     }
+    const mine = myArmyAt(tile);
+    if (mine) {
+      select(mine.home);
+      return;
+    }
+    if (selectedHome !== null) {
+      if (!orderSelected(tile)) log("That host cannot march there.");
+    }
   }
   function attack(tile) {
     const me = game.players[game.human];
@@ -2296,6 +2640,9 @@
     if (isGuest) {
       void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
       return;
+    }
+    if (selectedHome !== null) {
+      if (orderSelected(tile)) return;
     }
     const ok = game.orderArmy(me, tile, ratio);
     if (!ok && game.ownerAt(tile) === me.id) log("That is already your ground.");
@@ -2306,7 +2653,7 @@
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
   });
-  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "siege"];
+  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "camp"];
   var BUILD_HINT = {
     farm: "plains",
     lumber: "forest",
@@ -2338,6 +2685,10 @@
   for (const b of buildButtons) {
     b.addEventListener("click", () => {
       const kind = b.dataset.kind;
+      if (kind === "camp") {
+        raiseCamp();
+        return;
+      }
       buildKind = buildKind === kind ? null : kind;
       syncBuildButtons();
     });
@@ -2363,6 +2714,14 @@
     logEl.prepend(line);
     while (logEl.children.length > 6) logEl.lastElementChild.remove();
   }
+  function costText(b) {
+    const bits = [];
+    if (b.grain) bits.push(`${Math.ceil(b.grain)} grain`);
+    if (b.timber) bits.push(`${Math.ceil(b.timber)} timber`);
+    if (b.ore) bits.push(`${Math.ceil(b.ore)} iron`);
+    if (b.gold) bits.push(`${Math.ceil(b.gold)} gold`);
+    return bits.join(" + ");
+  }
   function refreshHud() {
     const me = game.players[game.human];
     if (!me) return;
@@ -2376,6 +2735,18 @@
     statTroops.classList.toggle("starving", me.starving);
     const alive = game.players.filter((p) => p.alive).length - 1;
     statLords.textContent = `${alive}`;
+    if (armyNote) {
+      const castle = [...game.structs.values()].find((s) => s.owner === me.id && s.kind === "castle");
+      if (castle) {
+        const cap = ARMY_CAP(castle.level);
+        const kit = game.scaleCost(PRICE.perMan, cap);
+        const short = !game.canAfford(me, kit);
+        armyNote.textContent = `Next host: ${cap} men for ${costText(kit)}${short ? " (short)" : ""}`;
+        armyNote.classList.toggle("short", short);
+      } else {
+        armyNote.textContent = "No castle: raise one to field a host.";
+      }
+    }
     for (const b of buildButtons) {
       const kind = b.dataset.kind;
       const cost = game.buildCost(kind, 1);
@@ -2397,6 +2768,8 @@
   var lastHud = 0;
   var last = performance.now();
   var STEP = 0.1;
+  var SPEED_PARAM = Number(new URLSearchParams(location.search).get("speed"));
+  var GAME_SPEED = Number.isFinite(SPEED_PARAM) && SPEED_PARAM > 0 ? SPEED_PARAM : 0.5;
   var simAcc = 0;
   var lastWall = performance.now();
   var lastPostAt = 0;
@@ -2408,7 +2781,7 @@
     lastWall = now;
     if (dt < 0) dt = 0;
     if (dt > 2) dt = 2;
-    simAcc += dt;
+    simAcc += dt * GAME_SPEED;
     const started = Date.now() >= playFrom;
     let steps = 0;
     while (simAcc >= STEP && steps < 24) {
@@ -2581,6 +2954,8 @@
           continue;
         }
         if (it.data.kind === "order") game.orderArmy(p, it.data.tile, it.data.ratio ?? 0.3);
+        else if (it.data.kind === "armyMove") game.moveArmy(p, it.data.home, it.data.tile);
+        else if (it.data.kind === "camp") game.establishCamp(p, it.data.home);
         else if (it.data.kind === "build") game.build(p, it.data.k, it.data.tile);
       }
     }).catch(() => {
@@ -2595,7 +2970,7 @@
   var joinedAt = Date.now();
   var myName = "";
   var playFrom = 0;
-  var MATCH_DELAY_MS = 4500;
+  var MATCH_DELAY_MS = 3e4;
   var countdownEl = null;
   var myFaction = null;
   function guestTick() {

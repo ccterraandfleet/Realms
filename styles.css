@@ -433,3 +433,8 @@ button.primary:hover {
   color: #efe6cf; text-shadow: 0 6px 30px rgba(0,0,0,0.75), 0 0 40px rgba(233,221,184,0.35);
   pointer-events: none; font-variant-numeric: tabular-nums;
 }
+
+/* Muster cost readout: the price of the next host, on the HUD. */
+.stat.wide { grid-column: span 2; }
+.stat .v.small { font-size: 11px; letter-spacing: 0.02em; }
+.stat .v.short { color: #d2664f; }
