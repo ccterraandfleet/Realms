@@ -114,6 +114,15 @@
   }
 
   // src/sim/game.ts
+  var STRUCT_ORDER = [
+    "castle",
+    "farm",
+    "lumber",
+    "mine",
+    "market",
+    "tower",
+    "siege"
+  ];
   var BUILD = {
     castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
     farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
@@ -212,6 +221,8 @@
       this.structDirty = true;
       this.messages = [];
       this.human = 0;
+      /** Every seat taken so far, so spawns stay apart. */
+      this.seats = [];
       this.nextArmyId = 1;
       this.world = generateWorld(seed2, w, h);
       this.owners = new Int16Array(w * h).fill(-1);
@@ -242,7 +253,8 @@
         immune: 0,
         aiTimer: 0,
         density: 0,
-        tiles: /* @__PURE__ */ new Set()
+        tiles: /* @__PURE__ */ new Set(),
+        spreadAcc: 0
       };
       this.players.push(p);
       return p;
@@ -411,10 +423,48 @@
       this.spawnLords();
       return true;
     }
+    /** Pick a seat with good ground, far from everyone already placed. */
+    pickSeat(minSpacing) {
+      const { w, h } = this.world;
+      let best = -1;
+      let bestScore = -Infinity;
+      for (let tries = 0; tries < 1200; tries++) {
+        const t = this.rng() * (w * h) | 0;
+        if (!this.isLand(t) || this.owners[t] >= 0) continue;
+        let nearest = Infinity;
+        for (const seat of this.seats) nearest = Math.min(nearest, this.tileDistance(t, seat));
+        if (nearest < minSpacing) continue;
+        const score = this.siteQuality(t, SPAWN_RADIUS) + nearest * 2;
+        if (score > bestScore) {
+          bestScore = score;
+          best = t;
+        }
+      }
+      return best;
+    }
+    /**
+     * Multiplayer start: everyone drops onto the map at once (no click-to-spawn
+     * to keep in sync), then the lords fill in around them.
+     */
+    startMultiplayer(humans) {
+      if (this.phase !== "spawn") return false;
+      for (let i = 0; i < humans; i++) {
+        const seat = this.pickSeat(42);
+        if (seat < 0) return false;
+        const p = this.addPlayer(i === 0 ? "You" : `Player ${i + 1}`, PALETTE[i % PALETTE.length], false);
+        this.settle(p, seat, SPAWN_RADIUS, IMMUNITY);
+      }
+      this.human = 0;
+      this.phase = "playing";
+      this.spawnLords();
+      this.note("You have landed. Raise your city and take the ground.");
+      return true;
+    }
     settle(p, tile, radius, immunity) {
       for (const t of this.blob(tile, radius)) this.claim(t, p.id);
       this.claim(tile, p.id);
       this.structs.set(tile, { kind: "castle", owner: p.id, tile, level: 1 });
+      this.seats.push(tile);
       p.castles += 1;
       p.immune = immunity;
       this.refreshRates(p);
@@ -424,7 +474,7 @@
     spawnLords() {
       const { w, h } = this.world;
       const count = 11;
-      const taken = [];
+      const taken = [...this.seats];
       for (let i = 0; i < count; i++) {
         let best = -1;
         let bestScore = -1;
@@ -828,6 +878,7 @@
         p.timber += p.rates.timber * dt;
         p.ore += p.rates.ore * dt;
         p.gold += p.rates.gold * dt;
+        this.spread(p, dt);
         let starving = false;
         if (p.grain <= 0) {
           p.grain = 0;
@@ -903,6 +954,166 @@
     /** Fraction of the world's land a player holds. */
     landShare(p) {
       return p.tileCount / Math.max(1, this.world.landTiles);
+    }
+    /**
+     * Production fuels a slow automatic land grab: a realm's border creeps
+     * outward on its own until it runs into someone else's ground. Attacking is
+     * for taking ground that is already claimed.
+     */
+    spread(p, dt) {
+      const rate = Math.min(1.2, 0.08 + Math.max(0, p.grainProd) * 0.06);
+      p.spreadAcc += rate * dt;
+      if (p.spreadAcc < 1) return;
+      const frontier = [];
+      for (const t of p.tiles) {
+        for (const n of this.neighbors4(t)) {
+          if (this.owners[n] < 0 && this.isLand(n)) frontier.push(n);
+        }
+        if (frontier.length > 24) break;
+      }
+      if (!frontier.length) {
+        p.spreadAcc = 0;
+        return;
+      }
+      p.spreadAcc -= 1;
+      this.claim(frontier[this.rng() * frontier.length | 0], p.id);
+    }
+    /* ------------------------------------------------------------------ */
+    /* Netcode                                                             */
+    /* ------------------------------------------------------------------ */
+    /**
+     * Compact snapshot for a guest. Territory is run-length encoded, so a whole
+     * realm costs a few hundred numbers instead of one per tile.
+     */
+    snapshot() {
+      const runs = (tiles) => {
+        const sorted = tiles.slice().sort((a, b) => a - b);
+        const out = [];
+        let i = 0;
+        while (i < sorted.length) {
+          const start = sorted[i];
+          let len = 1;
+          while (i + len < sorted.length && sorted[i + len] === start + len) len++;
+          out.push(start, len);
+          i += len;
+        }
+        return out;
+      };
+      const players = this.players.map((p) => ({
+        i: p.id,
+        n: p.name,
+        c: p.color,
+        a: p.alive ? 1 : 0,
+        b: p.isBot ? 1 : 0,
+        g: Math.round(p.gold),
+        gr: Math.round(p.grain),
+        tb: Math.round(p.timber),
+        or: Math.round(p.ore),
+        t: Math.round(p.troops),
+        s: Math.round(p.soldiers),
+        gp: +p.grainProd.toFixed(3),
+        ca: Math.round(this.capacity(p)),
+        st: p.starving ? 1 : 0,
+        r: [
+          +p.rates.grain.toFixed(3),
+          +p.rates.timber.toFixed(3),
+          +p.rates.ore.toFixed(3),
+          +p.rates.gold.toFixed(3)
+        ],
+        k: runs([...p.tiles])
+      }));
+      const armies = this.armies.map((a) => ({
+        o: a.owner,
+        t: a.tile,
+        n: Math.round(a.troops),
+        g: a.target,
+        c: a.cutOff ? 1 : 0
+      }));
+      const structs = [...this.structs.values()].map((st) => [
+        st.tile,
+        STRUCT_ORDER.indexOf(st.kind),
+        st.owner,
+        st.level
+      ]);
+      return JSON.stringify({
+        v: 1,
+        tm: +this.time.toFixed(1),
+        ph: this.phase,
+        hm: this.human,
+        ms: this.messages.slice(-10),
+        p: players,
+        a: armies,
+        s: structs
+      });
+    }
+    /** Guest side: become a display of the host's world. */
+    applySnapshot(text) {
+      const snap = JSON.parse(text);
+      this.time = snap.tm;
+      this.phase = snap.ph;
+      this.human = snap.hm ?? 0;
+      this.messages = snap.ms ?? [];
+      this.owners.fill(-1);
+      this.armies = [];
+      this.structs.clear();
+      for (const d of snap.p) {
+        const p = this.players[d.i] ?? this.addPlayer(d.n, d.c, !!d.b);
+        p.name = d.n;
+        p.color = d.c;
+        p.alive = !!d.a;
+        p.isBot = !!d.b;
+        p.gold = d.g;
+        p.grain = d.gr;
+        p.timber = d.tb;
+        p.ore = d.or;
+        p.troops = d.t;
+        p.soldiers = d.s;
+        p.grainProd = d.gp;
+        p.starving = !!d.st;
+        p.rates = { grain: d.r[0], timber: d.r[1], ore: d.r[2], gold: d.r[3] };
+        p.tiles = /* @__PURE__ */ new Set();
+        p.tileCount = 0;
+        p.castles = 0;
+        p.density = 0;
+        for (let i = 0; i < d.k.length; i += 2) {
+          const start = d.k[i];
+          const len = d.k[i + 1];
+          for (let t = start; t < start + len; t++) {
+            this.owners[t] = p.id;
+            p.tiles.add(t);
+            p.tileCount++;
+            p.density += DENSITY[this.world.terrain[t]];
+          }
+        }
+        for (let i = this.players.length; i <= d.i; i++) {
+          if (!this.players[i]) this.addPlayer("?", PALETTE[i % PALETTE.length], true);
+        }
+      }
+      for (const d of snap.a) {
+        this.armies.push({
+          id: 0,
+          owner: d.o,
+          troops: d.n,
+          tile: d.t,
+          target: d.g,
+          progress: 0,
+          taken: 0,
+          cutOff: !!d.c,
+          speed: 0,
+          supplyTimer: 0,
+          holding: false,
+          holdTimer: 0
+        });
+      }
+      for (const d of snap.s) {
+        const kind = STRUCT_ORDER[d[1]];
+        this.structs.set(d[0], { kind, owner: d[2], tile: d[0], level: d[3] });
+        if (kind === "castle") {
+          const owner = this.players[d[2]];
+          if (owner) owner.castles += d[3];
+        }
+      }
+      this.structDirty = true;
     }
   };
 
@@ -1374,9 +1585,34 @@
     }
   };
 
+  // src/net.ts
+  var ENDPOINT = "https://lyra-01a6009e.base44.app/functions/realmsRelay";
+  async function call(payload) {
+    const res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`relay ${res.status}`);
+    return await res.json();
+  }
+  var createRoom = (seed2) => call({ action: "create", seed: seed2 });
+  var getRoom = (code) => call({ action: "room", code });
+  var postIntent = (code, player, tick, data) => call({ action: "post", code, player, tick, data });
+  var pollIntents = (code, since) => call({ action: "poll", code, since });
+  var postSnapshot = (code, tick, state) => call({ action: "snap", code, tick, state });
+  var getSnapshot = (code) => call({ action: "view", code });
+
   // src/main.ts
   var params = new URLSearchParams(location.search);
   var seed = Number(params.get("seed") ?? 7) || 7;
+  var roomParam = (params.get("room") ?? "").toUpperCase();
+  var wantsHost = params.get("host") === "1";
+  var isHost = wantsHost;
+  var isGuest = Boolean(roomParam) && !wantsHost;
+  var multiplayer = isHost || isGuest;
+  var roomCode = "";
+  var localPlayer = isHost ? 0 : 1;
   var canvas = document.getElementById("map");
   var game = new Game(seed);
   var renderer = new Renderer(canvas, game);
@@ -1541,6 +1777,10 @@
     }
     if (!me) return;
     if (buildKind) {
+      if (isGuest) {
+        void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "build", k: buildKind, tile });
+        return;
+      }
       if (!game.build(me, buildKind, tile)) {
         const why = game.blockReason(me, buildKind, tile);
         if (why) log(`Cannot build there: ${why}.`);
@@ -1552,7 +1792,12 @@
   function attack(tile) {
     const me = game.players[game.human];
     if (!me || game.phase !== "playing") return;
-    game.orderArmy(me, tile, Number(ratioInput.value) / 100);
+    const ratio = Number(ratioInput.value) / 100;
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
+      return;
+    }
+    game.orderArmy(me, tile, ratio);
   }
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
@@ -1650,7 +1895,7 @@
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1e3);
     last = now;
-    game.tick(dt);
+    if (!isGuest) game.tick(dt);
     renderer.draw(cam, hover, buildKind, dpr);
     if (now - lastHud > 120) {
       lastHud = now;
@@ -1659,6 +1904,75 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  function showNetbar(html) {
+    let bar = document.getElementById("netbar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "netbar";
+      document.body.appendChild(bar);
+    }
+    bar.innerHTML = html;
+  }
+  var lastIntentAt = 0;
+  async function boot() {
+    if (!multiplayer) return;
+    try {
+      if (isHost) {
+        const room = await createRoom(seed);
+        roomCode = room.code;
+      } else {
+        roomCode = roomParam;
+        const room = await getRoom(roomCode);
+        if (!room) throw new Error("no such room");
+      }
+    } catch (err) {
+      showNetbar(`Shared world unreachable (${String(err)}). Reload to retry.`);
+      return;
+    }
+    game.startMultiplayer(2);
+    game.human = localPlayer;
+    spawnOverlay.classList.add("hidden");
+    for (const st of game.structs.values()) {
+      if (st.owner !== localPlayer || st.kind !== "castle") continue;
+      cam.scale = 7;
+      cam.x = window.innerWidth / 2 - st.tile % game.world.w * cam.scale;
+      cam.y = window.innerHeight / 2 - (st.tile / game.world.w | 0) * cam.scale;
+      clampCamera();
+      break;
+    }
+    const link = `${location.origin}${location.pathname}?seed=${seed}&room=${roomCode}`;
+    showNetbar(
+      isHost ? `Room <b>${roomCode}</b> \u2014 send your friend this link: <code>${link}</code>` : `Room <b>${roomCode}</b> \u2014 joined as player 2`
+    );
+    window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
+    log(isHost ? "Shared world open. Rivals are loose." : "Joined the shared world.");
+  }
+  function hostTick() {
+    void pollIntents(roomCode, lastIntentAt).then((res) => {
+      for (const it of res.intents ?? []) {
+        if (it.at > lastIntentAt) lastIntentAt = it.at;
+        const p = game.players[it.player];
+        if (!p || !p.alive) continue;
+        if (it.data.kind === "order") {
+          game.orderArmy(p, it.data.tile, it.data.ratio ?? 0.3);
+        } else if (it.data.kind === "build") {
+          game.build(p, it.data.k, it.data.tile);
+        }
+      }
+    }).catch(() => {
+    });
+    void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot()).catch(() => {
+    });
+  }
+  function guestTick() {
+    void getSnapshot(roomCode).then((res) => {
+      if (!res.state) return;
+      game.applySnapshot(res.state);
+      game.human = localPlayer;
+    }).catch(() => {
+    });
+  }
+  void boot();
   window.__realms = {
     game,
     cam,
