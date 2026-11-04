@@ -310,7 +310,7 @@ ratioInput.addEventListener("input", () => {
 /* Build bar                                                           */
 /* ------------------------------------------------------------------ */
 
-const BUILD_ORDER: StructureKind[] = ["castle", "farm", "lumber", "mine", "market", "tower", "camp"];
+const BUILD_ORDER: StructureKind[] = ["castle", "farm", "lumber", "mine", "market", "tower", "camp", "bridge"];
 const BUILD_HINT: Partial<Record<StructureKind, string>> = {
   farm: "plains",
   lumber: "forest",

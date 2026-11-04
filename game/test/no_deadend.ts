@@ -10,11 +10,12 @@ const inc = (p: typeof me) => g.refreshRates(p) ?? { ...p.rates };
 g.refreshRates(me);
 const small = { ...me.rates };
 const held = me.tileCount;
-// pretend the realm is ten times bigger: tileCount is what the yield reads
-me.tileCount = held * 10;
+// pretend the realm is ten times bigger: yieldSum is what income reads now
+const realYield = me.yieldSum;
+me.yieldSum = realYield * 10;
 g.refreshRates(me);
 const big = { ...me.rates };
-me.tileCount = held;
+me.yieldSum = realYield;
 say(
   "more ground yields more of every resource",
   big.grain > small.grain && big.timber > small.timber && big.ore > small.ore && big.gold > small.gold,

@@ -24,7 +24,18 @@ export interface World {
   terrain: Uint8Array;
   landTiles: number;
   seed: number;
+  /** Per-tile yield multiplier: the middle ground is worth far more than a pocket. */
+  richness: Float32Array;
+  /** Tile at the heart of each starting pocket, one pocket per lord. */
+  pockets: number[];
+  /** Tiles inside the middle ground. */
+  middleTiles: number;
 }
+
+/** The middle ground pays this many times what a starting pocket pays. */
+export const MIDDLE_RICHNESS = 3;
+export const POCKET_RICHNESS = 1;
+export const POCKET_COUNT = 12;
 
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -67,76 +78,113 @@ export function generateWorld(seed: number, w = 400, h = 260): World {
   const rand = mulberry32(seed);
   const e1 = makeNoise(rand, 6);
   const e2 = makeNoise(rand, 13);
-  const e3 = makeNoise(rand, 29);
   const ridge = makeNoise(rand, 9);
   const moist = makeNoise(rand, 11);
   const grain = makeNoise(rand, 61);
 
-  // Raw elevation per tile, then an island mask so the realm has coastlines
-  // instead of running to the map edge.
-  const raw = new Float32Array(w * h);
+  // Where things are: one rich continent in the middle, and a ring of separate
+  // starting pockets around it with water in between.
+  const cx = w / 2;
+  const cy = h / 2;
+  const midRx = w * 0.235;
+  const midRy = h * 0.235;
+
+  const pockets: number[] = [];
+  const pocketCentre: Array<{ x: number; y: number; r: number }> = [];
+  for (let i = 0; i < POCKET_COUNT; i++) {
+    const ang = (i / POCKET_COUNT) * Math.PI * 2 + 0.16;
+    const px = cx + Math.cos(ang) * midRx * 1.34;
+    const py = cy + Math.sin(ang) * midRy * 1.34;
+    if (px < 8 || py < 8 || px > w - 9 || py > h - 9) continue;
+    pocketCentre.push({ x: px, y: py, r: 15 + rand() * 5 });
+    pockets.push(idx(w, Math.round(px), Math.round(py)));
+  }
+
+  const forced = new Uint8Array(w * h);   // 1 = middle, 2 = pocket
+  const richness = new Float32Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y);
+      const dx = (x - cx) / midRx;
+      const dy = (y - cy) / midRy;
+      if (dx * dx + dy * dy <= 1) {
+        forced[i] = 1;
+        // Richer toward the heart of the middle ground, but always worth far
+        // more than any pocket.
+        const core = 1 - Math.min(1, Math.sqrt(dx * dx + dy * dy));
+        richness[i] = POCKET_RICHNESS + (MIDDLE_RICHNESS - POCKET_RICHNESS) * (0.8 + 0.2 * core);
+        continue;
+      }
+      for (const c of pocketCentre) {
+        const px = (x - c.x) / c.r;
+        const py = (y - c.y) / c.r;
+        if (px * px + py * py <= 1) {
+          forced[i] = 2;
+          richness[i] = POCKET_RICHNESS;
+          break;
+        }
+      }
+    }
+  }
+
+  // Terrain within the ground we forced: noise decides plains, forest, sand,
+  // mountains; the mask decides where land exists at all.
+  const landElev: number[] = [];
+  const wetLand: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = idx(w, x, y);
+      if (!forced[i]) continue;
       const nx = x / w;
       const ny = y / h;
       let e =
         0.55 * e1(nx * 1.7, ny * 1.7) +
-        0.3 * e2(nx * 3.3, ny * 3.3) +
-        0.15 * e3(nx * 6.1, ny * 6.1);
-      // Ridged noise lifts mountain belts out of the plains.
-      e += Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1)) * 0.22;
-      const dx = (nx - 0.5) * 2;
-      const dy = (ny - 0.5) * 2;
-      const d = Math.sqrt(dx * dx * 0.92 + dy * dy * 1.05);
-      e -= smooth(Math.min(1, Math.max(0, (d - 0.52) / 0.62))) * 0.72;
-      raw[idx(w, x, y)] = e;
+        0.4 * e2(nx * 3.3, ny * 3.3) +
+        0.3 * Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1));
+      landElev.push(e);
+      wetLand.push(moist((x / w) * 2.4, (y / h) * 2.4));
     }
   }
-
-  // Thresholds come from percentiles of the map's own elevation and moisture
-  // distribution. Fixed offsets gave a quarter of the world as bare mountain;
-  // ranked cuts keep the mix sane on every seed.
-  const all: number[] = Array.from(raw);
-  const sorted = all.slice().sort((a, b) => a - b);
+  const sorted = landElev.slice().sort((a, b) => a - b);
   const q = (arr: number[], f: number) => arr[Math.min(arr.length - 1, Math.floor(arr.length * f))];
-  const oceanLevel = q(sorted, 0.42);
-  const landElev = sorted.filter((e) => e >= oceanLevel);
-  const sandCut = q(landElev, 0.055);
-  const mountainCut = q(landElev, 0.84);
-
-  const moisture = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      moisture[idx(w, x, y)] = moist((x / w) * 2.4, (y / h) * 2.4);
-    }
-  }
-  const wetLand: number[] = [];
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] >= oceanLevel && raw[i] <= mountainCut) wetLand.push(moisture[i]);
-  }
-  wetLand.sort((a, b) => a - b);
-  const forestCut = q(wetLand, 0.66);
+  const sandCut = q(sorted, 0.07);
+  const mountainCut = q(sorted, 0.86);
+  const wetSorted = wetLand.slice().sort((a, b) => a - b);
+  const forestCut = q(wetSorted, 0.62);
 
   const terrain = new Uint8Array(w * h);
   let landTiles = 0;
+  let middleTiles = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = idx(w, x, y);
-      const e = raw[i];
+      if (!forced[i]) {
+        terrain[i] = OCEAN;
+        continue;
+      }
+      const nx = x / w;
+      const ny = y / h;
+      const e =
+        0.55 * e1(nx * 1.7, ny * 1.7) +
+        0.4 * e2(nx * 3.3, ny * 3.3) +
+        0.3 * Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1));
+      const m = moist((x / w) * 2.4, (y / h) * 2.4);
       let t: number;
-      if (e < oceanLevel) t = OCEAN;
-      else if (e <= sandCut) t = SAND;
+      if (e <= sandCut) t = SAND;
       else if (e > mountainCut) t = MOUNTAIN;
-      else t = moisture[i] > forestCut ? FOREST : PLAINS;
+      else t = m > forestCut ? FOREST : PLAINS;
       terrain[i] = t;
-      if (t !== OCEAN) landTiles++;
+      landTiles++;
+      if (forced[i] === 1) middleTiles++;
     }
   }
 
-  // Speckle: single-tile lakes and lone rocks read as noise, not geography.
+  // Fine grain on plains, but never punch a hole in a starting pocket or the
+  // middle: those shapes are the map.
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const i = idx(w, x, y);
+      if (forced[i]) continue;
       if (terrain[i] === OCEAN) continue;
       let water = 0;
       for (let dy = -1; dy <= 1; dy++)
@@ -146,10 +194,14 @@ export function generateWorld(seed: number, w = 400, h = 260): World {
         terrain[i] = OCEAN;
         landTiles--;
       }
-      // Fine grain keeps large plains from looking like flat paint.
-      if (terrain[i] === PLAINS && grain(x / w * 3, y / h * 3) > 0.72) terrain[i] = FOREST;
+    }
+  }
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = idx(w, x, y);
+      if (terrain[i] === PLAINS && grain((x / w) * 3, (y / h) * 3) > 0.74) terrain[i] = FOREST;
     }
   }
 
-  return { w, h, terrain, landTiles, seed };
+  return { w, h, terrain, landTiles, seed, richness, pockets, middleTiles };
 }

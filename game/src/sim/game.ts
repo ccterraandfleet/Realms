@@ -19,7 +19,8 @@ export type StructureKind =
   | "market"
   | "tower"
   | "siege"
-  | "camp";
+  | "camp"
+  | "bridge";
 
 /** Index order used by compact netcode snapshots. */
 export const STRUCT_ORDER: StructureKind[] = [
@@ -90,6 +91,8 @@ export interface Player {
   /** Tiles of this realm's border, refreshed about once a second. */
   frontTiles: number;
   frontTimer: number;
+  /** Sum of the richness of every held tile: what the land actually pays. */
+  yieldSum: number;
   /** Seconds until the "not enough kit" note may fire again. */
   kitWarn: number;
 }
@@ -136,6 +139,9 @@ export interface Bundle {
 
 export const BUILD: Record<StructureKind, Bundle> = {
   castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
+  // Each tile of a crossing is priced on its own, so reaching the middle is a
+  // real project: a four-wide channel is four bridges.
+  bridge: { grain: 0, timber: 45, ore: 15, gold: 30 },
   farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
   lumber: { grain: 35, timber: 0, ore: 0, gold: 10 },
   mine: { grain: 45, timber: 70, ore: 0, gold: 15 },
@@ -154,6 +160,7 @@ export const STRUCTURE_LABEL: Record<StructureKind, string> = {
   tower: "Watchtower",
   siege: "Siege Camp",
   camp: "War Camp",
+  bridge: "Bridge",
 };
 
 /**
@@ -294,6 +301,7 @@ export class Game {
       immune: 0,
       frontTiles: 1,
       frontTimer: 0,
+      yieldSum: 0,
       kitWarn: 0,
       aiTimer: 0,
       density: 0,
@@ -318,6 +326,13 @@ export class Game {
 
   isLand(t: number): boolean {
     return this.world.terrain[t] !== OCEAN;
+  }
+
+  /** True where a host can cross: dry land, or a bridge laid over the water. */
+  passable(t: number): boolean {
+    if (this.isLand(t)) return true;
+    const s = this.structs.get(t);
+    return !!s && s.kind === "bridge";
   }
 
   /** Tile index from world coordinates, or -1 when outside the map. */
@@ -383,7 +398,9 @@ export class Game {
     // back instead of dead-ending: the ground you are standing on is the one
     // thing you cannot lose to a bad purchase. Buildings are what make it
     // compound past the tile rate.
-    const held = Math.max(0, p.tileCount);
+    // Wealth is measured per tile of GROUND, and a middle-ground tile is worth
+    // several pocket tiles, so taking the middle is what grows a realm.
+    const held = Math.max(0, p.yieldSum);
     let grain = TILE_YIELD.grain * held;
     let timber = TILE_YIELD.timber * held;
     let ore = TILE_YIELD.ore * held;
@@ -417,16 +434,19 @@ export class Game {
     const prev = this.owners[t];
     if (prev === playerId) return;
     const dens = DENSITY[this.world.terrain[t]];
+    const rich = this.world.richness[t] || 1;
     if (prev >= 0) {
       const old = this.players[prev];
       old.tileCount--;
       old.density -= dens;
+      old.yieldSum -= rich;
       old.tiles.delete(t);
     }
     const p = this.players[playerId];
     this.owners[t] = playerId;
     p.tileCount++;
     p.density += dens;
+    p.yieldSum += rich;
     p.tiles.add(t);
     this.dirty.add(t);
     // Borders are drawn from neighbouring differences, so repaint those too.
@@ -523,7 +543,9 @@ export class Game {
   startMultiplayer(humans: number): boolean {
     if (this.phase !== "spawn") return false;
     for (let i = 0; i < humans; i++) {
-      const seat = this.pickSeat(42);
+      // Pocket start: every lord begins on their own island, with water between
+      // them and the rich middle ground.
+      const seat = this.world.pockets[i] >= 0 ? this.world.pockets[i] : this.pickSeat(42);
       if (seat < 0) return false;
       const p = this.addPlayer(i === 0 ? "You" : `Player ${i + 1}`, PALETTE[i % PALETTE.length], false);
       this.settle(p, seat, SPAWN_RADIUS, IMMUNITY);
@@ -549,9 +571,21 @@ export class Game {
 
   private spawnLords() {
     const { w, h } = this.world;
-    const count = 11;
+    // Exactly one lord per pocket: no fallback seat, no player left adrift.
+    const count = Math.max(0, Math.min(11, this.world.pockets.length - this.players.length));
     const taken: number[] = [...this.seats];
+    // Bots take the pockets the humans did not start in.
     for (let i = 0; i < count; i++) {
+      const free = this.world.pockets.filter(
+        (pk) => pk >= 0 && this.owners[pk] < 0 && !taken.some((t) => this.tileDistance(t, pk) < 30),
+      );
+      if (free.length) {
+        const seat = free[i % free.length];
+        const p = this.addPlayer(LORD_NAMES[i % LORD_NAMES.length], PALETTE[(i + 1) % PALETTE.length], true);
+        this.settle(p, seat, SPAWN_RADIUS, 0);
+        taken.push(seat);
+        continue;
+      }
       let best = -1;
       let bestScore = -1;
       for (let tries = 0; tries < 400; tries++) {
@@ -1199,7 +1233,7 @@ export class Game {
     let bestScore = Infinity;
     const curDist = this.tileDistance(a.tile, a.target);
     for (const n of this.neighbors8(a.tile)) {
-      if (!this.isLand(n)) continue;
+      if (!this.passable(n)) continue;
       if (this.owners[n] === a.owner) continue;
       const d = this.tileDistance(n, a.target);
       // Slight preference for continuing to advance over stalling in place.
@@ -1237,7 +1271,7 @@ export class Game {
       // cut itself off from home.
       for (const n of this.neighbors8(t)) {
         if (seen.has(n)) continue;
-        if (!this.isLand(n)) continue;
+        if (!this.passable(n)) continue;
         if (this.owners[n] !== owner) continue;
         seen.add(n);
         queue.push(n);
@@ -1307,6 +1341,14 @@ export class Game {
   /** Why this building cannot go here, or null when it can. */
   blockReason(p: Player, kind: StructureKind, t: number): string | null {
     if (this.phase !== "playing" || !p.alive) return "not now";
+    if (kind === "bridge") {
+      if (t < 0) return "off the map";
+      if (this.isLand(t)) return "water only";
+      if (this.structs.has(t)) return "occupied";
+      // A bridge has to start from a shore you hold, or from your own last span.
+      const mine = this.neighbors4(t).some((n) => this.owners[n] === p.id && this.passable(n));
+      return mine ? null : "from your shore";
+    }
     if (t < 0 || this.owners[t] !== p.id) return "own ground";
     const existing = this.structs.get(t);
     if (kind === "castle") {
@@ -1339,6 +1381,8 @@ export class Game {
     } else {
       this.structs.set(t, { kind, owner: p.id, tile: t, level: 1 });
       if (kind === "castle") p.castles += 1;
+      // A span is your ground once it is laid, so the next span can extend it.
+      if (kind === "bridge") this.claim(t, p.id);
     }
     this.structDirty = true;
     this.refreshRates(p);

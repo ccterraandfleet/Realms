@@ -102,9 +102,12 @@ export class Renderer {
           const up = terrain[(y - 1) * w + x];
           slope = t === OCEAN ? 1 : 1 + (t - up) * 0.06;
         }
-        const r = Math.min(255, base[0] * lift * slope);
-        const gch = Math.min(255, base[1] * lift * slope);
-        const b = Math.min(255, base[2] * lift * slope);
+        // The middle ground is worth more, so it reads richer underfoot.
+        const rich = this.g.world.richness[y * w + x] || 1;
+        const wealth = t === OCEAN ? 1 : 1 + (rich - 1) * 0.16;
+        const r = Math.min(255, base[0] * lift * slope * wealth);
+        const gch = Math.min(255, base[1] * lift * slope * (1 + (rich - 1) * 0.1));
+        const b = Math.min(255, base[2] * lift * slope * (1 - (rich - 1) * 0.05));
         for (let py = 0; py < P; py++) {
           for (let px = 0; px < P; px++) {
             const i = (((y * P + py) * w * P) + (x * P + px)) * 4;
@@ -584,6 +587,32 @@ export class Renderer {
       ctx.lineTo(x, y - r * 0.6);
       ctx.closePath();
       ctx.fill();
+    } else if (s.kind === "bridge") {
+      // A plank span across the water, with its trestles in the gaps.
+      const half = 6.2 * k;
+      ctx.strokeStyle = "#2a2015";
+      ctx.lineWidth = Math.max(2.2, 1.5 * k);
+      ctx.beginPath();
+      ctx.moveTo(x - half, y);
+      ctx.lineTo(x + half, y);
+      ctx.stroke();
+      ctx.strokeStyle = shade("#9a7648", 1.15);
+      ctx.lineWidth = Math.max(1.4, 0.95 * k);
+      for (let i = -3; i <= 3; i++) {
+        const px = x + (i / 3) * half;
+        ctx.beginPath();
+        ctx.moveTo(px, y - half * 0.42);
+        ctx.lineTo(px, y + half * 0.42);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "#6d5230";
+      ctx.lineWidth = Math.max(1, 0.7 * k);
+      ctx.beginPath();
+      ctx.moveTo(x - half, y - half * 0.34);
+      ctx.lineTo(x + half, y - half * 0.34);
+      ctx.moveTo(x - half, y + half * 0.34);
+      ctx.lineTo(x + half, y + half * 0.34);
+      ctx.stroke();
     } else if (s.kind === "tower") {
       ctx.fillStyle = shade(col, 0.4);
       ctx.strokeStyle = "#1c1710";

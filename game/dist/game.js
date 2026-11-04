@@ -8,6 +8,9 @@
   var MOUNTAIN = 4;
   var DENSITY = [0, 5, 10, 8, 6];
   var DEFENSE = [0, 8, 18, 15, 26];
+  var MIDDLE_RICHNESS = 3;
+  var POCKET_RICHNESS = 1;
+  var POCKET_COUNT = 12;
   function mulberry32(seed2) {
     let a = seed2 >>> 0;
     return function() {
@@ -43,61 +46,93 @@
     const rand = mulberry32(seed2);
     const e1 = makeNoise(rand, 6);
     const e2 = makeNoise(rand, 13);
-    const e3 = makeNoise(rand, 29);
     const ridge = makeNoise(rand, 9);
     const moist = makeNoise(rand, 11);
     const grain = makeNoise(rand, 61);
-    const raw = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const nx = x / w;
-        const ny = y / h;
-        let e = 0.55 * e1(nx * 1.7, ny * 1.7) + 0.3 * e2(nx * 3.3, ny * 3.3) + 0.15 * e3(nx * 6.1, ny * 6.1);
-        e += Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1)) * 0.22;
-        const dx = (nx - 0.5) * 2;
-        const dy = (ny - 0.5) * 2;
-        const d = Math.sqrt(dx * dx * 0.92 + dy * dy * 1.05);
-        e -= smooth(Math.min(1, Math.max(0, (d - 0.52) / 0.62))) * 0.72;
-        raw[idx(w, x, y)] = e;
-      }
+    const cx = w / 2;
+    const cy = h / 2;
+    const midRx = w * 0.235;
+    const midRy = h * 0.235;
+    const pockets = [];
+    const pocketCentre = [];
+    for (let i = 0; i < POCKET_COUNT; i++) {
+      const ang = i / POCKET_COUNT * Math.PI * 2 + 0.16;
+      const px = cx + Math.cos(ang) * midRx * 1.34;
+      const py = cy + Math.sin(ang) * midRy * 1.34;
+      if (px < 8 || py < 8 || px > w - 9 || py > h - 9) continue;
+      pocketCentre.push({ x: px, y: py, r: 15 + rand() * 5 });
+      pockets.push(idx(w, Math.round(px), Math.round(py)));
     }
-    const all = Array.from(raw);
-    const sorted = all.slice().sort((a, b) => a - b);
-    const q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(arr.length * f))];
-    const oceanLevel = q(sorted, 0.42);
-    const landElev = sorted.filter((e) => e >= oceanLevel);
-    const sandCut = q(landElev, 0.055);
-    const mountainCut = q(landElev, 0.84);
-    const moisture = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        moisture[idx(w, x, y)] = moist(x / w * 2.4, y / h * 2.4);
-      }
-    }
-    const wetLand = [];
-    for (let i = 0; i < raw.length; i++) {
-      if (raw[i] >= oceanLevel && raw[i] <= mountainCut) wetLand.push(moisture[i]);
-    }
-    wetLand.sort((a, b) => a - b);
-    const forestCut = q(wetLand, 0.66);
-    const terrain = new Uint8Array(w * h);
-    let landTiles = 0;
+    const forced = new Uint8Array(w * h);
+    const richness = new Float32Array(w * h);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = idx(w, x, y);
-        const e = raw[i];
+        const dx = (x - cx) / midRx;
+        const dy = (y - cy) / midRy;
+        if (dx * dx + dy * dy <= 1) {
+          forced[i] = 1;
+          const core = 1 - Math.min(1, Math.sqrt(dx * dx + dy * dy));
+          richness[i] = POCKET_RICHNESS + (MIDDLE_RICHNESS - POCKET_RICHNESS) * (0.8 + 0.2 * core);
+          continue;
+        }
+        for (const c of pocketCentre) {
+          const px = (x - c.x) / c.r;
+          const py = (y - c.y) / c.r;
+          if (px * px + py * py <= 1) {
+            forced[i] = 2;
+            richness[i] = POCKET_RICHNESS;
+            break;
+          }
+        }
+      }
+    }
+    const landElev = [];
+    const wetLand = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(w, x, y);
+        if (!forced[i]) continue;
+        const nx = x / w;
+        const ny = y / h;
+        let e = 0.55 * e1(nx * 1.7, ny * 1.7) + 0.4 * e2(nx * 3.3, ny * 3.3) + 0.3 * Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1));
+        landElev.push(e);
+        wetLand.push(moist(x / w * 2.4, y / h * 2.4));
+      }
+    }
+    const sorted = landElev.slice().sort((a, b) => a - b);
+    const q = (arr, f) => arr[Math.min(arr.length - 1, Math.floor(arr.length * f))];
+    const sandCut = q(sorted, 0.07);
+    const mountainCut = q(sorted, 0.86);
+    const wetSorted = wetLand.slice().sort((a, b) => a - b);
+    const forestCut = q(wetSorted, 0.62);
+    const terrain = new Uint8Array(w * h);
+    let landTiles = 0;
+    let middleTiles = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(w, x, y);
+        if (!forced[i]) {
+          terrain[i] = OCEAN;
+          continue;
+        }
+        const nx = x / w;
+        const ny = y / h;
+        const e = 0.55 * e1(nx * 1.7, ny * 1.7) + 0.4 * e2(nx * 3.3, ny * 3.3) + 0.3 * Math.max(0, 1 - Math.abs(ridge(nx * 2.2, ny * 2.2) * 2 - 1));
+        const m = moist(x / w * 2.4, y / h * 2.4);
         let t;
-        if (e < oceanLevel) t = OCEAN;
-        else if (e <= sandCut) t = SAND;
+        if (e <= sandCut) t = SAND;
         else if (e > mountainCut) t = MOUNTAIN;
-        else t = moisture[i] > forestCut ? FOREST : PLAINS;
+        else t = m > forestCut ? FOREST : PLAINS;
         terrain[i] = t;
-        if (t !== OCEAN) landTiles++;
+        landTiles++;
+        if (forced[i] === 1) middleTiles++;
       }
     }
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const i = idx(w, x, y);
+        if (forced[i]) continue;
         if (terrain[i] === OCEAN) continue;
         let water = 0;
         for (let dy = -1; dy <= 1; dy++)
@@ -107,10 +142,15 @@
           terrain[i] = OCEAN;
           landTiles--;
         }
-        if (terrain[i] === PLAINS && grain(x / w * 3, y / h * 3) > 0.72) terrain[i] = FOREST;
       }
     }
-    return { w, h, terrain, landTiles, seed: seed2 };
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = idx(w, x, y);
+        if (terrain[i] === PLAINS && grain(x / w * 3, y / h * 3) > 0.74) terrain[i] = FOREST;
+      }
+    }
+    return { w, h, terrain, landTiles, seed: seed2, richness, pockets, middleTiles };
   }
 
   // src/sim/game.ts
@@ -128,6 +168,9 @@
   var NODE_RADIUS = 34;
   var BUILD = {
     castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
+    // Each tile of a crossing is priced on its own, so reaching the middle is a
+    // real project: a four-wide channel is four bridges.
+    bridge: { grain: 0, timber: 45, ore: 15, gold: 30 },
     farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
     lumber: { grain: 35, timber: 0, ore: 0, gold: 10 },
     mine: { grain: 45, timber: 70, ore: 0, gold: 15 },
@@ -144,7 +187,8 @@
     market: "Market",
     tower: "Watchtower",
     siege: "Siege Camp",
-    camp: "War Camp"
+    camp: "War Camp",
+    bridge: "Bridge"
   };
   var ARMY_CAP = (level) => 50 * (level * level + 1);
   var YIELD = {
@@ -269,6 +313,7 @@
         immune: 0,
         frontTiles: 1,
         frontTimer: 0,
+        yieldSum: 0,
         kitWarn: 0,
         aiTimer: 0,
         density: 0,
@@ -289,6 +334,12 @@
     }
     isLand(t) {
       return this.world.terrain[t] !== OCEAN;
+    }
+    /** True where a host can cross: dry land, or a bridge laid over the water. */
+    passable(t) {
+      if (this.isLand(t)) return true;
+      const s = this.structs.get(t);
+      return !!s && s.kind === "bridge";
     }
     /** Tile index from world coordinates, or -1 when outside the map. */
     tileAt(x, y) {
@@ -340,7 +391,7 @@
     }
     /** Recompute production and upkeep. Once per realm per tick. */
     refreshRates(p) {
-      const held = Math.max(0, p.tileCount);
+      const held = Math.max(0, p.yieldSum);
       let grain = TILE_YIELD.grain * held;
       let timber = TILE_YIELD.timber * held;
       let ore = TILE_YIELD.ore * held;
@@ -370,16 +421,19 @@
       const prev = this.owners[t];
       if (prev === playerId) return;
       const dens = DENSITY[this.world.terrain[t]];
+      const rich = this.world.richness[t] || 1;
       if (prev >= 0) {
         const old = this.players[prev];
         old.tileCount--;
         old.density -= dens;
+        old.yieldSum -= rich;
         old.tiles.delete(t);
       }
       const p = this.players[playerId];
       this.owners[t] = playerId;
       p.tileCount++;
       p.density += dens;
+      p.yieldSum += rich;
       p.tiles.add(t);
       this.dirty.add(t);
       for (const n of this.neighbors4(t)) this.dirty.add(n);
@@ -469,7 +523,7 @@
     startMultiplayer(humans) {
       if (this.phase !== "spawn") return false;
       for (let i = 0; i < humans; i++) {
-        const seat = this.pickSeat(42);
+        const seat = this.world.pockets[i] >= 0 ? this.world.pockets[i] : this.pickSeat(42);
         if (seat < 0) return false;
         const p = this.addPlayer(i === 0 ? "You" : `Player ${i + 1}`, PALETTE[i % PALETTE.length], false);
         this.settle(p, seat, SPAWN_RADIUS, IMMUNITY);
@@ -493,9 +547,19 @@
     }
     spawnLords() {
       const { w, h } = this.world;
-      const count = 11;
+      const count = Math.max(0, Math.min(11, this.world.pockets.length - this.players.length));
       const taken = [...this.seats];
       for (let i = 0; i < count; i++) {
+        const free = this.world.pockets.filter(
+          (pk) => pk >= 0 && this.owners[pk] < 0 && !taken.some((t) => this.tileDistance(t, pk) < 30)
+        );
+        if (free.length) {
+          const seat = free[i % free.length];
+          const p2 = this.addPlayer(LORD_NAMES[i % LORD_NAMES.length], PALETTE[(i + 1) % PALETTE.length], true);
+          this.settle(p2, seat, SPAWN_RADIUS, 0);
+          taken.push(seat);
+          continue;
+        }
         let best = -1;
         let bestScore = -1;
         for (let tries = 0; tries < 400; tries++) {
@@ -1076,7 +1140,7 @@
       let bestScore = Infinity;
       const curDist = this.tileDistance(a.tile, a.target);
       for (const n of this.neighbors8(a.tile)) {
-        if (!this.isLand(n)) continue;
+        if (!this.passable(n)) continue;
         if (this.owners[n] === a.owner) continue;
         const d = this.tileDistance(n, a.target);
         const score = d + (d >= curDist ? 0.6 : 0) + (this.owners[n] >= 0 ? 0.15 : 0);
@@ -1110,7 +1174,7 @@
         if (s && s.owner === owner && s.kind === "castle") return true;
         for (const n of this.neighbors8(t)) {
           if (seen.has(n)) continue;
-          if (!this.isLand(n)) continue;
+          if (!this.passable(n)) continue;
           if (this.owners[n] !== owner) continue;
           seen.add(n);
           queue.push(n);
@@ -1169,6 +1233,13 @@
     /** Why this building cannot go here, or null when it can. */
     blockReason(p, kind, t) {
       if (this.phase !== "playing" || !p.alive) return "not now";
+      if (kind === "bridge") {
+        if (t < 0) return "off the map";
+        if (this.isLand(t)) return "water only";
+        if (this.structs.has(t)) return "occupied";
+        const mine = this.neighbors4(t).some((n) => this.owners[n] === p.id && this.passable(n));
+        return mine ? null : "from your shore";
+      }
       if (t < 0 || this.owners[t] !== p.id) return "own ground";
       const existing = this.structs.get(t);
       if (kind === "castle") {
@@ -1199,6 +1270,7 @@
       } else {
         this.structs.set(t, { kind, owner: p.id, tile: t, level: 1 });
         if (kind === "castle") p.castles += 1;
+        if (kind === "bridge") this.claim(t, p.id);
       }
       this.structDirty = true;
       this.refreshRates(p);
@@ -1567,9 +1639,11 @@
             const up = terrain[(y - 1) * w + x];
             slope = t === OCEAN ? 1 : 1 + (t - up) * 0.06;
           }
-          const r = Math.min(255, base[0] * lift * slope);
-          const gch = Math.min(255, base[1] * lift * slope);
-          const b = Math.min(255, base[2] * lift * slope);
+          const rich = this.g.world.richness[y * w + x] || 1;
+          const wealth = t === OCEAN ? 1 : 1 + (rich - 1) * 0.16;
+          const r = Math.min(255, base[0] * lift * slope * wealth);
+          const gch = Math.min(255, base[1] * lift * slope * (1 + (rich - 1) * 0.1));
+          const b = Math.min(255, base[2] * lift * slope * (1 - (rich - 1) * 0.05));
           for (let py = 0; py < P; py++) {
             for (let px = 0; px < P; px++) {
               const i = ((y * P + py) * w * P + (x * P + px)) * 4;
@@ -1982,6 +2056,31 @@
         ctx.lineTo(x, y - r * 0.6);
         ctx.closePath();
         ctx.fill();
+      } else if (s.kind === "bridge") {
+        const half = 6.2 * k;
+        ctx.strokeStyle = "#2a2015";
+        ctx.lineWidth = Math.max(2.2, 1.5 * k);
+        ctx.beginPath();
+        ctx.moveTo(x - half, y);
+        ctx.lineTo(x + half, y);
+        ctx.stroke();
+        ctx.strokeStyle = shade("#9a7648", 1.15);
+        ctx.lineWidth = Math.max(1.4, 0.95 * k);
+        for (let i = -3; i <= 3; i++) {
+          const px = x + i / 3 * half;
+          ctx.beginPath();
+          ctx.moveTo(px, y - half * 0.42);
+          ctx.lineTo(px, y + half * 0.42);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = "#6d5230";
+        ctx.lineWidth = Math.max(1, 0.7 * k);
+        ctx.beginPath();
+        ctx.moveTo(x - half, y - half * 0.34);
+        ctx.lineTo(x + half, y - half * 0.34);
+        ctx.moveTo(x - half, y + half * 0.34);
+        ctx.lineTo(x + half, y + half * 0.34);
+        ctx.stroke();
       } else if (s.kind === "tower") {
         ctx.fillStyle = shade(col, 0.4);
         ctx.strokeStyle = "#1c1710";
@@ -2668,7 +2767,7 @@
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
   });
-  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "camp"];
+  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "camp", "bridge"];
   var BUILD_HINT = {
     farm: "plains",
     lumber: "forest",
