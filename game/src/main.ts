@@ -388,6 +388,40 @@ requestAnimationFrame(frame);
 /* Shared world                                                        */
 /* ------------------------------------------------------------------ */
 
+/** Copy text, with a fallback for anything that blocks the async clipboard. */
+async function copyText(text: string, target: HTMLElement, done = "Copied") {
+  let ok = false;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand("copy");
+      ta.remove();
+    } catch {
+      ok = false;
+    }
+  }
+  if (!target.dataset.label) target.dataset.label = target.textContent ?? "";
+  target.textContent = ok ? done : "Press Ctrl+C";
+  target.classList.add("copied");
+  window.setTimeout(() => {
+    target.textContent = target.dataset.label ?? "";
+    target.classList.remove("copied");
+  }, 1800);
+}
+
 function showNetbar(html: string) {
   let bar = document.getElementById("netbar");
   if (!bar) {
@@ -449,9 +483,14 @@ async function boot() {
 
   showNetbar(
     isHost
-      ? `Match <b>${roomCode}</b> — send this to your friend: <code>${link}</code>`
+      ? `Match <b>${roomCode}</b> — <button class="copy-link" id="copy-invite">Copy invite link</button>`
       : `Match <b>${roomCode}</b> — joined as ${faction.name}`,
   );
+  const inviteBtn = document.getElementById("copy-invite");
+  if (inviteBtn) {
+    inviteBtn.title = link;
+    inviteBtn.addEventListener("click", () => void copyText(link, inviteBtn, "Link copied"));
+  }
   window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
   log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
 }

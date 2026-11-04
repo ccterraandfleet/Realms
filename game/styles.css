@@ -382,3 +382,30 @@ button.primary:hover {
   letter-spacing: 0.16em; cursor: pointer; font-family: inherit; white-space: nowrap;
 }
 .lobby-go:hover { background: #dcc077; }
+
+/* ---- click-to-copy invite ---- */
+.copy-link {
+  background: #c9a85e; color: #14100a; border: 0; padding: 4px 10px; margin-left: 6px;
+  font-family: inherit; font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; cursor: pointer;
+}
+.copy-link:hover { background: #dcc077; }
+.copy-link.copied { background: #7dab63; }
+.lobby-copy {
+  background: #0c100a; border: 1px dashed #3a4a34; color: #9aa892; font-family: ui-monospace, monospace;
+  font-size: 10px; padding: 6px 9px; cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.lobby-copy:hover { border-color: #c9a85e; color: #e9ddb8; }
+.lobby-copy.copied { border-color: #7dab63; color: #a9d18e; }
+
+/* ---- match bar: room code + click-to-copy invite ---- */
+#netbar {
+  position: fixed; top: 54px; left: 50%; transform: translateX(-50%);
+  z-index: 30; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: rgba(13,17,11,0.94); border: 1px solid #35422f; color: #cfd8c4;
+  padding: 8px 12px; font-size: 11px; letter-spacing: 0.04em;
+  max-width: min(720px, 92vw); box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+}
+#netbar b { color: #e9ddb8; letter-spacing: 0.18em; }
+#netbar code { color: #9aa892; }

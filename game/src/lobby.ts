@@ -113,7 +113,40 @@ export function openLobby(opts: LobbyOptions): Promise<Faction> {
     const foot = elt("div", "lobby-foot");
     const linkBox = elt("div", "lobby-link");
     linkBox.append(elt("span", "lobby-label", "INVITE LINK"));
-    const linkText = elt("code", "", opts.link);
+    const linkText = elt("button", "lobby-copy", opts.link) as HTMLButtonElement;
+    linkText.title = "Click to copy the invite link";
+    linkText.addEventListener("click", async () => {
+      const before = linkText.textContent ?? "";
+      let ok = false;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(opts.link);
+          ok = true;
+        }
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = opts.link;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          ok = document.execCommand("copy");
+          ta.remove();
+        } catch {
+          ok = false;
+        }
+      }
+      linkText.textContent = ok ? "Invite link copied" : "Press Ctrl+C to copy";
+      linkText.classList.add("copied");
+      window.setTimeout(() => {
+        linkText.textContent = before;
+        linkText.classList.remove("copied");
+      }, 1800);
+    });
     linkBox.append(linkText);
     foot.append(linkBox);
     const go = elt("button", "lobby-go", "TAKE THE FIELD") as HTMLButtonElement;
