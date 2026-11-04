@@ -409,3 +409,6 @@ button.primary:hover {
 }
 #netbar b { color: #e9ddb8; letter-spacing: 0.18em; }
 #netbar code { color: #9aa892; }
+
+.sync-ok { color: #86a86f; margin-left: 4px; }
+.sync-bad { color: #e2705a; font-weight: 700; margin-left: 4px; letter-spacing: 0.08em; }

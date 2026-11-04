@@ -1741,20 +1741,23 @@
     if (!res.ok) throw new Error(`relay ${res.status}`);
     return await res.json();
   }
-  function minuteCode(at = Date.now()) {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let n = Math.floor(at / 6e4);
-    let out = "";
-    for (let i = 0; i < 4; i++) {
-      out += alphabet[n % alphabet.length];
-      n = Math.floor(n / alphabet.length);
-    }
-    return out;
-  }
   var postIntent = (code, player, tick, data) => call({ action: "post", code, player, tick, data });
   var pollIntents = (code, since) => call({ action: "poll", code, since });
   var postSnapshot = (code, tick, state) => call({ action: "snap", code, tick, state });
   var getSnapshot = (code) => call({ action: "view", code });
+  var LOBBY = "https://lyra-01a6009e.base44.app/functions/realmsLobby";
+  async function lobbyCall(payload) {
+    const res = await fetch(LOBBY, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`lobby ${res.status}`);
+    return await res.json();
+  }
+  var openMatch = (seed2, client) => lobbyCall({ action: "open", seed: seed2, client });
+  var currentMatch = (client) => lobbyCall({ action: "current", client });
+  var matchByCode = (code) => lobbyCall({ action: "byCode", code });
 
   // src/faction.ts
   var COLORS = [
@@ -2403,20 +2406,54 @@
     bar.innerHTML = html;
   }
   async function boot() {
-    const nextMinute = Math.ceil(Date.now() / 6e4) * 6e4;
-    const joining = Boolean(roomParam);
-    const matchCode = joining ? roomParam : minuteCode(nextMinute);
-    const link = joining ? `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}` : `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
+    let clientId = "";
+    try {
+      clientId = localStorage.getItem("realms.client") ?? "";
+      if (!clientId) {
+        clientId = `c${Math.random().toString(36).slice(2, 10)}`;
+        localStorage.setItem("realms.client", clientId);
+      }
+    } catch {
+      clientId = `c${Math.random().toString(36).slice(2, 10)}`;
+    }
+    let matchCode = roomParam;
+    let host = false;
+    let matchReady = true;
+    if (roomParam) {
+      host = false;
+      try {
+        const found = await matchByCode(roomParam);
+        if (found.room) matchCode = found.room.code;
+      } catch {
+      }
+    } else {
+      try {
+        const opened = await openMatch(seed, clientId);
+        matchCode = opened.code;
+        host = opened.host;
+        await new Promise((r) => window.setTimeout(r, 900));
+        const cur = await currentMatch(clientId);
+        if (cur.room && cur.room.code !== matchCode) {
+          matchCode = cur.room.code;
+          host = cur.room.host;
+        }
+      } catch (err) {
+        matchReady = false;
+        console.warn("matchmaking failed", err);
+      }
+    }
+    const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
     const faction = await openLobby({
       roomCode: matchCode,
-      startAt: joining ? Date.now() : nextMinute,
-      role: joining ? "guest" : "host",
+      startAt: Date.now(),
+      role: host ? "host" : "guest",
       link
     });
-    isHost = !joining;
-    isGuest = joining;
+    isHost = host;
+    isGuest = !host;
     roomCode = matchCode;
     localPlayer = isHost ? 0 : 1;
+    game.startMultiplayer(2);
     game.startMultiplayer(2);
     game.human = localPlayer;
     spawnOverlay.classList.add("hidden");
@@ -2432,6 +2469,8 @@
         color: faction.color
       });
     }
+    myName = faction.name;
+    myFaction = { name: faction.name, color: faction.color };
     showIdentity(faction);
     for (const st of game.structs.values()) {
       if (st.owner !== localPlayer || st.kind !== "castle") continue;
@@ -2450,6 +2489,7 @@
       inviteBtn.addEventListener("click", () => void copyText(link, inviteBtn, "Link copied"));
     }
     window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
+    window.setInterval(watchSync, 2e3);
     log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
   }
   function showIdentity(f) {
@@ -2488,13 +2528,67 @@
     void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot()).catch(() => {
     });
   }
+  var lastSnapshotAt = 0;
+  var syncFailures = 0;
+  var joinedAt = Date.now();
+  var myName = "";
+  var myFaction = null;
+  var promoted = false;
   function guestTick() {
     void getSnapshot(roomCode).then((res) => {
       if (!res.state) return;
       game.applySnapshot(res.state);
-      game.human = localPlayer;
+      const slot = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
+      game.human = slot >= 0 ? slot : localPlayer;
+      lastSnapshotAt = Date.now();
     }).catch(() => {
+      syncFailures++;
     });
+  }
+  function watchSync() {
+    const bar = document.getElementById("netbar");
+    if (!bar) return;
+    let flag = document.getElementById("sync-flag");
+    if (!flag) {
+      flag = document.createElement("span");
+      flag.id = "sync-flag";
+      bar.append(flag);
+    }
+    if (isHost) {
+      flag.textContent = "\xB7 hosting";
+      flag.className = "sync-ok";
+      return;
+    }
+    if (!promoted && lastSnapshotAt === 0 && Date.now() - joinedAt > 6e3) {
+      promoted = true;
+      isHost = true;
+      isGuest = false;
+      localPlayer = 0;
+      const mine0 = game.players[0];
+      if (mine0 && myFaction) {
+        mine0.name = myFaction.name;
+        mine0.color = myFaction.color;
+      }
+      game.human = 0;
+      window.setInterval(hostTick, 250);
+      log("No host publishing in this match. You are hosting it now.");
+      const banner = document.getElementById("netbar");
+      if (banner) {
+        const note = document.createElement("span");
+        note.className = "sync-ok";
+        note.textContent = " \xB7 hosting (took over)";
+        banner.append(note);
+      }
+      return;
+    }
+    const stale = Date.now() - lastSnapshotAt > 5e3;
+    if (stale) {
+      flag.textContent = "\xB7 NOT SYNCED \u2014 waiting for the host";
+      flag.className = "sync-bad";
+    } else {
+      flag.textContent = "\xB7 synced";
+      flag.className = "sync-ok";
+    }
   }
   void boot();
   window.__realms = {
