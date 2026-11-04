@@ -425,3 +425,11 @@ button.primary:hover {
 .lobby-alt:hover { border-color: #c9a85e; color: #e9ddb8; }
 .lobby-alt:disabled, .lobby-go:disabled { opacity: 0.6; cursor: default; }
 .lobby-hint { font-size: 10px; color: #6f7c68; letter-spacing: 0.06em; }
+
+/* ---- start countdown ---- */
+#countdown {
+  position: fixed; left: 50%; top: 34%; transform: translate(-50%, -50%);
+  z-index: 35; font-size: 92px; font-weight: 700; letter-spacing: 0.08em;
+  color: #efe6cf; text-shadow: 0 6px 30px rgba(0,0,0,0.75), 0 0 40px rgba(233,221,184,0.35);
+  pointer-events: none; font-variant-numeric: tabular-nums;
+}
