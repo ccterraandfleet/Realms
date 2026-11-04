@@ -158,6 +158,12 @@
     lumber: FOREST,
     mine: MOUNTAIN
   };
+  var TILE_YIELD = {
+    grain: 0.02,
+    timber: 8e-3,
+    ore: 4e-3,
+    gold: 0.01
+  };
   var PRICE = {
     /** Settling one unclaimed tile: seed, stakes and a survey. */
     claimTile: { grain: 2, timber: 1, ore: 0, gold: 0.25 },
@@ -334,10 +340,11 @@
     }
     /** Recompute production and upkeep. Once per realm per tick. */
     refreshRates(p) {
-      let grain = 2 + p.tileCount * 4e-3;
-      let timber = 0.5 + p.tileCount * 2e-3;
-      let ore = 0.3 + p.tileCount * 15e-4;
-      let gold = 0.6 + p.tileCount * 3e-3;
+      const held = Math.max(0, p.tileCount);
+      let grain = TILE_YIELD.grain * held;
+      let timber = TILE_YIELD.timber * held;
+      let ore = TILE_YIELD.ore * held;
+      let gold = TILE_YIELD.gold * held;
       for (const st of this.structs.values()) {
         if (st.owner !== p.id) continue;
         const y = YIELD[st.kind];
@@ -945,6 +952,14 @@
           if (a.troops < 45) {
             this.armies.splice(i, 1);
             if (!p.isBot) this.note("An isolated push has been routed.");
+            continue;
+          }
+        }
+        if (p.grain <= 0 && p.rates.grain < 0) {
+          a.troops *= 1 - 0.03 * dt;
+          if (a.troops < 25) {
+            this.armies.splice(i, 1);
+            if (!p.isBot) this.note("A host that could not be fed has melted away.");
             continue;
           }
         }

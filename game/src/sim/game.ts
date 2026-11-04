@@ -181,6 +181,18 @@ export const TERRAIN_FOR: Partial<Record<StructureKind, number>> = {
  * Everything costs something. There is no free land and no free army: what your
  * land produces is the only thing that lets you do anything at all.
  */
+/**
+ * Passive yield per held tile. This is the recovery floor: losing your stores
+ * slows you down, it does not end you, because a bigger realm always out-earns
+ * a smaller one in every resource.
+ */
+export const TILE_YIELD = {
+  grain: 0.02,
+  timber: 0.008,
+  ore: 0.004,
+  gold: 0.01,
+} as const;
+
 export const PRICE = {
   /** Settling one unclaimed tile: seed, stakes and a survey. */
   claimTile: { grain: 2, timber: 1, ore: 0, gold: 0.25 },
@@ -366,14 +378,16 @@ export class Game {
 
   /** Recompute production and upkeep. Once per realm per tick. */
   refreshRates(p: Player) {
-    // Bare ground yields a trickle of everything, so no realm can be locked
-    // out of a resource; buildings on the right ground are what make it scale.
-    // Bare ground yields a working baseline, so a realm can always afford to
-    // grow slowly; every priced action still has to be earned from here.
-    let grain = 2.0 + p.tileCount * 0.004;
-    let timber = 0.5 + p.tileCount * 0.002;
-    let ore = 0.3 + p.tileCount * 0.0015;
-    let gold = 0.6 + p.tileCount * 0.003;
+    // Land is the floor under the economy. Every tile you hold yields a little
+    // of everything, so a realm that spent itself down to nothing still climbs
+    // back instead of dead-ending: the ground you are standing on is the one
+    // thing you cannot lose to a bad purchase. Buildings are what make it
+    // compound past the tile rate.
+    const held = Math.max(0, p.tileCount);
+    let grain = TILE_YIELD.grain * held;
+    let timber = TILE_YIELD.timber * held;
+    let ore = TILE_YIELD.ore * held;
+    let gold = TILE_YIELD.gold * held;
     for (const st of this.structs.values()) {
       if (st.owner !== p.id) continue;
       const y = YIELD[st.kind];
@@ -1039,6 +1053,18 @@ export class Game {
         if (a.troops < 45) {
           this.armies.splice(i, 1);
           if (!p.isBot) this.note("An isolated push has been routed.");
+          continue;
+        }
+      }
+
+      // An army nobody can feed does not sit there eating the realm into a
+      // hole forever: the men desert until the ration bill fits what the land
+      // produces again. This is the other half of the no-dead-end rule.
+      if (p.grain <= 0 && p.rates.grain < 0) {
+        a.troops *= 1 - 0.03 * dt;
+        if (a.troops < 25) {
+          this.armies.splice(i, 1);
+          if (!p.isBot) this.note("A host that could not be fed has melted away.");
           continue;
         }
       }
