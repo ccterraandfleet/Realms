@@ -123,6 +123,8 @@
     "tower",
     "siege"
   ];
+  var CLAIM_REACH = 26;
+  var NODE_RADIUS = 34;
   var BUILD = {
     castle: { grain: 0, timber: 70, ore: 45, gold: 60 },
     farm: { grain: 0, timber: 45, ore: 0, gold: 10 },
@@ -223,6 +225,7 @@
       this.human = 0;
       /** Every seat taken so far, so spawns stay apart. */
       this.seats = [];
+      this.claimNodes = [];
       this.nextArmyId = 1;
       this.world = generateWorld(seed2, w, h);
       this.owners = new Int16Array(w * h).fill(-1);
@@ -567,6 +570,62 @@
       return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
     }
     /**
+     * Expansion, the way unclaimed ground is meant to work: double click an open
+     * spot and a node is planted there. The node eats outward from that point,
+     * one ring at a time, and stops on its own the moment it touches somebody
+     * else's border. Columns are for war; this is for settling.
+     */
+    startClaimNode(p, tile) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      if (tile < 0 || !this.isLand(tile) || this.owners[tile] !== -1) return false;
+      let nearest = Infinity;
+      for (const t of p.tiles) nearest = Math.min(nearest, this.tileDistance(t, tile));
+      if (nearest > CLAIM_REACH) return false;
+      if (this.claimNodes.some((n) => n.tile === tile)) return false;
+      this.claimNodes.push({
+        owner: p.id,
+        tile,
+        frontier: [tile],
+        seen: /* @__PURE__ */ new Set([tile]),
+        acc: 0,
+        done: false
+      });
+      this.capture(tile, p.id);
+      if (!p.isBot) this.note("A claim node takes root.");
+      return true;
+    }
+    /** Grow every live claim node. Rate follows production, so a real economy
+     *  settles ground faster than a starving one. */
+    growNodes(dt) {
+      for (const node of this.claimNodes) {
+        if (node.done) continue;
+        const p = this.players[node.owner];
+        if (!p || !p.alive) {
+          node.done = true;
+          continue;
+        }
+        const rate = Math.min(14, 4 + Math.max(0, p.grainProd) * 0.5);
+        node.acc = Math.min(node.acc + rate * dt, 24);
+        while (node.acc >= 1) {
+          if (!node.frontier.length) {
+            node.done = true;
+            break;
+          }
+          const t = node.frontier.shift();
+          if (this.owners[t] === -1 && this.isLand(t)) {
+            this.capture(t, node.owner);
+          }
+          for (const n of this.neighbors4(t)) {
+            if (this.owners[n] !== -1 || !this.isLand(n) || node.seen.has(n)) continue;
+            if (this.tileDistance(n, node.tile) > NODE_RADIUS) continue;
+            node.seen.add(n);
+            node.frontier.push(n);
+          }
+          node.acc -= 1;
+        }
+      }
+    }
+    /**
      * Click a point, and an army launches toward it and pushes inward from
      * there. Bigger detachments move faster and hit harder.
      */
@@ -623,7 +682,9 @@
     }
     orderArmy(p, target, ratio) {
       if (this.phase !== "playing" || !p.alive) return false;
-      if (!this.bordersRival(p)) return this.claimToward(p, target, ratio);
+      if (target < 0 || !this.isLand(target)) return false;
+      if (this.owners[target] === -1) return this.startClaimNode(p, target);
+      if (this.owners[target] === p.id) return false;
       if (!this.canAttack(p, target)) return false;
       const share = Math.max(0.05, Math.min(1, ratio));
       const send = Math.floor(p.troops * share);
@@ -922,6 +983,7 @@
     tick(dt) {
       if (this.phase === "spawn") return;
       this.time += dt;
+      this.growNodes(dt);
       for (const p of this.players) {
         if (!p.alive) continue;
         if (p.immune > 0) p.immune = Math.max(0, p.immune - dt);
@@ -1081,6 +1143,7 @@
         g: a.target,
         c: a.cutOff ? 1 : 0
       }));
+      const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
         st.tile,
         STRUCT_ORDER.indexOf(st.kind),
@@ -1095,7 +1158,8 @@
         ms: this.messages.slice(-10),
         p: players,
         a: armies,
-        s: structs
+        s: structs,
+        cn: nodes
       });
     }
     /** Guest side: become a display of the host's world. */
@@ -1108,6 +1172,14 @@
       this.owners.fill(-1);
       this.armies = [];
       this.structs.clear();
+      this.claimNodes = (snap.cn ?? []).map((r) => ({
+        owner: r[1],
+        tile: r[0],
+        frontier: [],
+        seen: /* @__PURE__ */ new Set(),
+        acc: 0,
+        done: r[2] === 1
+      }));
       for (const d of snap.p) {
         const p = this.players[d.i] ?? this.addPlayer(d.n, d.c, !!d.b);
         p.name = d.n;
@@ -1454,6 +1526,27 @@
           ctx.arc(ax, ay, cam2.scale * 0.72, 0, 6.283);
           ctx.stroke();
         }
+      }
+      for (const n of this.g.claimNodes) {
+        const [nx, ny] = toScreen(n.tile);
+        if (nx < -40 || ny < -40 || nx > this.canvas.width / dpr2 + 40 || ny > this.canvas.height / dpr2 + 40) continue;
+        const col = this.g.players[n.owner]?.color ?? "#f3ead0";
+        const k = Math.max(0.6, cam2.scale / 6);
+        ctx.save();
+        ctx.globalAlpha = n.done ? 0.5 : 0.95;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1, 1.1 * k);
+        ctx.beginPath();
+        ctx.arc(nx, ny, 4.2 * k, 0, 6.283);
+        ctx.stroke();
+        if (!n.done) {
+          ctx.globalAlpha = 0.7;
+          ctx.beginPath();
+          ctx.arc(nx, ny, 2.1 * k, 0, 6.283);
+          ctx.fillStyle = col;
+          ctx.fill();
+        }
+        ctx.restore();
       }
       for (const s of this.g.structs.values()) {
         const [sx, sy] = toScreen(s.tile);
@@ -2124,7 +2217,11 @@
       void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
       return;
     }
-    game.orderArmy(me, tile, ratio);
+    const ok = game.orderArmy(me, tile, ratio);
+    if (!ok && game.ownerAt(tile) === me.id) log("That is already your ground.");
+    else if (!ok && game.ownerAt(tile) === -1 && game.isLand(tile)) {
+      log("Too far from your lands to plant a claim node.");
+    }
   }
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;

@@ -348,6 +348,29 @@ export class Renderer {
       }
     }
 
+    // Claim nodes: the seeds of expansion, one per double click on open ground.
+    for (const n of this.g.claimNodes) {
+      const [nx, ny] = toScreen(n.tile);
+      if (nx < -40 || ny < -40 || nx > this.canvas.width / dpr + 40 || ny > this.canvas.height / dpr + 40) continue;
+      const col = this.g.players[n.owner]?.color ?? "#f3ead0";
+      const k = Math.max(0.6, cam.scale / 6);
+      ctx.save();
+      ctx.globalAlpha = n.done ? 0.5 : 0.95;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(1, 1.1 * k);
+      ctx.beginPath();
+      ctx.arc(nx, ny, 4.2 * k, 0, 6.283);
+      ctx.stroke();
+      if (!n.done) {
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(nx, ny, 2.1 * k, 0, 6.283);
+        ctx.fillStyle = col;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     // Structures.
     for (const s of this.g.structs.values()) {
       const [sx, sy] = toScreen(s.tile);

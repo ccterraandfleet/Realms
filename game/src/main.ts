@@ -240,7 +240,11 @@ function attack(tile: number) {
     void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
     return;
   }
-  game.orderArmy(me, tile, ratio);
+  const ok = game.orderArmy(me, tile, ratio);
+  if (!ok && game.ownerAt(tile) === me.id) log("That is already your ground.");
+  else if (!ok && game.ownerAt(tile) === -1 && game.isLand(tile)) {
+    log("Too far from your lands to plant a claim node.");
+  }
 }
 
 ratioInput.addEventListener("input", () => {

@@ -31,6 +31,20 @@ export const STRUCT_ORDER: StructureKind[] = [
   "siege",
 ];
 
+export interface ClaimNode {
+  owner: number;
+  tile: number;
+  frontier: number[];
+  seen: Set<number>;
+  acc: number;
+  done: boolean;
+}
+
+/** How far from your own land a claim node can be planted. */
+export const CLAIM_REACH = 26;
+/** Footprint a single node may settle before it is spent. */
+export const NODE_RADIUS = 34;
+
 export interface Structure {
   kind: StructureKind;
   owner: number;
@@ -198,6 +212,7 @@ export class Game {
   human = 0;
   /** Every seat taken so far, so spawns stay apart. */
   seats: number[] = [];
+  claimNodes: ClaimNode[] = [];
   private nextArmyId = 1;
   private rng: () => number;
 
@@ -583,6 +598,65 @@ export class Game {
   }
 
   /**
+   * Expansion, the way unclaimed ground is meant to work: double click an open
+   * spot and a node is planted there. The node eats outward from that point,
+   * one ring at a time, and stops on its own the moment it touches somebody
+   * else's border. Columns are for war; this is for settling.
+   */
+  startClaimNode(p: Player, tile: number): boolean {
+    if (this.phase !== "playing" || !p.alive) return false;
+    if (tile < 0 || !this.isLand(tile) || this.owners[tile] !== -1) return false;
+    let nearest = Infinity;
+    for (const t of p.tiles) nearest = Math.min(nearest, this.tileDistance(t, tile));
+    if (nearest > CLAIM_REACH) return false;
+    if (this.claimNodes.some((n) => n.tile === tile)) return false;
+    this.claimNodes.push({
+      owner: p.id,
+      tile,
+      frontier: [tile],
+      seen: new Set<number>([tile]),
+      acc: 0,
+      done: false,
+    });
+    this.capture(tile, p.id);
+    if (!p.isBot) this.note("A claim node takes root.");
+    return true;
+  }
+
+  /** Grow every live claim node. Rate follows production, so a real economy
+   *  settles ground faster than a starving one. */
+  private growNodes(dt: number) {
+    for (const node of this.claimNodes) {
+      if (node.done) continue;
+      const p = this.players[node.owner];
+      if (!p || !p.alive) {
+        node.done = true;
+        continue;
+      }
+      const rate = Math.min(14, 4 + Math.max(0, p.grainProd) * 0.5);
+      node.acc = Math.min(node.acc + rate * dt, 24);
+      while (node.acc >= 1) {
+        if (!node.frontier.length) {
+          node.done = true;
+          break;
+        }
+        const t = node.frontier.shift() as number;
+        if (this.owners[t] === -1 && this.isLand(t)) {
+          this.capture(t, node.owner);
+        }
+        for (const n of this.neighbors4(t)) {
+          if (this.owners[n] !== -1 || !this.isLand(n) || node.seen.has(n)) continue;
+          // A node settles a footprint, not the whole map.
+          if (this.tileDistance(n, node.tile) > NODE_RADIUS) continue;
+          node.seen.add(n);
+          node.frontier.push(n);
+        }
+        node.acc -= 1;
+      }
+    }
+  }
+
+  /**
    * Click a point, and an army launches toward it and pushes inward from
    * there. Bigger detachments move faster and hit harder.
    */
@@ -642,10 +716,11 @@ export class Game {
 
   orderArmy(p: Player, target: number, ratio: number): boolean {
     if (this.phase !== "playing" || !p.alive) return false;
-    // Open ground is claimed the way OpenFront does it: the border sweeps
-    // outward toward the click. Once another realm shares a border, land stops
-    // being free and the war goes onto columns instead.
-    if (!this.bordersRival(p)) return this.claimToward(p, target, ratio);
+    // Unclaimed ground is settled, never invaded: plant a node and let it eat
+    // outward. Columns only ever march into somebody else's land.
+    if (target < 0 || !this.isLand(target)) return false;
+    if (this.owners[target] === -1) return this.startClaimNode(p, target);
+    if (this.owners[target] === p.id) return false;
     if (!this.canAttack(p, target)) return false;
     const share = Math.max(0.05, Math.min(1, ratio));
     const send = Math.floor(p.troops * share);
@@ -990,6 +1065,7 @@ export class Game {
   tick(dt: number) {
     if (this.phase === "spawn") return;
     this.time += dt;
+    this.growNodes(dt);
 
     for (const p of this.players) {
       if (!p.alive) continue;
@@ -1171,6 +1247,7 @@ export class Game {
       g: a.target,
       c: a.cutOff ? 1 : 0,
     }));
+    const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
     const structs = [...this.structs.values()].map((st) => [
       st.tile,
       STRUCT_ORDER.indexOf(st.kind),
@@ -1186,6 +1263,7 @@ export class Game {
       p: players,
       a: armies,
       s: structs,
+      cn: nodes,
     });
   }
 
@@ -1199,6 +1277,14 @@ export class Game {
     this.owners.fill(-1);
     this.armies = [];
     this.structs.clear();
+    this.claimNodes = (snap.cn ?? []).map((r: number[]) => ({
+      owner: r[1],
+      tile: r[0],
+      frontier: [],
+      seen: new Set<number>(),
+      acc: 0,
+      done: r[2] === 1,
+    }));
     for (const d of snap.p) {
       const p = this.players[d.i] ?? this.addPlayer(d.n, d.c, !!d.b);
       p.name = d.n;
