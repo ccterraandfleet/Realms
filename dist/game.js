@@ -3097,7 +3097,14 @@
         lastPayload = res.state;
         lastChangeAt = Date.now();
       }
-      game.applySnapshot(res.state);
+      try {
+        game.applySnapshot(res.state);
+        snapshotBroken = false;
+      } catch {
+        snapshotBroken = true;
+        lastChangeAt = Date.now() - 4e4;
+        return;
+      }
       const slot = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
       game.human = slot >= 0 ? slot : localPlayer;
       lastSnapshotAt = Date.now();
@@ -3139,6 +3146,38 @@
     }
     countdownEl.textContent = String(Math.ceil(left / 1e3));
   }
+  var myBuild = "";
+  var newerBuild = "";
+  var snapshotBroken = false;
+  function showBuild() {
+    let el2 = document.getElementById("build-stamp");
+    if (!el2) {
+      const bar = document.getElementById("netbar");
+      if (!bar) return;
+      el2 = document.createElement("span");
+      el2.id = "build-stamp";
+      el2.style.opacity = "0.55";
+      el2.style.fontSize = "11px";
+      bar.append(el2);
+    }
+    el2.textContent = newerBuild ? ` \xB7 build ${myBuild} \u2014 NEW BUILD, reload` : myBuild ? ` \xB7 build ${myBuild}` : "";
+    el2.className = newerBuild ? "sync-bad" : "";
+  }
+  void fetch(`dist/version.json?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).then((v) => {
+    myBuild = String(v.build ?? "");
+    showBuild();
+  }).catch(() => {
+  });
+  window.setInterval(() => {
+    void fetch(`dist/version.json?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).then((v) => {
+      const b = String(v.build ?? "");
+      if (myBuild && b && b !== myBuild) {
+        newerBuild = b;
+        showBuild();
+      }
+    }).catch(() => {
+    });
+  }, 6e4);
   function watchSync() {
     const bar = document.getElementById("netbar");
     if (!bar) return;
@@ -3147,6 +3186,11 @@
       flag = document.createElement("span");
       flag.id = "sync-flag";
       bar.append(flag);
+    }
+    if (snapshotBroken || newerBuild) {
+      flag.textContent = "\xB7 RELOAD \u2014 your build is out of date";
+      flag.className = "sync-bad";
+      return;
     }
     if (isHost) {
       flag.textContent = "\xB7 hosting";
