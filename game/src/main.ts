@@ -9,9 +9,18 @@
 import { Camera, Renderer } from "./render/renderer";
 import { BUILD, Bundle, Game, PALETTE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
 import { OCEAN } from "./sim/world";
+import * as net from "./net";
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get("seed") ?? 7) || 7;
+/** A room in the URL means shared world; host creates, the other joins. */
+const roomParam = (params.get("room") ?? "").toUpperCase();
+const wantsHost = params.get("host") === "1";
+const isHost = wantsHost;
+const isGuest = Boolean(roomParam) && !wantsHost;
+const multiplayer = isHost || isGuest;
+let roomCode = "";
+const localPlayer = isHost ? 0 : 1;
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
 const game = new Game(seed);
@@ -207,6 +216,10 @@ function click(tile: number) {
   }
   if (!me) return;
   if (buildKind) {
+    if (isGuest) {
+      void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "build", k: buildKind, tile });
+      return;
+    }
     if (!game.build(me, buildKind, tile)) {
       const why = game.blockReason(me, buildKind, tile);
       if (why) log(`Cannot build there: ${why}.`);
@@ -221,7 +234,12 @@ function click(tile: number) {
 function attack(tile: number) {
   const me = game.players[game.human];
   if (!me || game.phase !== "playing") return;
-  game.orderArmy(me, tile, Number(ratioInput.value) / 100);
+  const ratio = Number(ratioInput.value) / 100;
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "order", tile, ratio });
+    return;
+  }
+  game.orderArmy(me, tile, ratio);
 }
 
 ratioInput.addEventListener("input", () => {
@@ -350,7 +368,8 @@ let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  game.tick(dt);
+  // The guest renders the host's world; only the host advances the simulation.
+  if (!isGuest) game.tick(dt);
   renderer.draw(cam, hover, buildKind, dpr);
   if (now - lastHud > 120) {
     lastHud = now;
@@ -359,6 +378,92 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+/* ------------------------------------------------------------------ */
+/* Shared world                                                        */
+/* ------------------------------------------------------------------ */
+
+function showNetbar(html: string) {
+  let bar = document.getElementById("netbar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "netbar";
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = html;
+}
+
+let lastIntentAt = 0;
+
+async function boot() {
+  if (!multiplayer) return;
+  try {
+    if (isHost) {
+      const room = await net.createRoom(seed);
+      roomCode = room.code;
+    } else {
+      roomCode = roomParam;
+      const room = await net.getRoom(roomCode);
+      if (!room) throw new Error("no such room");
+    }
+  } catch (err) {
+    showNetbar(`Shared world unreachable (${String(err)}). Reload to retry.`);
+    return;
+  }
+
+  game.startMultiplayer(2);
+  game.human = localPlayer;
+  spawnOverlay.classList.add("hidden");
+  for (const st of game.structs.values()) {
+    if (st.owner !== localPlayer || st.kind !== "castle") continue;
+    cam.scale = 7;
+    cam.x = window.innerWidth / 2 - (st.tile % game.world.w) * cam.scale;
+    cam.y = window.innerHeight / 2 - ((st.tile / game.world.w) | 0) * cam.scale;
+    clampCamera();
+    break;
+  }
+
+  const link = `${location.origin}${location.pathname}?seed=${seed}&room=${roomCode}`;
+  showNetbar(
+    isHost
+      ? `Room <b>${roomCode}</b> — send your friend this link: <code>${link}</code>`
+      : `Room <b>${roomCode}</b> — joined as player 2`,
+  );
+  window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
+  log(isHost ? "Shared world open. Rivals are loose." : "Joined the shared world.");
+}
+
+function hostTick() {
+  void net
+    .pollIntents(roomCode, lastIntentAt)
+    .then((res) => {
+      for (const it of res.intents ?? []) {
+        if (it.at > lastIntentAt) lastIntentAt = it.at;
+        const p = game.players[it.player];
+        if (!p || !p.alive) continue;
+        if (it.data.kind === "order") {
+          game.orderArmy(p, it.data.tile as number, (it.data.ratio as number) ?? 0.3);
+        } else if (it.data.kind === "build") {
+          game.build(p, it.data.k as StructureKind, it.data.tile as number);
+        }
+      }
+    })
+    .catch(() => {});
+  void net.postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot()).catch(() => {});
+}
+
+function guestTick() {
+  void net
+    .getSnapshot(roomCode)
+    .then((res) => {
+      if (!res.state) return;
+      game.applySnapshot(res.state);
+      game.human = localPlayer;
+    })
+    .catch(() => {});
+}
+
+void boot();
 
 // Test hook: lets a headless browser drive the same click path a player uses.
 (window as unknown as Record<string, unknown>).__realms = {

@@ -20,6 +20,17 @@ export type StructureKind =
   | "tower"
   | "siege";
 
+/** Index order used by compact netcode snapshots. */
+export const STRUCT_ORDER: StructureKind[] = [
+  "castle",
+  "farm",
+  "lumber",
+  "mine",
+  "market",
+  "tower",
+  "siege",
+];
+
 export interface Structure {
   kind: StructureKind;
   owner: number;
@@ -54,6 +65,8 @@ export interface Player {
   density: number;
   /** The tiles this realm holds, for AI and border lookups. */
   tiles: Set<number>;
+  /** Fractional progress of the automatic border spread. */
+  spreadAcc: number;
 }
 
 export interface Army {
@@ -183,6 +196,8 @@ export class Game {
   structDirty = true;
   messages: { t: number; text: string }[] = [];
   human = 0;
+  /** Every seat taken so far, so spawns stay apart. */
+  seats: number[] = [];
   private nextArmyId = 1;
   private rng: () => number;
 
@@ -219,6 +234,7 @@ export class Game {
       aiTimer: 0,
       density: 0,
       tiles: new Set<number>(),
+      spreadAcc: 0,
     };
     this.players.push(p);
     return p;
@@ -412,10 +428,50 @@ export class Game {
     return true;
   }
 
+  /** Pick a seat with good ground, far from everyone already placed. */
+  private pickSeat(minSpacing: number): number {
+    const { w, h } = this.world;
+    let best = -1;
+    let bestScore = -Infinity;
+    for (let tries = 0; tries < 1200; tries++) {
+      const t = (this.rng() * (w * h)) | 0;
+      if (!this.isLand(t) || this.owners[t] >= 0) continue;
+      let nearest = Infinity;
+      for (const seat of this.seats) nearest = Math.min(nearest, this.tileDistance(t, seat));
+      if (nearest < minSpacing) continue;
+      const score = this.siteQuality(t, SPAWN_RADIUS) + nearest * 2;
+      if (score > bestScore) {
+        bestScore = score;
+        best = t;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Multiplayer start: everyone drops onto the map at once (no click-to-spawn
+   * to keep in sync), then the lords fill in around them.
+   */
+  startMultiplayer(humans: number): boolean {
+    if (this.phase !== "spawn") return false;
+    for (let i = 0; i < humans; i++) {
+      const seat = this.pickSeat(42);
+      if (seat < 0) return false;
+      const p = this.addPlayer(i === 0 ? "You" : `Player ${i + 1}`, PALETTE[i % PALETTE.length], false);
+      this.settle(p, seat, SPAWN_RADIUS, IMMUNITY);
+    }
+    this.human = 0;
+    this.phase = "playing";
+    this.spawnLords();
+    this.note("You have landed. Raise your city and take the ground.");
+    return true;
+  }
+
   private settle(p: Player, tile: number, radius: number, immunity: number) {
     for (const t of this.blob(tile, radius)) this.claim(t, p.id);
     this.claim(tile, p.id);
     this.structs.set(tile, { kind: "castle", owner: p.id, tile, level: 1 });
+    this.seats.push(tile);
     p.castles += 1;
     p.immune = immunity;
     this.refreshRates(p);
@@ -426,7 +482,7 @@ export class Game {
   private spawnLords() {
     const { w, h } = this.world;
     const count = 11;
-    const taken: number[] = [];
+    const taken: number[] = [...this.seats];
     for (let i = 0; i < count; i++) {
       let best = -1;
       let bestScore = -1;
@@ -886,6 +942,7 @@ export class Game {
       p.timber += p.rates.timber * dt;
       p.ore += p.rates.ore * dt;
       p.gold += p.rates.gold * dt;
+      this.spread(p, dt);
       // Famine: stores empty while the army still wants feeding.
       let starving = false;
       if (p.grain <= 0) {
@@ -978,5 +1035,169 @@ export class Game {
   /** Fraction of the world's land a player holds. */
   landShare(p: Player): number {
     return p.tileCount / Math.max(1, this.world.landTiles);
+  }
+
+  /**
+   * Production fuels a slow automatic land grab: a realm's border creeps
+   * outward on its own until it runs into someone else's ground. Attacking is
+   * for taking ground that is already claimed.
+   */
+  private spread(p: Player, dt: number) {
+    const rate = Math.min(1.2, 0.08 + Math.max(0, p.grainProd) * 0.06);
+    p.spreadAcc += rate * dt;
+    if (p.spreadAcc < 1) return;
+    const frontier: number[] = [];
+    for (const t of p.tiles) {
+      for (const n of this.neighbors4(t)) {
+        if (this.owners[n] < 0 && this.isLand(n)) frontier.push(n);
+      }
+      if (frontier.length > 24) break;
+    }
+    if (!frontier.length) {
+      p.spreadAcc = 0;
+      return;
+    }
+    p.spreadAcc -= 1;
+    this.claim(frontier[(this.rng() * frontier.length) | 0], p.id);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Netcode                                                             */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Compact snapshot for a guest. Territory is run-length encoded, so a whole
+   * realm costs a few hundred numbers instead of one per tile.
+   */
+  snapshot(): string {
+    const runs = (tiles: number[]): number[] => {
+      const sorted = tiles.slice().sort((a, b) => a - b);
+      const out: number[] = [];
+      let i = 0;
+      while (i < sorted.length) {
+        const start = sorted[i];
+        let len = 1;
+        while (i + len < sorted.length && sorted[i + len] === start + len) len++;
+        out.push(start, len);
+        i += len;
+      }
+      return out;
+    };
+    const players = this.players.map((p) => ({
+      i: p.id,
+      n: p.name,
+      c: p.color,
+      a: p.alive ? 1 : 0,
+      b: p.isBot ? 1 : 0,
+      g: Math.round(p.gold),
+      gr: Math.round(p.grain),
+      tb: Math.round(p.timber),
+      or: Math.round(p.ore),
+      t: Math.round(p.troops),
+      s: Math.round(p.soldiers),
+      gp: +p.grainProd.toFixed(3),
+      ca: Math.round(this.capacity(p)),
+      st: p.starving ? 1 : 0,
+      r: [
+        +p.rates.grain.toFixed(3),
+        +p.rates.timber.toFixed(3),
+        +p.rates.ore.toFixed(3),
+        +p.rates.gold.toFixed(3),
+      ],
+      k: runs([...p.tiles]),
+    }));
+    const armies = this.armies.map((a) => ({
+      o: a.owner,
+      t: a.tile,
+      n: Math.round(a.troops),
+      g: a.target,
+      c: a.cutOff ? 1 : 0,
+    }));
+    const structs = [...this.structs.values()].map((st) => [
+      st.tile,
+      STRUCT_ORDER.indexOf(st.kind),
+      st.owner,
+      st.level,
+    ]);
+    return JSON.stringify({
+      v: 1,
+      tm: +this.time.toFixed(1),
+      ph: this.phase,
+      hm: this.human,
+      ms: this.messages.slice(-10),
+      p: players,
+      a: armies,
+      s: structs,
+    });
+  }
+
+  /** Guest side: become a display of the host's world. */
+  applySnapshot(text: string) {
+    const snap = JSON.parse(text);
+    this.time = snap.tm;
+    this.phase = snap.ph;
+    this.human = snap.hm ?? 0;
+    this.messages = snap.ms ?? [];
+    this.owners.fill(-1);
+    this.armies = [];
+    this.structs.clear();
+    for (const d of snap.p) {
+      const p = this.players[d.i] ?? this.addPlayer(d.n, d.c, !!d.b);
+      p.name = d.n;
+      p.color = d.c;
+      p.alive = !!d.a;
+      p.isBot = !!d.b;
+      p.gold = d.g;
+      p.grain = d.gr;
+      p.timber = d.tb;
+      p.ore = d.or;
+      p.troops = d.t;
+      p.soldiers = d.s;
+      p.grainProd = d.gp;
+      p.starving = !!d.st;
+      p.rates = { grain: d.r[0], timber: d.r[1], ore: d.r[2], gold: d.r[3] };
+      p.tiles = new Set<number>();
+      p.tileCount = 0;
+      p.castles = 0;
+      p.density = 0;
+      for (let i = 0; i < d.k.length; i += 2) {
+        const start = d.k[i];
+        const len = d.k[i + 1];
+        for (let t = start; t < start + len; t++) {
+          this.owners[t] = p.id;
+          p.tiles.add(t);
+          p.tileCount++;
+          p.density += DENSITY[this.world.terrain[t]];
+        }
+      }
+      for (let i = this.players.length; i <= d.i; i++) {
+        if (!this.players[i]) this.addPlayer("?", PALETTE[i % PALETTE.length], true);
+      }
+    }
+    for (const d of snap.a) {
+      this.armies.push({
+        id: 0,
+        owner: d.o,
+        troops: d.n,
+        tile: d.t,
+        target: d.g,
+        progress: 0,
+        taken: 0,
+        cutOff: !!d.c,
+        speed: 0,
+        supplyTimer: 0,
+        holding: false,
+        holdTimer: 0,
+      });
+    }
+    for (const d of snap.s) {
+      const kind = STRUCT_ORDER[d[1]] as StructureKind;
+      this.structs.set(d[0], { kind, owner: d[2], tile: d[0], level: d[3] });
+      if (kind === "castle") {
+        const owner = this.players[d[2]];
+        if (owner) owner.castles += d[3];
+      }
+    }
+    this.structDirty = true;
   }
 }
