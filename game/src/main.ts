@@ -833,6 +833,9 @@ window.setInterval(() => {
 function watchSync() {
   const bar = document.getElementById("netbar");
   if (!bar) return;
+  // The build stamp lives in this bar, which is created with the match; render
+  // it here so it appears even though version.json resolves earlier.
+  showBuild();
   let flag = document.getElementById("sync-flag");
   if (!flag) {
     flag = document.createElement("span");

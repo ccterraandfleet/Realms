@@ -3181,6 +3181,7 @@
   function watchSync() {
     const bar = document.getElementById("netbar");
     if (!bar) return;
+    showBuild();
     let flag = document.getElementById("sync-flag");
     if (!flag) {
       flag = document.createElement("span");
