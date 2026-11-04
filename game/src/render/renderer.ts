@@ -45,6 +45,14 @@ export class Renderer {
   private ownerCv: HTMLCanvasElement;
   private borderCv: HTMLCanvasElement;
   private g: Game;
+  /** Start-of-match highlight: a swirl over your land. */
+  private swirlTile = -1;
+  private swirlFrom = 0;
+
+  beginSwirl(tile: number, fromMs: number) {
+    this.swirlTile = tile;
+    this.swirlFrom = fromMs;
+  }
   /** Border tiles, rebuilt a few times a second: the standing lines. */
   private frontier: number[] = [];
   private frontierTimer = 0;
@@ -376,6 +384,39 @@ export class Renderer {
       const [sx, sy] = toScreen(s.tile);
       if (sx < -60 || sy < -60 || sx > this.canvas.width / dpr + 60 || sy > this.canvas.height / dpr + 60) continue;
       this.drawStructure(ctx, s, sx, sy, cam.scale);
+    }
+
+    // Start-of-match swirl: shows you where you are before the world moves.
+    const nowMs = Date.now();
+    if (this.swirlTile >= 0 && nowMs < this.swirlFrom + 5200) {
+      const [wx, wy] = toScreen(this.swirlTile);
+      const me = this.g.players[this.g.human];
+      const col = me?.color ?? "#e9ddb8";
+      const since = (nowMs - this.swirlFrom + 2200) / 1000;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let ring = 0; ring < 3; ring++) {
+        const phase = ((since * 0.55 + ring * 0.33) % 1 + 1) % 1;
+        const r = (6 + phase * 74) * Math.max(0.55, cam.scale * 0.5);
+        ctx.globalAlpha = (1 - phase) * 0.55;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1.5, cam.scale * 0.5 * (1 - phase));
+        ctx.beginPath();
+        ctx.arc(wx, wy, r, 0, Math.PI * 1.65);
+        ctx.stroke();
+      }
+      // A slow sweeping arm so it reads as a swirl rather than a pulse.
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(1.2, cam.scale * 0.22);
+      const arms = 3;
+      for (let i = 0; i < arms; i++) {
+        const a0 = since * 1.6 + (i * Math.PI * 2) / arms;
+        ctx.beginPath();
+        ctx.arc(wx, wy, 42 * Math.max(0.55, cam.scale * 0.5), a0, a0 + 0.9);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     // Hover / target marker.

@@ -370,11 +370,56 @@ el("new-world").addEventListener("click", () => {
 let lastHud = 0;
 let last = performance.now();
 
+/* ------------------------------------------------------------------ */
+/* Clock, not frames                                                   */
+/* ------------------------------------------------------------------ */
+
+const STEP = 0.1;
+let simAcc = 0;
+let lastWall = performance.now();
+let lastPostAt = 0;
+let posts = 0;
+let pollInFlight = false;
+
+/**
+ * Advance the world by real elapsed time.
+ *
+ * This used to be driven purely by requestAnimationFrame, which stops dead when
+ * the tab is not visible. A host with the game in the background therefore
+ * stopped publishing, the other player promoted itself after eight seconds of
+ * silence, and the match split into two worlds. Driving it from the clock means
+ * a worker timer can keep it running while the tab is hidden.
+ */
+function advance() {
+  const now = performance.now();
+  let dt = (now - lastWall) / 1000;
+  lastWall = now;
+  if (dt < 0) dt = 0;
+  if (dt > 2) dt = 2;
+  simAcc += dt;
+
+  const started = Date.now() >= playFrom;
+  let steps = 0;
+  while (simAcc >= STEP && steps < 24) {
+    if (!isGuest && started) game.tick(STEP);
+    simAcc -= STEP;
+    steps++;
+  }
+  if (simAcc > STEP * 24) simAcc = 0;
+
+  // Publish on the clock too, so a hidden host keeps serving the other player.
+  if (isHost && roomCode && started && now - lastPostAt > 700) {
+    lastPostAt = now;
+    posts++;
+    void net
+      .postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot(), posts % 8 === 0)
+      .catch(() => {});
+  }
+  updateCountdown(now);
+}
+
 function frame(now: number) {
-  const dt = Math.min(0.1, (now - last) / 1000);
-  last = now;
-  // The guest renders the host's world; only the host advances the simulation.
-  if (!isGuest) game.tick(dt);
+  advance();
   renderer.draw(cam, hover, buildKind, dpr);
   if (now - lastHud > 120) {
     lastHud = now;
@@ -383,6 +428,20 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// A worker timer is not throttled the way page timers are, so the world keeps
+// breathing while the host tab is in the background.
+try {
+  const src = "let t;onmessage=(e)=>{if(e.data==='go'){clearInterval(t);t=setInterval(()=>postMessage(1),100);}};";
+  const ticker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  ticker.onmessage = () => {
+    advance();
+    if (document.hidden) refreshHud();
+  };
+  ticker.postMessage("go");
+} catch {
+  window.setInterval(advance, 200);
+}
 
 /* ------------------------------------------------------------------ */
 /* Shared world                                                        */
@@ -489,6 +548,13 @@ async function boot() {
     break;
   }
 
+  playFrom = (choice.startedAt ?? Date.now()) + MATCH_DELAY_MS;
+  for (const st of game.structs.values()) {
+    if (st.owner === localPlayer && st.kind === "castle") {
+      renderer.beginSwirl(st.tile, playFrom);
+      break;
+    }
+  }
   showNetbar(
     isHost
       ? `Match <b>${roomCode}</b> — <button class="copy-link" id="copy-invite">Copy invite link</button>`
@@ -551,10 +617,16 @@ let lastChangeAt = Date.now();
 let lastPayload = "";
 let joinedAt = Date.now();
 let myName = "";
+/** Wall clock when the world starts moving; a short grace at match start. */
+let playFrom = 0;
+const MATCH_DELAY_MS = 4500;
+let countdownEl: HTMLElement | null = null;
 let myFaction: { name: string; color: string } | null = null;
 let promoted = false;
 
 function guestTick() {
+  if (pollInFlight) return;
+  pollInFlight = true;
   void net
     .getSnapshot(roomCode)
     .then((res) => {
@@ -574,7 +646,45 @@ function guestTick() {
     })
     .catch(() => {
       syncFailures++;
+    })
+    .finally(() => {
+      pollInFlight = false;
     });
+}
+
+/** Deliberate takeover, only ever on a click. */
+function becomeHost() {
+  if (isHost) return;
+  isHost = true;
+  isGuest = false;
+  localPlayer = 0;
+  const mine0 = game.players[0];
+  if (mine0 && myFaction) {
+    mine0.name = myFaction.name;
+    mine0.color = myFaction.color;
+  }
+  game.human = 0;
+  myName = myFaction?.name ?? myName;
+  document.getElementById("takeover")?.remove();
+  lastChangeAt = Date.now();
+  log("You took the world over. This match now runs from your side.");
+}
+
+function updateCountdown(_now: number) {
+  const left = playFrom - Date.now();
+  if (left <= 0) {
+    if (countdownEl) {
+      countdownEl.remove();
+      countdownEl = null;
+    }
+    return;
+  }
+  if (!countdownEl) {
+    countdownEl = document.createElement("div");
+    countdownEl.id = "countdown";
+    document.body.append(countdownEl);
+  }
+  countdownEl.textContent = String(Math.ceil(left / 1000));
 }
 
 /** Say out loud whether this client is actually in the host's world. */
@@ -592,30 +702,19 @@ function watchSync() {
     flag.className = "sync-ok";
     return;
   }
-  // If the match's original host never shows up (their tab closed, or the
-  // match outlived them), take the world over instead of sitting on a dead
-  // code showing our own private copy of the map.
-  if (!promoted && Date.now() - lastChangeAt > 8000 && Date.now() - joinedAt > 8000) {
-    promoted = true;
-    isHost = true;
-    isGuest = false;
-    // Taking the world over means taking the host's slot, so the two of us
-    // cannot both sit on the guest slot with the same name.
-    localPlayer = 0;
-    const mine0 = game.players[0];
-    if (mine0 && myFaction) {
-      mine0.name = myFaction.name;
-      mine0.color = myFaction.color;
-    }
-    game.human = 0;
-    window.setInterval(hostTick, 250);
-    log("No host publishing in this match. You are hosting it now.");
-    const banner = document.getElementById("netbar");
-    if (banner) {
-      const note = document.createElement("span");
-      note.className = "sync-ok";
-      note.textContent = " · hosting (took over)";
-      banner.append(note);
+  // Never take the world over by ourselves: two automatic hosts is exactly how
+  // a match splits into two maps. Offer it instead and let the player decide.
+  const silentFor = Date.now() - lastChangeAt;
+  if (silentFor > 30000) {
+    flag.textContent = "· NOT SYNCED — host silent";
+    flag.className = "sync-bad";
+    if (!document.getElementById("takeover")) {
+      const btn = document.createElement("button");
+      btn.id = "takeover";
+      btn.className = "copy-link";
+      btn.textContent = "Take over world";
+      btn.addEventListener("click", () => becomeHost());
+      bar.append(btn);
     }
     return;
   }

@@ -50,6 +50,13 @@ Deno.serve(async (req) => {
 
   const live = async (): Promise<Rec | null> => {
     const rows: Rec[] = (await Net.filter({ kind: "room" }, "-created_date", 25)) ?? [];
+    // A room whose host closed still exists. Judge liveness by the newest
+    // snapshot in it, so a dead match is not offered as a live one.
+    const snapRows: any[] = (await Net.filter({ kind: "snap" }, "-created_date", 40)) ?? [];
+    const lastSnap = new Map<string, number>();
+    for (const r of snapRows) {
+      if (!lastSnap.has(r.code)) lastSnap.set(r.code, new Date(r.created_date).getTime());
+    }
     const now = Date.now();
     const usable = rows
       .map((r) => {
@@ -63,7 +70,11 @@ Deno.serve(async (req) => {
       })
       .filter(({ r, p }) => {
         const started = p.startAt ?? new Date(r.created_date).getTime();
-        return now - started < JOIN_WINDOW && now - started > -60000;
+        if (now - started >= JOIN_WINDOW || now - started <= -60000) return false;
+        const born = new Date(r.created_date).getTime();
+        // Freshly opened rooms have not published yet; older ones must be pumping.
+        if (now - born < 30000) return true;
+        return (lastSnap.get(r.code) ?? 0) > now - 20000;
       });
     if (!usable.length) return null;
     // Earliest wins, so simultaneous creators converge on one room.

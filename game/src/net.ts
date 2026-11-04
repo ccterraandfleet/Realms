@@ -64,8 +64,8 @@ export const postIntent = (
 export const pollIntents = (code: string, since: number) =>
   call<{ intents: RemoteIntent[] }>({ action: "poll", code, since });
 
-export const postSnapshot = (code: string, tick: number, state: string) =>
-  call<{ ok: boolean }>({ action: "snap", code, tick, state });
+export const postSnapshot = (code: string, tick: number, state: string, prune = false) =>
+  call<{ ok: boolean }>({ action: "snap", code, tick, state, prune });
 
 export const getSnapshot = (code: string) =>
   call<{ state: string | null; tick?: number }>({ action: "view", code });

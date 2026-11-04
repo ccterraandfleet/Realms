@@ -21,6 +21,8 @@ export interface LobbyResult {
   faction: Faction;
   code: string;
   host: boolean;
+  /** Server-ish time this match began, used for the start countdown. */
+  startedAt: number;
 }
 
 export interface LobbyOptions {
@@ -145,11 +147,11 @@ export function openLobby(opts: LobbyOptions): Promise<LobbyResult> {
       faction.name = nameInput.value.trim() || "Warden";
     });
 
-    const finish = (code: string, host: boolean) => {
+    const finish = (code: string, host: boolean, startedAt = Date.now()) => {
       faction.name = (nameInput.value.trim() || "Warden").slice(0, 18);
       saveFaction(faction);
       wrap.remove();
-      resolve({ faction, code, host });
+      resolve({ faction, code, host, startedAt });
     };
 
     const setLine = (code: string, sub: string) => {
@@ -174,7 +176,7 @@ export function openLobby(opts: LobbyOptions): Promise<LobbyResult> {
     /* ---------------- decide what this visitor sees ---------------- */
     if (opts.inviteCode) {
       setLine(opts.inviteCode, "you were invited to this match");
-      addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false));
+      addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false, Date.now() - 60000));
       paint();
       nameInput.focus();
       nameInput.select();
@@ -204,7 +206,7 @@ export function openLobby(opts: LobbyOptions): Promise<LobbyResult> {
           return;
         }
         setLine(room.code, `live · started ${ago(room.ageMs ?? 0)}`);
-        addButton("JOIN THIS MATCH", true, () => finish(room.code, Boolean(room.host)));
+        addButton("JOIN THIS MATCH", true, () => finish(room.code, Boolean(room.host), room.startedAt ?? Date.now()));
         const b = addButton("START A NEW MATCH", false, () => {
           busy(b);
           void net

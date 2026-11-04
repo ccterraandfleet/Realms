@@ -1265,6 +1265,9 @@
   var Renderer = class {
     constructor(canvas2, game2) {
       this.canvas = canvas2;
+      /** Start-of-match highlight: a swirl over your land. */
+      this.swirlTile = -1;
+      this.swirlFrom = 0;
       /** Border tiles, rebuilt a few times a second: the standing lines. */
       this.frontier = [];
       this.frontierTimer = 0;
@@ -1281,6 +1284,10 @@
       this.borderCv = mk();
       this.paintTerrain();
       this.repaintAll();
+    }
+    beginSwirl(tile, fromMs) {
+      this.swirlTile = tile;
+      this.swirlFrom = fromMs;
     }
     /* ---------------------------------------------------------------- */
     /* Terrain                                                          */
@@ -1553,6 +1560,36 @@
         if (sx < -60 || sy < -60 || sx > this.canvas.width / dpr2 + 60 || sy > this.canvas.height / dpr2 + 60) continue;
         this.drawStructure(ctx, s, sx, sy, cam2.scale);
       }
+      const nowMs = Date.now();
+      if (this.swirlTile >= 0 && nowMs < this.swirlFrom + 5200) {
+        const [wx, wy] = toScreen(this.swirlTile);
+        const me = this.g.players[this.g.human];
+        const col = me?.color ?? "#e9ddb8";
+        const since = (nowMs - this.swirlFrom + 2200) / 1e3;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        for (let ring = 0; ring < 3; ring++) {
+          const phase = ((since * 0.55 + ring * 0.33) % 1 + 1) % 1;
+          const r = (6 + phase * 74) * Math.max(0.55, cam2.scale * 0.5);
+          ctx.globalAlpha = (1 - phase) * 0.55;
+          ctx.strokeStyle = col;
+          ctx.lineWidth = Math.max(1.5, cam2.scale * 0.5 * (1 - phase));
+          ctx.beginPath();
+          ctx.arc(wx, wy, r, 0, Math.PI * 1.65);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = col;
+        ctx.lineWidth = Math.max(1.2, cam2.scale * 0.22);
+        const arms = 3;
+        for (let i = 0; i < arms; i++) {
+          const a0 = since * 1.6 + i * Math.PI * 2 / arms;
+          ctx.beginPath();
+          ctx.arc(wx, wy, 42 * Math.max(0.55, cam2.scale * 0.5), a0, a0 + 0.9);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       if (hover2 >= 0) {
         const [hx, hy] = toScreen(hover2);
         const me = this.g.players[this.g.human];
@@ -1743,7 +1780,7 @@
   }
   var postIntent = (code, player, tick, data) => call({ action: "post", code, player, tick, data });
   var pollIntents = (code, since) => call({ action: "poll", code, since });
-  var postSnapshot = (code, tick, state) => call({ action: "snap", code, tick, state });
+  var postSnapshot = (code, tick, state, prune = false) => call({ action: "snap", code, tick, state, prune });
   var getSnapshot = (code) => call({ action: "view", code });
   var LOBBY = "https://lyra-01a6009e.base44.app/functions/realmsLobby";
   async function lobbyCall(payload) {
@@ -2000,11 +2037,11 @@
       nameInput.addEventListener("input", () => {
         faction.name = nameInput.value.trim() || "Warden";
       });
-      const finish = (code, host) => {
+      const finish = (code, host, startedAt = Date.now()) => {
         faction.name = (nameInput.value.trim() || "Warden").slice(0, 18);
         saveFaction(faction);
         wrap.remove();
-        resolve({ faction, code, host });
+        resolve({ faction, code, host, startedAt });
       };
       const setLine = (code, sub) => {
         matchLine.innerHTML = "";
@@ -2024,7 +2061,7 @@
       };
       if (opts.inviteCode) {
         setLine(opts.inviteCode, "you were invited to this match");
-        addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false));
+        addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false, Date.now() - 6e4));
         paint();
         nameInput.focus();
         nameInput.select();
@@ -2047,7 +2084,7 @@
           return;
         }
         setLine(room.code, `live \xB7 started ${ago(room.ageMs ?? 0)}`);
-        addButton("JOIN THIS MATCH", true, () => finish(room.code, Boolean(room.host)));
+        addButton("JOIN THIS MATCH", true, () => finish(room.code, Boolean(room.host), room.startedAt ?? Date.now()));
         const b = addButton("START A NEW MATCH", false, () => {
           busy(b);
           void createMatch(opts.seed, opts.client).then((m) => finish(m.code, true)).catch(() => {
@@ -2359,10 +2396,37 @@
   });
   var lastHud = 0;
   var last = performance.now();
+  var STEP = 0.1;
+  var simAcc = 0;
+  var lastWall = performance.now();
+  var lastPostAt = 0;
+  var posts = 0;
+  var pollInFlight = false;
+  function advance() {
+    const now = performance.now();
+    let dt = (now - lastWall) / 1e3;
+    lastWall = now;
+    if (dt < 0) dt = 0;
+    if (dt > 2) dt = 2;
+    simAcc += dt;
+    const started = Date.now() >= playFrom;
+    let steps = 0;
+    while (simAcc >= STEP && steps < 24) {
+      if (!isGuest && started) game.tick(STEP);
+      simAcc -= STEP;
+      steps++;
+    }
+    if (simAcc > STEP * 24) simAcc = 0;
+    if (isHost && roomCode && started && now - lastPostAt > 700) {
+      lastPostAt = now;
+      posts++;
+      void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot(), posts % 8 === 0).catch(() => {
+      });
+    }
+    updateCountdown(now);
+  }
   function frame(now) {
-    const dt = Math.min(0.1, (now - last) / 1e3);
-    last = now;
-    if (!isGuest) game.tick(dt);
+    advance();
     renderer.draw(cam, hover, buildKind, dpr);
     if (now - lastHud > 120) {
       lastHud = now;
@@ -2371,6 +2435,17 @@
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  try {
+    const src = "let t;onmessage=(e)=>{if(e.data==='go'){clearInterval(t);t=setInterval(()=>postMessage(1),100);}};";
+    const ticker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    ticker.onmessage = () => {
+      advance();
+      if (document.hidden) refreshHud();
+    };
+    ticker.postMessage("go");
+  } catch {
+    window.setInterval(advance, 200);
+  }
   async function copyText(text, target, done = "Copied") {
     let ok = false;
     try {
@@ -2458,6 +2533,13 @@
       clampCamera();
       break;
     }
+    playFrom = (choice.startedAt ?? Date.now()) + MATCH_DELAY_MS;
+    for (const st of game.structs.values()) {
+      if (st.owner === localPlayer && st.kind === "castle") {
+        renderer.beginSwirl(st.tile, playFrom);
+        break;
+      }
+    }
     showNetbar(
       isHost ? `Match <b>${roomCode}</b> \u2014 <button class="copy-link" id="copy-invite">Copy invite link</button>` : `Match <b>${roomCode}</b> \u2014 joined as ${faction.name}`
     );
@@ -2512,9 +2594,13 @@
   var lastPayload = "";
   var joinedAt = Date.now();
   var myName = "";
+  var playFrom = 0;
+  var MATCH_DELAY_MS = 4500;
+  var countdownEl = null;
   var myFaction = null;
-  var promoted = false;
   function guestTick() {
+    if (pollInFlight) return;
+    pollInFlight = true;
     void getSnapshot(roomCode).then((res) => {
       if (!res.state) return;
       if (res.state !== lastPayload) {
@@ -2527,7 +2613,41 @@
       lastSnapshotAt = Date.now();
     }).catch(() => {
       syncFailures++;
+    }).finally(() => {
+      pollInFlight = false;
     });
+  }
+  function becomeHost() {
+    if (isHost) return;
+    isHost = true;
+    isGuest = false;
+    localPlayer = 0;
+    const mine0 = game.players[0];
+    if (mine0 && myFaction) {
+      mine0.name = myFaction.name;
+      mine0.color = myFaction.color;
+    }
+    game.human = 0;
+    myName = myFaction?.name ?? myName;
+    document.getElementById("takeover")?.remove();
+    lastChangeAt = Date.now();
+    log("You took the world over. This match now runs from your side.");
+  }
+  function updateCountdown(_now) {
+    const left = playFrom - Date.now();
+    if (left <= 0) {
+      if (countdownEl) {
+        countdownEl.remove();
+        countdownEl = null;
+      }
+      return;
+    }
+    if (!countdownEl) {
+      countdownEl = document.createElement("div");
+      countdownEl.id = "countdown";
+      document.body.append(countdownEl);
+    }
+    countdownEl.textContent = String(Math.ceil(left / 1e3));
   }
   function watchSync() {
     const bar = document.getElementById("netbar");
@@ -2543,25 +2663,17 @@
       flag.className = "sync-ok";
       return;
     }
-    if (!promoted && Date.now() - lastChangeAt > 8e3 && Date.now() - joinedAt > 8e3) {
-      promoted = true;
-      isHost = true;
-      isGuest = false;
-      localPlayer = 0;
-      const mine0 = game.players[0];
-      if (mine0 && myFaction) {
-        mine0.name = myFaction.name;
-        mine0.color = myFaction.color;
-      }
-      game.human = 0;
-      window.setInterval(hostTick, 250);
-      log("No host publishing in this match. You are hosting it now.");
-      const banner = document.getElementById("netbar");
-      if (banner) {
-        const note = document.createElement("span");
-        note.className = "sync-ok";
-        note.textContent = " \xB7 hosting (took over)";
-        banner.append(note);
+    const silentFor = Date.now() - lastChangeAt;
+    if (silentFor > 3e4) {
+      flag.textContent = "\xB7 NOT SYNCED \u2014 host silent";
+      flag.className = "sync-bad";
+      if (!document.getElementById("takeover")) {
+        const btn = document.createElement("button");
+        btn.id = "takeover";
+        btn.className = "copy-link";
+        btn.textContent = "Take over world";
+        btn.addEventListener("click", () => becomeHost());
+        bar.append(btn);
       }
       return;
     }
