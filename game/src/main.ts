@@ -446,49 +446,19 @@ async function boot() {
     clientId = `c${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  let matchCode = roomParam;
-  let host = false;
-  let matchReady = true;
-  if (roomParam) {
-    host = false;
-    try {
-      const found = await net.matchByCode(roomParam);
-      if (found.room) matchCode = found.room.code;
-    } catch {
-      /* a stale code still works: the relay keys on the code alone */
-    }
-  } else {
-    try {
-      const opened = await net.openMatch(seed, clientId);
-      matchCode = opened.code;
-      host = opened.host;
-      // Two players can open at the same instant. Settle on the earliest match
-      // so both of us end up in the same world rather than two of our own.
-      await new Promise((r) => window.setTimeout(r, 900));
-      const cur = await net.currentMatch(clientId);
-      if (cur.room && cur.room.code !== matchCode) {
-        matchCode = cur.room.code;
-        host = cur.room.host;
-      }
-    } catch (err) {
-      matchReady = false;
-      console.warn("matchmaking failed", err);
-    }
-  }
+  // The lobby is the front door: it decides whether we start a match, join the
+  // live one, or accept an invite. Nothing is created before the player says so.
+  const choice = await openLobby({ seed, client: clientId, inviteCode: roomParam });
 
-  const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
-
-  const faction = await openLobby({
-    roomCode: matchCode,
-    startAt: Date.now(),
-    role: host ? "host" : "guest",
-    link,
-  });
-
+  const faction = choice.faction;
+  const matchCode = choice.code;
+  const host = choice.host;
   isHost = host;
   isGuest = !host;
   roomCode = matchCode;
   localPlayer = isHost ? 0 : 1;
+
+  const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
 
   game.startMultiplayer(2);
   game.startMultiplayer(2);

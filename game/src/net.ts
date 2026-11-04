@@ -90,11 +90,17 @@ export interface MatchInfo {
   code: string;
   seed?: number;
   host: boolean;
+  startedAt?: number;
+  ageMs?: number;
 }
 
 /** Open a match, or adopt the live one if somebody opened it first. */
 export const openMatch = (seed: number, client: string) =>
   lobbyCall<MatchInfo>({ action: "open", seed, client });
+
+/** Always start a fresh match, even if one is already running. */
+export const createMatch = (seed: number, client: string) =>
+  lobbyCall<MatchInfo>({ action: "create", seed, client });
 
 export const currentMatch = (client: string) =>
   lobbyCall<{ room: MatchInfo | null }>({ action: "current", client });

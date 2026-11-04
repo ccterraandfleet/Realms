@@ -1755,9 +1755,8 @@
     if (!res.ok) throw new Error(`lobby ${res.status}`);
     return await res.json();
   }
-  var openMatch = (seed2, client) => lobbyCall({ action: "open", seed: seed2, client });
+  var createMatch = (seed2, client) => lobbyCall({ action: "create", seed: seed2, client });
   var currentMatch = (client) => lobbyCall({ action: "current", client });
-  var matchByCode = (code) => lobbyCall({ action: "byCode", code });
 
   // src/faction.ts
   var COLORS = [
@@ -1909,6 +1908,12 @@
     if (text) n.textContent = text;
     return n;
   }
+  function ago(ms) {
+    const s = Math.max(0, Math.round(ms / 1e3));
+    if (s < 60) return `${s}s ago`;
+    const m = Math.round(s / 60);
+    return `${m}m ago`;
+  }
   function openLobby(opts) {
     return new Promise((resolve) => {
       const faction = loadFaction();
@@ -1916,13 +1921,13 @@
       const card = elt("div", "lobby-card");
       const head = elt("div", "lobby-head");
       head.append(elt("h1", "", "REALMS"));
-      head.append(elt("p", "lobby-sub", "Build your banner, then take the field."));
+      head.append(elt("p", "lobby-sub", "Build your banner, then choose a field."));
       card.append(head);
       const matchBox = elt("div", "lobby-match");
-      const codeEl = elt("div", "lobby-code", opts.roomCode);
-      const roleEl = elt("div", "lobby-role", opts.role === "host" ? "you host this match" : "joining a friend's match");
-      const countEl = elt("div", "lobby-count", "");
-      matchBox.append(elt("div", "lobby-label", "MATCH"), codeEl, roleEl, countEl);
+      const matchLabel = elt("div", "lobby-label", "MATCH");
+      const matchLine = elt("div", "lobby-matchline");
+      const matchActions = elt("div", "lobby-actions");
+      matchBox.append(matchLabel, matchLine, matchActions);
       card.append(matchBox);
       const banner = elt("div", "lobby-banner");
       const big = elt("canvas", "lobby-badge");
@@ -1980,46 +1985,7 @@
       banner.append(big, right);
       card.append(banner);
       const foot = elt("div", "lobby-foot");
-      const linkBox = elt("div", "lobby-link");
-      linkBox.append(elt("span", "lobby-label", "INVITE LINK"));
-      const linkText = elt("button", "lobby-copy", opts.link);
-      linkText.title = "Click to copy the invite link";
-      linkText.addEventListener("click", async () => {
-        const before = linkText.textContent ?? "";
-        let ok = false;
-        try {
-          if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(opts.link);
-            ok = true;
-          }
-        } catch {
-          ok = false;
-        }
-        if (!ok) {
-          try {
-            const ta = document.createElement("textarea");
-            ta.value = opts.link;
-            ta.style.position = "fixed";
-            ta.style.opacity = "0";
-            document.body.appendChild(ta);
-            ta.select();
-            ok = document.execCommand("copy");
-            ta.remove();
-          } catch {
-            ok = false;
-          }
-        }
-        linkText.textContent = ok ? "Invite link copied" : "Press Ctrl+C to copy";
-        linkText.classList.add("copied");
-        window.setTimeout(() => {
-          linkText.textContent = before;
-          linkText.classList.remove("copied");
-        }, 1800);
-      });
-      linkBox.append(linkText);
-      foot.append(linkBox);
-      const go = elt("button", "lobby-go", "TAKE THE FIELD");
-      foot.append(go);
+      foot.append(elt("div", "lobby-hint", "Your banner is saved on this device."));
       card.append(foot);
       wrap.append(card);
       document.body.append(wrap);
@@ -2031,30 +1997,71 @@
         shields.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", i === faction.shield));
         emblems.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", i === faction.emblem));
       };
-      const tick = () => {
-        const left = Math.max(0, opts.startAt - Date.now());
-        if (left <= 0) {
-          countEl.textContent = "in progress";
-          if (!wrap.isConnected) return;
-        } else {
-          const s = Math.ceil(left / 1e3);
-          countEl.textContent = `starts in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-        }
-        if (wrap.isConnected) requestAnimationFrame(tick);
-      };
       nameInput.addEventListener("input", () => {
         faction.name = nameInput.value.trim() || "Warden";
       });
-      go.addEventListener("click", () => {
+      const finish = (code, host) => {
         faction.name = (nameInput.value.trim() || "Warden").slice(0, 18);
         saveFaction(faction);
         wrap.remove();
-        resolve(faction);
-      });
-      const preview = document.getElementById("you");
-      if (preview) preview.innerHTML = `<img alt="" src="${badgeDataUrl(faction, 48)}" />`;
+        resolve({ faction, code, host });
+      };
+      const setLine = (code, sub) => {
+        matchLine.innerHTML = "";
+        matchLine.append(elt("b", "lobby-code", code));
+        matchLine.append(elt("span", "lobby-sub", sub));
+      };
+      const addButton = (label, primary, onClick) => {
+        const b = elt("button", primary ? "lobby-go" : "lobby-alt", label);
+        b.addEventListener("click", onClick);
+        matchActions.append(b);
+        return b;
+      };
+      const busy = (b) => {
+        b.disabled = true;
+        b.dataset.label = b.textContent ?? "";
+        b.textContent = "starting\u2026";
+      };
+      if (opts.inviteCode) {
+        setLine(opts.inviteCode, "you were invited to this match");
+        addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false));
+        paint();
+        nameInput.focus();
+        nameInput.select();
+        return;
+      }
+      matchLine.append(elt("span", "lobby-sub", "looking for a live match\u2026"));
       paint();
-      tick();
+      void currentMatch(opts.client).then((res) => {
+        matchActions.innerHTML = "";
+        const room = res.room;
+        if (!room) {
+          setLine("\u2014 none \u2014", "no match running right now");
+          const b2 = addButton("START A MATCH", true, () => {
+            busy(b2);
+            void createMatch(opts.seed, opts.client).then((m) => finish(m.code, true)).catch(() => {
+              b2.disabled = false;
+              b2.textContent = "could not start \u2014 try again";
+            });
+          });
+          return;
+        }
+        setLine(room.code, `live \xB7 started ${ago(room.ageMs ?? 0)}`);
+        addButton("JOIN THIS MATCH", true, () => finish(room.code, Boolean(room.host)));
+        const b = addButton("START A NEW MATCH", false, () => {
+          busy(b);
+          void createMatch(opts.seed, opts.client).then((m) => finish(m.code, true)).catch(() => {
+            b.disabled = false;
+            b.textContent = "could not start \u2014 try again";
+          });
+        });
+      }).catch(() => {
+        matchActions.innerHTML = "";
+        setLine("\u2014 offline \u2014", "cannot reach matchmaking");
+        const b = addButton("TRY AGAIN", true, () => location.reload());
+        b.dataset.label = "TRY AGAIN";
+      });
+      paint();
       nameInput.focus();
       nameInput.select();
     });
@@ -2416,43 +2423,15 @@
     } catch {
       clientId = `c${Math.random().toString(36).slice(2, 10)}`;
     }
-    let matchCode = roomParam;
-    let host = false;
-    let matchReady = true;
-    if (roomParam) {
-      host = false;
-      try {
-        const found = await matchByCode(roomParam);
-        if (found.room) matchCode = found.room.code;
-      } catch {
-      }
-    } else {
-      try {
-        const opened = await openMatch(seed, clientId);
-        matchCode = opened.code;
-        host = opened.host;
-        await new Promise((r) => window.setTimeout(r, 900));
-        const cur = await currentMatch(clientId);
-        if (cur.room && cur.room.code !== matchCode) {
-          matchCode = cur.room.code;
-          host = cur.room.host;
-        }
-      } catch (err) {
-        matchReady = false;
-        console.warn("matchmaking failed", err);
-      }
-    }
-    const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
-    const faction = await openLobby({
-      roomCode: matchCode,
-      startAt: Date.now(),
-      role: host ? "host" : "guest",
-      link
-    });
+    const choice = await openLobby({ seed, client: clientId, inviteCode: roomParam });
+    const faction = choice.faction;
+    const matchCode = choice.code;
+    const host = choice.host;
     isHost = host;
     isGuest = !host;
     roomCode = matchCode;
     localPlayer = isHost ? 0 : 1;
+    const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
     game.startMultiplayer(2);
     game.startMultiplayer(2);
     game.human = localPlayer;

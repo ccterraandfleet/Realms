@@ -94,6 +94,21 @@ Deno.serve(async (req) => {
     return json({ code, seed, host: true, created: true });
   }
 
+  // Explicitly start a fresh match, even if one is already live.
+  if (action === "create") {
+    const seed = Number(body.seed ?? 7) || 7;
+    const client = String(body.client ?? "").slice(0, 40);
+    const code = makeCode();
+    await Net.create({
+      code,
+      kind: "room",
+      player: 0,
+      tick: 0,
+      payload: JSON.stringify({ seed, startAt: Date.now(), hostClient: client }),
+    });
+    return json({ code, seed, host: true, created: true });
+  }
+
   if (action === "current") {
     const client = String(body.client ?? "").slice(0, 40);
     const room = await live();
