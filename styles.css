@@ -325,3 +325,60 @@ button.primary:hover {
 }
 #build-bar .cost i { font-style: normal; margin-right: 3px; font-size: 9px; }
 #build-bar button.active { border-color: #e2b93f; }
+
+/* ---- your banner, pinned in the header ---- */
+.you { display: inline-flex; align-items: center; gap: 8px; margin-left: 14px; }
+.you img { width: 26px; height: 26px; display: block; }
+.you-name { font-size: 12px; letter-spacing: 0.08em; color: #efe6cf; text-transform: uppercase; }
+.you-tag {
+  font-size: 9px; letter-spacing: 0.16em; font-weight: 700; color: #14100a;
+  padding: 2px 6px; border-radius: 2px;
+}
+
+/* ---- pre-match lobby ---- */
+.lobby {
+  position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 90% at 50% 0%, #161b15 0%, #0a0c08 70%);
+  padding: 24px; overflow: auto;
+}
+.lobby-card {
+  width: min(760px, 100%); border: 1px solid #2e3a2c; background: linear-gradient(180deg, #141a13, #0d1109);
+  box-shadow: 0 30px 80px rgba(0,0,0,0.6); padding: 26px 28px 22px;
+}
+.lobby-head h1 { margin: 0; font-size: 30px; letter-spacing: 0.34em; color: #e9ddb8; font-weight: 600; }
+.lobby-sub { margin: 6px 0 18px; color: #8b9682; font-size: 12px; letter-spacing: 0.05em; }
+.lobby-match {
+  display: grid; grid-template-columns: 60px 1fr; gap: 2px 12px; align-items: center;
+  border: 1px solid #2b3527; background: #10150e; padding: 12px 14px; margin-bottom: 18px;
+}
+.lobby-label { font-size: 9px; letter-spacing: 0.18em; color: #6f7c68; }
+.lobby-code { font-size: 22px; letter-spacing: 0.28em; color: #e9ddb8; font-family: ui-monospace, monospace; }
+.lobby-role { font-size: 10px; color: #7d8a74; grid-column: 2; }
+.lobby-count { font-size: 10px; color: #c9a85e; grid-column: 2; letter-spacing: 0.08em; }
+.lobby-banner { display: grid; grid-template-columns: 160px 1fr; gap: 22px; align-items: start; }
+.lobby-badge { width: 160px; height: 160px; display: block; }
+.lobby-fields { display: flex; flex-direction: column; gap: 12px; }
+.lobby-field { display: flex; flex-direction: column; gap: 6px; }
+.lobby-field > span { font-size: 9px; letter-spacing: 0.18em; color: #6f7c68; }
+.lobby-input {
+  background: #0c100a; border: 1px solid #33402e; color: #e9ddb8; padding: 9px 11px;
+  font-size: 14px; letter-spacing: 0.06em; font-family: inherit; outline: none;
+}
+.lobby-input:focus { border-color: #7f8f5d; }
+.swatches { display: flex; gap: 7px; }
+.swatch { width: 24px; height: 24px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.swatch.on { border-color: #efe6cf; box-shadow: 0 0 0 2px #141a13 inset; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  background: #0c100a; border: 1px solid #33402e; color: #9aa892; font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 10px; cursor: pointer; font-family: inherit;
+}
+.chip.on { border-color: #c9a85e; color: #e9ddb8; background: #1a2015; }
+.lobby-foot { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 22px; }
+.lobby-link { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.lobby-link code { font-size: 10px; color: #7d8a74; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-go {
+  background: #c9a85e; color: #14100a; border: 0; padding: 12px 22px; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.16em; cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.lobby-go:hover { background: #dcc077; }
