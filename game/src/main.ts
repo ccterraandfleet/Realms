@@ -727,7 +727,15 @@ function guestTick() {
         lastPayload = res.state;
         lastChangeAt = Date.now();
       }
-      game.applySnapshot(res.state);
+      try {
+        game.applySnapshot(res.state);
+        snapshotBroken = false;
+      } catch {
+        // Old bundle, new snapshot format: say so instead of sitting frozen.
+        snapshotBroken = true;
+        lastChangeAt = Date.now() - 40000;
+        return;
+      }
       // Find ourselves by the name the host actually recorded, so a takeover or
       // a swapped slot can never label us as the other player.
       const slot = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
@@ -777,6 +785,50 @@ function updateCountdown(_now: number) {
   countdownEl.textContent = String(Math.ceil(left / 1000));
 }
 
+let myBuild = "";
+let newerBuild = "";
+let snapshotBroken = false;
+
+/** The build this page is running, and whether a newer one has been published. */
+function showBuild() {
+  let el = document.getElementById("build-stamp");
+  if (!el) {
+    const bar = document.getElementById("netbar");
+    if (!bar) return;
+    el = document.createElement("span");
+    el.id = "build-stamp";
+    el.style.opacity = "0.55";
+    el.style.fontSize = "11px";
+    bar.append(el);
+  }
+  el.textContent = newerBuild
+    ? ` · build ${myBuild} — NEW BUILD, reload`
+    : myBuild ? ` · build ${myBuild}` : "";
+  el.className = newerBuild ? "sync-bad" : "";
+}
+
+void fetch(`dist/version.json?t=${Date.now()}`, { cache: "no-store" })
+  .then((r) => r.json())
+  .then((v) => {
+    myBuild = String((v as { build?: string }).build ?? "");
+    showBuild();
+  })
+  .catch(() => {});
+// A tab left open across a deploy must be told, not silently left behind on a
+// build that can no longer read the other player's snapshots.
+window.setInterval(() => {
+  void fetch(`dist/version.json?t=${Date.now()}`, { cache: "no-store" })
+    .then((r) => r.json())
+    .then((v) => {
+      const b = String((v as { build?: string }).build ?? "");
+      if (myBuild && b && b !== myBuild) {
+        newerBuild = b;
+        showBuild();
+      }
+    })
+    .catch(() => {});
+}, 60000);
+
 /** Say out loud whether this client is actually in the host's world. */
 function watchSync() {
   const bar = document.getElementById("netbar");
@@ -786,6 +838,11 @@ function watchSync() {
     flag = document.createElement("span");
     flag.id = "sync-flag";
     bar.append(flag);
+  }
+  if (snapshotBroken || newerBuild) {
+    flag.textContent = "· RELOAD — your build is out of date";
+    flag.className = "sync-bad";
+    return;
   }
   if (isHost) {
     flag.textContent = "· hosting";
