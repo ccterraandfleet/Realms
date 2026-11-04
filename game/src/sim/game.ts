@@ -586,8 +586,66 @@ export class Game {
    * Click a point, and an army launches toward it and pushes inward from
    * there. Bigger detachments move faster and hit harder.
    */
+  /** True once another living realm touches our ground. */
+  bordersRival(p: Player): boolean {
+    for (const t of p.tiles) {
+      for (const n of this.neighbors4(t)) {
+        const o = this.owners[n];
+        if (o >= 0 && o !== p.id && this.players[o] && this.players[o].alive) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * OpenFront-style claim. Instead of one column marching in a line, the whole
+   * border sweeps toward the point you clicked. Every tile costs soldiers, so
+   * the size of the sweep is set by how much of the host you commit.
+   */
+  claimToward(p: Player, target: number, ratio: number): boolean {
+    if (target < 0 || !this.isLand(target)) return false;
+    const share = Math.max(0.05, Math.min(1, ratio));
+    const budget = Math.max(24, p.troops * share);
+    const queue: number[] = [];
+    const seen = new Set<number>();
+    for (const t of p.tiles) {
+      for (const n of this.neighbors4(t)) {
+        if (!this.isLand(n) || this.owners[n] !== -1 || seen.has(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+    if (!queue.length) return false;
+    // Closest to the click first, so the sweep goes where the player pointed.
+    queue.sort((a, b) => this.tileDistance(a, target) - this.tileDistance(b, target));
+    const COST = 18;
+    let spent = 0;
+    let claimed = 0;
+    while (queue.length) {
+      const t = queue.shift() as number;
+      if (this.owners[t] !== -1 || !this.isLand(t)) continue;
+      if (spent + COST > budget) break;
+      this.capture(t, p.id);
+      spent += COST;
+      claimed++;
+      for (const n of this.neighbors4(t)) {
+        if (!this.isLand(n) || this.owners[n] !== -1 || seen.has(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+    if (!claimed) return false;
+    p.troops = Math.max(0, p.troops - spent);
+    this.refreshRates(p);
+    return true;
+  }
+
   orderArmy(p: Player, target: number, ratio: number): boolean {
     if (this.phase !== "playing" || !p.alive) return false;
+    // Open ground is claimed the way OpenFront does it: the border sweeps
+    // outward toward the click. Once another realm shares a border, land stops
+    // being free and the war goes onto columns instead.
+    if (!this.bordersRival(p)) return this.claimToward(p, target, ratio);
     if (!this.canAttack(p, target)) return false;
     const share = Math.max(0.05, Math.min(1, ratio));
     const send = Math.floor(p.troops * share);

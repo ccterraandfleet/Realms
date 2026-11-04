@@ -32,6 +32,23 @@ export interface RemoteIntent {
   data: { kind: string; [key: string]: unknown };
 }
 
+/**
+ * Match code for a given moment. Matches snap to the minute, so anyone loading
+ * in the same minute computes the same code and lands in the same match. The
+ * shared link carries the code, which pins the exact match regardless of when
+ * your friend clicks it.
+ */
+export function minuteCode(at = Date.now()): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let n = Math.floor(at / 60000);
+  let out = "";
+  for (let i = 0; i < 4; i++) {
+    out += alphabet[n % alphabet.length];
+    n = Math.floor(n / alphabet.length);
+  }
+  return out;
+}
+
 export const createRoom = (seed: number) =>
   call<{ code: string; seed: number }>({ action: "create", seed });
 

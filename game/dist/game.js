@@ -570,8 +570,60 @@
      * Click a point, and an army launches toward it and pushes inward from
      * there. Bigger detachments move faster and hit harder.
      */
+    /** True once another living realm touches our ground. */
+    bordersRival(p) {
+      for (const t of p.tiles) {
+        for (const n of this.neighbors4(t)) {
+          const o = this.owners[n];
+          if (o >= 0 && o !== p.id && this.players[o] && this.players[o].alive) return true;
+        }
+      }
+      return false;
+    }
+    /**
+     * OpenFront-style claim. Instead of one column marching in a line, the whole
+     * border sweeps toward the point you clicked. Every tile costs soldiers, so
+     * the size of the sweep is set by how much of the host you commit.
+     */
+    claimToward(p, target, ratio) {
+      if (target < 0 || !this.isLand(target)) return false;
+      const share = Math.max(0.05, Math.min(1, ratio));
+      const budget = Math.max(24, p.troops * share);
+      const queue = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const t of p.tiles) {
+        for (const n of this.neighbors4(t)) {
+          if (!this.isLand(n) || this.owners[n] !== -1 || seen.has(n)) continue;
+          seen.add(n);
+          queue.push(n);
+        }
+      }
+      if (!queue.length) return false;
+      queue.sort((a, b) => this.tileDistance(a, target) - this.tileDistance(b, target));
+      const COST = 18;
+      let spent = 0;
+      let claimed = 0;
+      while (queue.length) {
+        const t = queue.shift();
+        if (this.owners[t] !== -1 || !this.isLand(t)) continue;
+        if (spent + COST > budget) break;
+        this.capture(t, p.id);
+        spent += COST;
+        claimed++;
+        for (const n of this.neighbors4(t)) {
+          if (!this.isLand(n) || this.owners[n] !== -1 || seen.has(n)) continue;
+          seen.add(n);
+          queue.push(n);
+        }
+      }
+      if (!claimed) return false;
+      p.troops = Math.max(0, p.troops - spent);
+      this.refreshRates(p);
+      return true;
+    }
     orderArmy(p, target, ratio) {
       if (this.phase !== "playing" || !p.alive) return false;
+      if (!this.bordersRival(p)) return this.claimToward(p, target, ratio);
       if (!this.canAttack(p, target)) return false;
       const share = Math.max(0.05, Math.min(1, ratio));
       const send = Math.floor(p.troops * share);
@@ -1596,23 +1648,298 @@
     if (!res.ok) throw new Error(`relay ${res.status}`);
     return await res.json();
   }
-  var createRoom = (seed2) => call({ action: "create", seed: seed2 });
-  var getRoom = (code) => call({ action: "room", code });
+  function minuteCode(at = Date.now()) {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let n = Math.floor(at / 6e4);
+    let out = "";
+    for (let i = 0; i < 4; i++) {
+      out += alphabet[n % alphabet.length];
+      n = Math.floor(n / alphabet.length);
+    }
+    return out;
+  }
   var postIntent = (code, player, tick, data) => call({ action: "post", code, player, tick, data });
   var pollIntents = (code, since) => call({ action: "poll", code, since });
   var postSnapshot = (code, tick, state) => call({ action: "snap", code, tick, state });
   var getSnapshot = (code) => call({ action: "view", code });
 
+  // src/faction.ts
+  var COLORS = [
+    "#c8443a",
+    "#d98a2b",
+    "#c9b437",
+    "#5b9c46",
+    "#3f9d8f",
+    "#3d78c4",
+    "#6c5bb5",
+    "#b8508f"
+  ];
+  var SHIELD_NAMES = ["Heater", "Pointed", "Round"];
+  var EMBLEM_NAMES = ["Cross", "Star", "Tower", "Chevron", "Waves", "Sun"];
+  var KEY = "realms.faction";
+  function loadFaction() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      if (raw) {
+        const f = JSON.parse(raw);
+        if (f && typeof f.name === "string") return { ...defaultFaction(), ...f };
+      }
+    } catch {
+    }
+    return defaultFaction();
+  }
+  function saveFaction(f) {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(f));
+    } catch {
+    }
+  }
+  function defaultFaction() {
+    return {
+      name: "Warden",
+      color: COLORS[0],
+      shield: 0,
+      emblem: 0,
+      field: "#1d2733",
+      charge: "#e8d9a8"
+    };
+  }
+  function shieldPath(ctx, s, kind) {
+    ctx.beginPath();
+    if (kind === 0) {
+      ctx.moveTo(s * 0.18, s * 0.12);
+      ctx.lineTo(s * 0.82, s * 0.12);
+      ctx.lineTo(s * 0.82, s * 0.52);
+      ctx.quadraticCurveTo(s * 0.82, s * 0.82, s * 0.5, s * 0.92);
+      ctx.quadraticCurveTo(s * 0.18, s * 0.82, s * 0.18, s * 0.52);
+      ctx.closePath();
+    } else if (kind === 1) {
+      ctx.moveTo(s * 0.5, s * 0.08);
+      ctx.lineTo(s * 0.84, s * 0.26);
+      ctx.lineTo(s * 0.84, s * 0.56);
+      ctx.lineTo(s * 0.5, s * 0.94);
+      ctx.lineTo(s * 0.16, s * 0.56);
+      ctx.lineTo(s * 0.16, s * 0.26);
+      ctx.closePath();
+    } else {
+      ctx.arc(s * 0.5, s * 0.48, s * 0.36, 0, Math.PI * 2);
+    }
+  }
+  function emblemPath(ctx, s, kind) {
+    const cx = s * 0.5;
+    const cy = s * 0.46;
+    ctx.beginPath();
+    if (kind === 0) {
+      ctx.rect(cx - s * 0.055, cy - s * 0.22, s * 0.11, s * 0.44);
+      ctx.rect(cx - s * 0.2, cy - s * 0.055, s * 0.4, s * 0.11);
+    } else if (kind === 1) {
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? s * 0.22 : s * 0.1;
+        const a = -Math.PI / 2 + i * Math.PI / 5;
+        const x = cx + Math.cos(a) * r;
+        const y = cy + Math.sin(a) * r;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+    } else if (kind === 2) {
+      ctx.rect(cx - s * 0.13, cy - s * 0.05, s * 0.26, s * 0.27);
+      ctx.rect(cx - s * 0.18, cy - s * 0.17, s * 0.1, s * 0.12);
+      ctx.rect(cx - s * 0.05, cy - s * 0.17, s * 0.1, s * 0.12);
+      ctx.rect(cx + s * 0.08, cy - s * 0.17, s * 0.1, s * 0.12);
+    } else if (kind === 3) {
+      ctx.moveTo(cx - s * 0.2, cy + s * 0.14);
+      ctx.lineTo(cx, cy - s * 0.16);
+      ctx.lineTo(cx + s * 0.2, cy + s * 0.14);
+      ctx.lineTo(cx + s * 0.2, cy + s * 0.24);
+      ctx.lineTo(cx, cy - s * 0.06);
+      ctx.lineTo(cx - s * 0.2, cy + s * 0.24);
+      ctx.closePath();
+    } else if (kind === 4) {
+      for (let row = 0; row < 3; row++) {
+        const y = cy - s * 0.14 + row * s * 0.11;
+        ctx.moveTo(cx - s * 0.22, y);
+        for (let i = 0; i < 6; i++) {
+          const x0 = cx - s * 0.22 + i * s * 0.44 / 6;
+          ctx.quadraticCurveTo(x0 + s * 0.037, y - s * 0.05, x0 + s * 0.074, y);
+        }
+      }
+    } else {
+      ctx.arc(cx, cy, s * 0.1, 0, Math.PI * 2);
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4;
+        ctx.moveTo(cx + Math.cos(a) * s * 0.14, cy + Math.sin(a) * s * 0.14);
+        ctx.lineTo(cx + Math.cos(a) * s * 0.23, cy + Math.sin(a) * s * 0.23);
+      }
+    }
+  }
+  function drawBadge(canvas2, f) {
+    const s = canvas2.width;
+    const ctx = canvas2.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, s, s);
+    ctx.save();
+    shieldPath(ctx, s, f.shield);
+    ctx.fillStyle = f.field;
+    ctx.fill();
+    ctx.lineWidth = Math.max(2, s * 0.045);
+    ctx.strokeStyle = f.color;
+    ctx.stroke();
+    ctx.clip();
+    ctx.save();
+    emblemPath(ctx, s, f.emblem);
+    ctx.fillStyle = f.charge;
+    ctx.fill();
+    if (f.emblem === 4) {
+      ctx.strokeStyle = f.charge;
+      ctx.lineWidth = Math.max(1.5, s * 0.035);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.restore();
+  }
+  function badgeDataUrl(f, size = 64) {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    drawBadge(c, f);
+    return c.toDataURL();
+  }
+
+  // src/lobby.ts
+  function elt(tag, cls = "", text = "") {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text) n.textContent = text;
+    return n;
+  }
+  function openLobby(opts) {
+    return new Promise((resolve) => {
+      const faction = loadFaction();
+      const wrap = elt("div", "lobby");
+      const card = elt("div", "lobby-card");
+      const head = elt("div", "lobby-head");
+      head.append(elt("h1", "", "REALMS"));
+      head.append(elt("p", "lobby-sub", "Build your banner, then take the field."));
+      card.append(head);
+      const matchBox = elt("div", "lobby-match");
+      const codeEl = elt("div", "lobby-code", opts.roomCode);
+      const roleEl = elt("div", "lobby-role", opts.role === "host" ? "you host this match" : "joining a friend's match");
+      const countEl = elt("div", "lobby-count", "");
+      matchBox.append(elt("div", "lobby-label", "MATCH"), codeEl, roleEl, countEl);
+      card.append(matchBox);
+      const banner = elt("div", "lobby-banner");
+      const big = elt("canvas", "lobby-badge");
+      big.width = 160;
+      big.height = 160;
+      const right = elt("div", "lobby-fields");
+      const nameRow = elt("label", "lobby-field");
+      nameRow.append(elt("span", "", "NAME"));
+      const nameInput = elt("input", "lobby-input");
+      nameInput.value = faction.name;
+      nameInput.maxLength = 18;
+      nameRow.append(nameInput);
+      right.append(nameRow);
+      const colorRow = elt("div", "lobby-field");
+      colorRow.append(elt("span", "", "COLOUR"));
+      const swatches = elt("div", "swatches");
+      COLORS.forEach((c) => {
+        const b = elt("button", "swatch");
+        b.style.background = c;
+        b.dataset.color = c;
+        b.addEventListener("click", () => {
+          faction.color = c;
+          paint();
+        });
+        swatches.append(b);
+      });
+      colorRow.append(swatches);
+      right.append(colorRow);
+      const shieldRow = elt("div", "lobby-field");
+      shieldRow.append(elt("span", "", "SHIELD"));
+      const shields = elt("div", "chips");
+      SHIELD_NAMES.forEach((label, i) => {
+        const b = elt("button", "chip", label);
+        b.addEventListener("click", () => {
+          faction.shield = i;
+          paint();
+        });
+        shields.append(b);
+      });
+      shieldRow.append(shields);
+      right.append(shieldRow);
+      const emblemRow = elt("div", "lobby-field");
+      emblemRow.append(elt("span", "", "CHARGE"));
+      const emblems = elt("div", "chips");
+      EMBLEM_NAMES.forEach((label, i) => {
+        const b = elt("button", "chip", label);
+        b.addEventListener("click", () => {
+          faction.emblem = i;
+          paint();
+        });
+        emblems.append(b);
+      });
+      emblemRow.append(emblems);
+      right.append(emblemRow);
+      banner.append(big, right);
+      card.append(banner);
+      const foot = elt("div", "lobby-foot");
+      const linkBox = elt("div", "lobby-link");
+      linkBox.append(elt("span", "lobby-label", "INVITE LINK"));
+      const linkText = elt("code", "", opts.link);
+      linkBox.append(linkText);
+      foot.append(linkBox);
+      const go = elt("button", "lobby-go", "TAKE THE FIELD");
+      foot.append(go);
+      card.append(foot);
+      wrap.append(card);
+      document.body.append(wrap);
+      const paint = () => {
+        drawBadge(big, faction);
+        swatches.querySelectorAll(".swatch").forEach((b) => {
+          b.classList.toggle("on", b.dataset.color === faction.color);
+        });
+        shields.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", i === faction.shield));
+        emblems.querySelectorAll(".chip").forEach((b, i) => b.classList.toggle("on", i === faction.emblem));
+      };
+      const tick = () => {
+        const left = Math.max(0, opts.startAt - Date.now());
+        if (left <= 0) {
+          countEl.textContent = "in progress";
+          if (!wrap.isConnected) return;
+        } else {
+          const s = Math.ceil(left / 1e3);
+          countEl.textContent = `starts in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+        }
+        if (wrap.isConnected) requestAnimationFrame(tick);
+      };
+      nameInput.addEventListener("input", () => {
+        faction.name = nameInput.value.trim() || "Warden";
+      });
+      go.addEventListener("click", () => {
+        faction.name = (nameInput.value.trim() || "Warden").slice(0, 18);
+        saveFaction(faction);
+        wrap.remove();
+        resolve(faction);
+      });
+      const preview = document.getElementById("you");
+      if (preview) preview.innerHTML = `<img alt="" src="${badgeDataUrl(faction, 48)}" />`;
+      paint();
+      tick();
+      nameInput.focus();
+      nameInput.select();
+    });
+  }
+
   // src/main.ts
   var params = new URLSearchParams(location.search);
   var seed = Number(params.get("seed") ?? 7) || 7;
   var roomParam = (params.get("room") ?? "").toUpperCase();
-  var wantsHost = params.get("host") === "1";
-  var isHost = wantsHost;
-  var isGuest = Boolean(roomParam) && !wantsHost;
-  var multiplayer = isHost || isGuest;
+  var isHost = !roomParam;
+  var isGuest = Boolean(roomParam);
   var roomCode = "";
   var localPlayer = isHost ? 0 : 1;
+  var lastIntentAt = 0;
   var canvas = document.getElementById("map");
   var game = new Game(seed);
   var renderer = new Renderer(canvas, game);
@@ -1913,25 +2240,37 @@
     }
     bar.innerHTML = html;
   }
-  var lastIntentAt = 0;
   async function boot() {
-    if (!multiplayer) return;
-    try {
-      if (isHost) {
-        const room = await createRoom(seed);
-        roomCode = room.code;
-      } else {
-        roomCode = roomParam;
-        const room = await getRoom(roomCode);
-        if (!room) throw new Error("no such room");
-      }
-    } catch (err) {
-      showNetbar(`Shared world unreachable (${String(err)}). Reload to retry.`);
-      return;
-    }
+    const nextMinute = Math.ceil(Date.now() / 6e4) * 6e4;
+    const joining = Boolean(roomParam);
+    const matchCode = joining ? roomParam : minuteCode(nextMinute);
+    const link = joining ? `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}` : `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
+    const faction = await openLobby({
+      roomCode: matchCode,
+      startAt: joining ? Date.now() : nextMinute,
+      role: joining ? "guest" : "host",
+      link
+    });
+    isHost = !joining;
+    isGuest = joining;
+    roomCode = matchCode;
+    localPlayer = isHost ? 0 : 1;
     game.startMultiplayer(2);
     game.human = localPlayer;
     spawnOverlay.classList.add("hidden");
+    const mine = game.players[localPlayer];
+    if (mine) {
+      mine.name = faction.name;
+      mine.color = faction.color;
+    }
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, 0, {
+        kind: "identity",
+        name: faction.name,
+        color: faction.color
+      });
+    }
+    showIdentity(faction);
     for (const st of game.structs.values()) {
       if (st.owner !== localPlayer || st.kind !== "castle") continue;
       cam.scale = 7;
@@ -1940,12 +2279,28 @@
       clampCamera();
       break;
     }
-    const link = `${location.origin}${location.pathname}?seed=${seed}&room=${roomCode}`;
     showNetbar(
-      isHost ? `Room <b>${roomCode}</b> \u2014 send your friend this link: <code>${link}</code>` : `Room <b>${roomCode}</b> \u2014 joined as player 2`
+      isHost ? `Match <b>${roomCode}</b> \u2014 send this to your friend: <code>${link}</code>` : `Match <b>${roomCode}</b> \u2014 joined as ${faction.name}`
     );
     window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
-    log(isHost ? "Shared world open. Rivals are loose." : "Joined the shared world.");
+    log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
+  }
+  function showIdentity(f) {
+    const host = document.getElementById("you");
+    if (!host) return;
+    host.innerHTML = "";
+    const img = document.createElement("img");
+    img.src = badgeDataUrl(f, 40);
+    img.alt = "";
+    const name = document.createElement("span");
+    name.className = "you-name";
+    name.textContent = f.name;
+    const tag = document.createElement("span");
+    tag.className = "you-tag";
+    tag.textContent = "YOU";
+    tag.style.background = f.color;
+    host.append(img, name, tag);
+    host.title = `${f.name} \u2014 your realm`;
   }
   function hostTick() {
     void pollIntents(roomCode, lastIntentAt).then((res) => {
@@ -1953,11 +2308,13 @@
         if (it.at > lastIntentAt) lastIntentAt = it.at;
         const p = game.players[it.player];
         if (!p || !p.alive) continue;
-        if (it.data.kind === "order") {
-          game.orderArmy(p, it.data.tile, it.data.ratio ?? 0.3);
-        } else if (it.data.kind === "build") {
-          game.build(p, it.data.k, it.data.tile);
+        if (it.data.kind === "identity") {
+          if (typeof it.data.name === "string") p.name = String(it.data.name).slice(0, 18);
+          if (typeof it.data.color === "string") p.color = String(it.data.color);
+          continue;
         }
+        if (it.data.kind === "order") game.orderArmy(p, it.data.tile, it.data.ratio ?? 0.3);
+        else if (it.data.kind === "build") game.build(p, it.data.k, it.data.tile);
       }
     }).catch(() => {
     });

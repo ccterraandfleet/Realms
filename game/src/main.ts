@@ -10,17 +10,18 @@ import { Camera, Renderer } from "./render/renderer";
 import { BUILD, Bundle, Game, PALETTE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
 import { OCEAN } from "./sim/world";
 import * as net from "./net";
+import { badgeDataUrl } from "./faction";
+import { openLobby } from "./lobby";
 
 const params = new URLSearchParams(location.search);
 const seed = Number(params.get("seed") ?? 7) || 7;
 /** A room in the URL means shared world; host creates, the other joins. */
 const roomParam = (params.get("room") ?? "").toUpperCase();
-const wantsHost = params.get("host") === "1";
-const isHost = wantsHost;
-const isGuest = Boolean(roomParam) && !wantsHost;
-const multiplayer = isHost || isGuest;
+let isHost = !roomParam;
+let isGuest = Boolean(roomParam);
 let roomCode = "";
-const localPlayer = isHost ? 0 : 1;
+let localPlayer = isHost ? 0 : 1;
+let lastIntentAt = 0;
 
 const canvas = document.getElementById("map") as HTMLCanvasElement;
 const game = new Game(seed);
@@ -393,27 +394,46 @@ function showNetbar(html: string) {
   bar.innerHTML = html;
 }
 
-let lastIntentAt = 0;
-
 async function boot() {
-  if (!multiplayer) return;
-  try {
-    if (isHost) {
-      const room = await net.createRoom(seed);
-      roomCode = room.code;
-    } else {
-      roomCode = roomParam;
-      const room = await net.getRoom(roomCode);
-      if (!room) throw new Error("no such room");
-    }
-  } catch (err) {
-    showNetbar(`Shared world unreachable (${String(err)}). Reload to retry.`);
-    return;
-  }
+  // Matches snap to the minute. Both of you landing in the same minute compute
+  // the same code, and the invite link carries it, so the link pins the match.
+  const nextMinute = Math.ceil(Date.now() / 60000) * 60000;
+  const joining = Boolean(roomParam);
+  const matchCode = joining ? roomParam : net.minuteCode(nextMinute);
+  const link = joining
+    ? `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`
+    : `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
+
+  const faction = await openLobby({
+    roomCode: matchCode,
+    startAt: joining ? Date.now() : nextMinute,
+    role: joining ? "guest" : "host",
+    link,
+  });
+
+  isHost = !joining;
+  isGuest = joining;
+  roomCode = matchCode;
+  localPlayer = isHost ? 0 : 1;
 
   game.startMultiplayer(2);
   game.human = localPlayer;
   spawnOverlay.classList.add("hidden");
+
+  const mine = game.players[localPlayer];
+  if (mine) {
+    mine.name = faction.name;
+    mine.color = faction.color;
+  }
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, 0, {
+      kind: "identity",
+      name: faction.name,
+      color: faction.color,
+    });
+  }
+  showIdentity(faction);
+
   for (const st of game.structs.values()) {
     if (st.owner !== localPlayer || st.kind !== "castle") continue;
     cam.scale = 7;
@@ -423,14 +443,32 @@ async function boot() {
     break;
   }
 
-  const link = `${location.origin}${location.pathname}?seed=${seed}&room=${roomCode}`;
   showNetbar(
     isHost
-      ? `Room <b>${roomCode}</b> — send your friend this link: <code>${link}</code>`
-      : `Room <b>${roomCode}</b> — joined as player 2`,
+      ? `Match <b>${roomCode}</b> — send this to your friend: <code>${link}</code>`
+      : `Match <b>${roomCode}</b> — joined as ${faction.name}`,
   );
   window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
-  log(isHost ? "Shared world open. Rivals are loose." : "Joined the shared world.");
+  log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
+}
+
+/** Your badge, name and colour, pinned in the header so it is never ambiguous. */
+function showIdentity(f: { name: string; color: string; shield: number; emblem: number; field: string; charge: string }) {
+  const host = document.getElementById("you");
+  if (!host) return;
+  host.innerHTML = "";
+  const img = document.createElement("img");
+  img.src = badgeDataUrl(f as never, 40);
+  img.alt = "";
+  const name = document.createElement("span");
+  name.className = "you-name";
+  name.textContent = f.name;
+  const tag = document.createElement("span");
+  tag.className = "you-tag";
+  tag.textContent = "YOU";
+  tag.style.background = f.color;
+  host.append(img, name, tag);
+  host.title = `${f.name} — your realm`;
 }
 
 function hostTick() {
@@ -441,11 +479,13 @@ function hostTick() {
         if (it.at > lastIntentAt) lastIntentAt = it.at;
         const p = game.players[it.player];
         if (!p || !p.alive) continue;
-        if (it.data.kind === "order") {
-          game.orderArmy(p, it.data.tile as number, (it.data.ratio as number) ?? 0.3);
-        } else if (it.data.kind === "build") {
-          game.build(p, it.data.k as StructureKind, it.data.tile as number);
+        if (it.data.kind === "identity") {
+          if (typeof it.data.name === "string") p.name = String(it.data.name).slice(0, 18);
+          if (typeof it.data.color === "string") p.color = String(it.data.color);
+          continue;
         }
+        if (it.data.kind === "order") game.orderArmy(p, it.data.tile as number, (it.data.ratio as number) ?? 0.3);
+        else if (it.data.kind === "build") game.build(p, it.data.k as StructureKind, it.data.tile as number);
       }
     })
     .catch(() => {});
