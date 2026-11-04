@@ -461,7 +461,6 @@ async function boot() {
   const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
 
   game.startMultiplayer(2);
-  game.startMultiplayer(2);
   game.human = localPlayer;
   spawnOverlay.classList.add("hidden");
 
@@ -547,6 +546,9 @@ function hostTick() {
 
 let lastSnapshotAt = 0;
 let syncFailures = 0;
+/** When the received world last actually CHANGED, not just arrived. */
+let lastChangeAt = Date.now();
+let lastPayload = "";
 let joinedAt = Date.now();
 let myName = "";
 let myFaction: { name: string; color: string } | null = null;
@@ -557,6 +559,12 @@ function guestTick() {
     .getSnapshot(roomCode)
     .then((res) => {
       if (!res.state) return;
+      // A dead host still leaves its last snapshot on the server. If the same
+      // world keeps arriving unchanged, it is frozen, not synced.
+      if (res.state !== lastPayload) {
+        lastPayload = res.state;
+        lastChangeAt = Date.now();
+      }
       game.applySnapshot(res.state);
       // Find ourselves by the name the host actually recorded, so a takeover or
       // a swapped slot can never label us as the other player.
@@ -587,7 +595,7 @@ function watchSync() {
   // If the match's original host never shows up (their tab closed, or the
   // match outlived them), take the world over instead of sitting on a dead
   // code showing our own private copy of the map.
-  if (!promoted && lastSnapshotAt === 0 && Date.now() - joinedAt > 6000) {
+  if (!promoted && Date.now() - lastChangeAt > 8000 && Date.now() - joinedAt > 8000) {
     promoted = true;
     isHost = true;
     isGuest = false;
@@ -611,7 +619,7 @@ function watchSync() {
     }
     return;
   }
-  const stale = Date.now() - lastSnapshotAt > 5000;
+  const stale = Date.now() - lastChangeAt > 6000;
   if (stale) {
     flag.textContent = "· NOT SYNCED — waiting for the host";
     flag.className = "sync-bad";
