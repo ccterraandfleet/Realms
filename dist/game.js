@@ -3633,6 +3633,13 @@
     isGuest = !host;
     roomCode = matchCode;
     localPlayer = isHost ? 0 : 1;
+    try {
+      const here = new URL(location.href);
+      here.searchParams.set("seed", String(seed));
+      here.searchParams.set("room", matchCode);
+      history.replaceState(null, "", here.toString());
+    } catch {
+    }
     const link = `${location.origin}${location.pathname}?seed=${seed}&room=${matchCode}`;
     game.startMultiplayer(2);
     game.human = localPlayer;
