@@ -3181,6 +3181,12 @@
       syncBuildButtons();
       e.preventDefault();
     }
+    if (k === "h" && game.players[game.human] && game.phase !== "spawn") {
+      const me = game.players[game.human];
+      const seat = [...game.structs.values()].find((st) => st.owner === me.id && st.kind === "castle");
+      if (seat) pendingFocus = seat.tile;
+      else if (me.tiles.size) pendingFocus = [...me.tiles][0];
+    }
     if (e.key === "Escape") {
       if (buildKind) {
         buildKind = null;
@@ -3293,6 +3299,7 @@
       log("A camp needs a host holding ground at least three tiles from its castle.");
     }
   }
+  var pendingFocus = null;
   function lookAt(tile, scale = 7) {
     const [x, y] = [tile % game.world.w, tile / game.world.w | 0];
     cam.scale = scale;
@@ -3587,6 +3594,10 @@
   }
   function frame(now) {
     advance();
+    if (pendingFocus !== null) {
+      lookAt(pendingFocus, 7);
+      pendingFocus = null;
+    }
     renderer.draw(cam, hover, buildKind, dpr);
     if (now - lastHud > 120) {
       lastHud = now;
@@ -3816,8 +3827,9 @@
     lastChangeAt = Date.now();
     if (hasWorld) {
       const mineCastle = [...game.structs.values()].find((st) => st.owner === seat && st.kind === "castle");
-      if (mineCastle) lookAt(mineCastle.tile, cam.scale || 7);
-      else if (game.players[seat]?.tiles.size) lookAt([...game.players[seat].tiles][0], cam.scale || 7);
+      const seatTiles = game.players[seat]?.tiles;
+      if (mineCastle) pendingFocus = mineCastle.tile;
+      else if (seatTiles && seatTiles.size) pendingFocus = [...seatTiles][0];
     }
     log("You took the world over. This match now runs from your side.");
   }
