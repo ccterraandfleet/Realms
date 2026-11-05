@@ -69,7 +69,7 @@
       // one and re-requests the document under a fresh cache key, keeping any
       // ?room= pin, so a tab can never sit on an old bundle.
       (function () {
-        var BUILD = "20261105.063640";
+        var BUILD = "20261105.064417";
         function check(first) {
           fetch("dist/version.json?t=" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -85,6 +85,6 @@
         setInterval(check, 45000);
       })();
     </script>
-    <script src="dist/game.js?v=20261105.063640"></script>
+    <script src="dist/game.js?v=20261105.064417"></script>
   </body>
 </html>
