@@ -896,6 +896,7 @@
           threat: 0,
           flankSides: 0,
           pulling: false,
+          regrouping: false,
           holding: true,
           holdTimer: 0
         });
@@ -920,10 +921,39 @@
       }
       if (a.routed) a.routed = false;
       a.pulling = false;
+      a.regrouping = false;
       if (target === a.tile && a.holding) return false;
       a.target = target;
       a.holding = false;
       a.progress = 0;
+      return true;
+    }
+    /** Is this tile one of the realm's own cities (a castle or a market)? */
+    isOwnCity(p, tile) {
+      const st = this.structs.get(tile);
+      return !!st && st.owner === p.id && (st.kind === "castle" || st.kind === "market");
+    }
+    /**
+     * Send a host to one of your cities to heal.
+     *
+     * Click your formation, click your city: it marches there over its own roads,
+     * garrisons, refills from the pool and comes back with its nerve restored.
+     */
+    orderToCity(p, home, city) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      const a = this.armyOf(p, home);
+      if (!a) return false;
+      if (!this.isOwnCity(p, city)) return false;
+      if (a.routed && a.rallyTimer > 0) {
+        if (!p.isBot) this.note("That host is still reforming. Give it a moment.");
+        return false;
+      }
+      a.routed = false;
+      a.pulling = false;
+      a.regrouping = true;
+      a.holding = false;
+      a.progress = 0;
+      a.target = city;
       return true;
     }
     /**
@@ -1184,6 +1214,32 @@
       a.threat = enemy;
       a.flankSides = sides.size;
     }
+    /**
+     * Standing in one of your own cities is how a host heals.
+     *
+     * Men are the health of a formation, so refilling from the realm's pool IS the
+     * repair: a beaten host parked on its own castle or market fills back up to
+     * what that city can hold, and recovers its nerve far faster than in the open.
+     */
+    garrisonTick(a, p, dt) {
+      const st = this.structs.get(a.tile);
+      const home = st && st.owner === p.id && (st.kind === "castle" || st.kind === "market") ? st : void 0;
+      a.regrouping = false;
+      if (!home) return;
+      const cap = ARMY_CAP(home.level);
+      if (a.troops < cap && p.troops > 0) {
+        const take = Math.min(cap - a.troops, p.troops, Math.max(8, cap * 0.25) * dt);
+        a.troops += take;
+        p.troops -= take;
+      }
+      a.morale = Math.min(1, a.morale + MORALE_RALLY * 1.5 * dt);
+      a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
+      a.contactTimer = 0;
+      if (a.routed && a.troops > 25) {
+        a.routed = false;
+        a.rallyTimer = 0;
+      }
+    }
     /** What this host's morale is trying to be, given supply and the field. */
     moraleTarget(a) {
       const base = 0.32 + 0.68 * a.supply;
@@ -1273,6 +1329,7 @@
         }
         if (a.holding) {
           a.holdTimer += dt;
+          this.garrisonTick(a, p, dt);
           continue;
         }
         const terrain = this.world.terrain[a.tile];
@@ -1305,6 +1362,16 @@
       return false;
     }
     armyStep(a, p) {
+      const tgtOwner = this.owners[a.target];
+      if (tgtOwner === a.owner || a.regrouping && tgtOwner === a.owner) {
+        const through = this.nextOwnTile(a);
+        if (through >= 0) {
+          if (this.contestTile(a, p, through)) return;
+          a.tile = through;
+          if (a.tile === a.target) a.holding = true;
+          return;
+        }
+      }
       const next = this.nextTile(a);
       if (next < 0) {
         const through = this.nextOwnTile(a);
@@ -1777,7 +1844,8 @@
         mo: +a.morale.toFixed(2),
         rt: a.routed ? 1 : 0,
         tr: a.tier,
-        pl: a.pulling ? 1 : 0
+        pl: a.pulling ? 1 : 0,
+        rg: a.regrouping ? 1 : 0
       }));
       const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
@@ -1873,6 +1941,7 @@
           threat: 0,
           flankSides: 0,
           pulling: !!d.pl,
+          regrouping: !!d.rg,
           holding: d.h === 1,
           holdTimer: 0
         });
@@ -2969,8 +3038,12 @@
       e.preventDefault();
     }
     if (e.key === "Escape") {
-      buildKind = null;
-      syncBuildButtons();
+      if (buildKind) {
+        buildKind = null;
+        syncBuildButtons();
+      } else if (selectedHome !== null) {
+        select(null);
+      }
     }
   });
   window.addEventListener("keyup", (e) => {
@@ -3132,11 +3205,24 @@
       return;
     }
     const mine = myArmyAt(tile);
-    if (mine) {
+    if (mine && mine.home !== selectedHome) {
       select(mine.home);
       return;
     }
+    if (mine && mine.tile === tile) return;
     if (selectedHome !== null) {
+      if (game.isOwnCity(me, tile)) {
+        if (isGuest) {
+          void postIntent(roomCode, localPlayer, Math.round(game.time * 10), {
+            kind: "regroup",
+            home: selectedHome,
+            city: tile
+          });
+          return;
+        }
+        if (!game.orderToCity(me, selectedHome, tile)) log("That host cannot make for that city.");
+        return;
+      }
       if (!orderSelected(tile)) log("That host cannot march there.");
     }
   }
@@ -3259,7 +3345,7 @@
         tierBtn.disabled = true;
       } else {
         const label = TIER_NAME[host.tier] ?? "Levy";
-        const state = host.routed ? "routed" : host.pulling ? "pulling back" : host.holding ? "holding" : "on the march";
+        const state = host.routed ? "routed" : host.pulling ? "pulling back" : host.regrouping ? "making for a city" : host.holding ? game.isOwnCity(me, host.tile) ? "garrisoned" : "holding" : "on the march";
         hostInfo.textContent = `${label} \xB7 ${fmt(host.troops)} men \xB7 ${state} \xB7 supply ${host.supply * 100 | 0}%`;
         pullBtn.disabled = host.tile === host.home;
         tierBtn.disabled = host.tier >= 3;
@@ -3489,6 +3575,7 @@
         else if (it.data.kind === "camp") game.establishCamp(p, it.data.home);
         else if (it.data.kind === "pull") game.withdrawArmy(p, it.data.home);
         else if (it.data.kind === "tier") game.upgradeHost(p, it.data.home);
+        else if (it.data.kind === "regroup") game.orderToCity(p, it.data.home, it.data.city);
         else if (it.data.kind === "build") game.build(p, it.data.k, it.data.tile);
       }
     }).catch(() => {

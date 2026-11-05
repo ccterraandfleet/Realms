@@ -1,0 +1,482 @@
+:root {
+  --ink: #efe3c6;
+  --ink-dim: #b8a888;
+  --gold: #d9b565;
+  --parch: rgba(24, 20, 14, 0.86);
+  --parch-line: rgba(217, 181, 101, 0.35);
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #0d1c26;
+  color: var(--ink);
+  font-family: var(--serif);
+  user-select: none;
+}
+
+#map {
+  position: fixed;
+  inset: 0;
+  display: block;
+  cursor: crosshair;
+}
+
+/* ---------------------------------------------------------------- */
+/* Top bar                                                           */
+/* ---------------------------------------------------------------- */
+
+#topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 10px 16px;
+  background: linear-gradient(180deg, rgba(13, 11, 7, 0.92), rgba(13, 11, 7, 0.55) 70%, transparent);
+  pointer-events: none;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.crest {
+  color: var(--gold);
+  font-size: 13px;
+}
+
+.title {
+  font-size: 19px;
+  letter-spacing: 0.26em;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.seed {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--ink-dim);
+}
+
+.stats {
+  display: flex;
+  gap: 18px;
+  margin-left: auto;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 64px;
+}
+
+.stat .k {
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.stat .v {
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- */
+/* Log                                                               */
+/* ---------------------------------------------------------------- */
+
+#log {
+  position: fixed;
+  left: 16px;
+  bottom: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 42ch;
+  pointer-events: none;
+}
+
+.log-line {
+  font-size: 12.5px;
+  color: rgba(239, 227, 198, 0.82);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  animation: fade 0.35s ease-out;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Bottom bar                                                        */
+/* ---------------------------------------------------------------- */
+
+#bottom {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+#build-bar {
+  display: flex;
+  gap: 8px;
+  padding: 7px;
+  background: var(--parch);
+  border: 1px solid var(--parch-line);
+  border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+}
+
+#build-bar button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 96px;
+  padding: 7px 10px 6px;
+  background: rgba(58, 47, 30, 0.7);
+  border: 1px solid rgba(217, 181, 101, 0.22);
+  border-radius: 3px;
+  color: var(--ink);
+  font-family: var(--serif);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+}
+
+#build-bar button:hover {
+  background: rgba(84, 68, 42, 0.85);
+  border-color: rgba(217, 181, 101, 0.5);
+}
+
+#build-bar button:active {
+  transform: translateY(1px);
+}
+
+#build-bar button.active {
+  background: rgba(120, 95, 46, 0.9);
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 1px rgba(217, 181, 101, 0.35);
+}
+
+#build-bar button.poor {
+  opacity: 0.45;
+}
+
+#build-bar .label {
+  font-size: 13px;
+}
+
+#build-bar .cost {
+  font-size: 11px;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+#build-bar .key {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+
+#ratio-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 12px;
+  background: var(--parch);
+  border: 1px solid var(--parch-line);
+  border-radius: 3px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+#ratio {
+  width: 150px;
+  accent-color: var(--gold);
+}
+
+#ratio-val {
+  min-width: 34px;
+  text-align: right;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- */
+/* Overlays                                                          */
+/* ---------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 10, 14, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+/* The spawn prompt must never eat the click that plants your castle: it is a
+   hint banner over the map, not a modal. */
+#spawn-overlay {
+  pointer-events: none;
+  background: rgba(6, 10, 14, 0.18);
+  backdrop-filter: none;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 108px;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.card {
+  max-width: 420px;
+  padding: 26px 30px;
+  background: linear-gradient(180deg, rgba(32, 27, 18, 0.97), rgba(20, 17, 11, 0.97));
+  border: 1px solid var(--parch-line);
+  border-radius: 5px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.card h1 {
+  margin: 0 0 10px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.card p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.card p.faint {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+button.primary {
+  margin-top: 14px;
+  padding: 9px 20px;
+  background: rgba(120, 95, 46, 0.95);
+  border: 1px solid var(--gold);
+  border-radius: 3px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+button.primary:hover {
+  background: rgba(146, 116, 56, 1);
+}
+
+/* ---- economy readouts (v3) ---- */
+.stat .k { letter-spacing: 0.06em; }
+.r-grain .k, i.r-grain { color: #d9c07c; }
+.r-timber .k, i.r-timber { color: #b08b5a; }
+.r-ore .k, i.r-ore { color: #9aa6b1; }
+.r-gold .k, i.r-gold { color: #e2b93f; }
+.stat .v { font-variant-numeric: tabular-nums; }
+.stat.starving .v { color: #e2705a; }
+#build-bar button { min-width: 78px; }
+#build-bar .hint {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7d8a95;
+  margin-top: 1px;
+}
+#build-bar .cost i { font-style: normal; margin-right: 3px; font-size: 9px; }
+#build-bar button.active { border-color: #e2b93f; }
+
+/* ---- your banner, pinned in the header ---- */
+.you { display: inline-flex; align-items: center; gap: 8px; margin-left: 14px; }
+.you img { width: 26px; height: 26px; display: block; }
+.you-name { font-size: 12px; letter-spacing: 0.08em; color: #efe6cf; text-transform: uppercase; }
+.you-tag {
+  font-size: 9px; letter-spacing: 0.16em; font-weight: 700; color: #14100a;
+  padding: 2px 6px; border-radius: 2px;
+}
+
+/* ---- pre-match lobby ---- */
+.lobby {
+  position: fixed; inset: 0; z-index: 40; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(120% 90% at 50% 0%, #161b15 0%, #0a0c08 70%);
+  padding: 24px; overflow: auto;
+}
+.lobby-card {
+  width: min(760px, 100%); border: 1px solid #2e3a2c; background: linear-gradient(180deg, #141a13, #0d1109);
+  box-shadow: 0 30px 80px rgba(0,0,0,0.6); padding: 26px 28px 22px;
+}
+.lobby-head h1 { margin: 0; font-size: 30px; letter-spacing: 0.34em; color: #e9ddb8; font-weight: 600; }
+.lobby-sub { margin: 6px 0 18px; color: #8b9682; font-size: 12px; letter-spacing: 0.05em; }
+.lobby-match {
+  display: grid; grid-template-columns: 60px 1fr; gap: 2px 12px; align-items: center;
+  border: 1px solid #2b3527; background: #10150e; padding: 12px 14px; margin-bottom: 18px;
+}
+.lobby-label { font-size: 9px; letter-spacing: 0.18em; color: #6f7c68; }
+.lobby-code { font-size: 22px; letter-spacing: 0.28em; color: #e9ddb8; font-family: ui-monospace, monospace; }
+.lobby-role { font-size: 10px; color: #7d8a74; grid-column: 2; }
+.lobby-count { font-size: 10px; color: #c9a85e; grid-column: 2; letter-spacing: 0.08em; }
+.lobby-banner { display: grid; grid-template-columns: 160px 1fr; gap: 22px; align-items: start; }
+.lobby-badge { width: 160px; height: 160px; display: block; }
+.lobby-fields { display: flex; flex-direction: column; gap: 12px; }
+.lobby-field { display: flex; flex-direction: column; gap: 6px; }
+.lobby-field > span { font-size: 9px; letter-spacing: 0.18em; color: #6f7c68; }
+.lobby-input {
+  background: #0c100a; border: 1px solid #33402e; color: #e9ddb8; padding: 9px 11px;
+  font-size: 14px; letter-spacing: 0.06em; font-family: inherit; outline: none;
+}
+.lobby-input:focus { border-color: #7f8f5d; }
+.swatches { display: flex; gap: 7px; }
+.swatch { width: 24px; height: 24px; border: 2px solid transparent; cursor: pointer; padding: 0; }
+.swatch.on { border-color: #efe6cf; box-shadow: 0 0 0 2px #141a13 inset; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  background: #0c100a; border: 1px solid #33402e; color: #9aa892; font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 10px; cursor: pointer; font-family: inherit;
+}
+.chip.on { border-color: #c9a85e; color: #e9ddb8; background: #1a2015; }
+.lobby-foot { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 22px; }
+.lobby-link { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.lobby-link code { font-size: 10px; color: #7d8a74; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lobby-go {
+  background: #c9a85e; color: #14100a; border: 0; padding: 12px 22px; font-size: 11px; font-weight: 700;
+  letter-spacing: 0.16em; cursor: pointer; font-family: inherit; white-space: nowrap;
+}
+.lobby-go:hover { background: #dcc077; }
+
+/* ---- click-to-copy invite ---- */
+.copy-link {
+  background: #c9a85e; color: #14100a; border: 0; padding: 4px 10px; margin-left: 6px;
+  font-family: inherit; font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
+  text-transform: uppercase; cursor: pointer;
+}
+.copy-link:hover { background: #dcc077; }
+.copy-link.copied { background: #7dab63; }
+.lobby-copy {
+  background: #0c100a; border: 1px dashed #3a4a34; color: #9aa892; font-family: ui-monospace, monospace;
+  font-size: 10px; padding: 6px 9px; cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.lobby-copy:hover { border-color: #c9a85e; color: #e9ddb8; }
+.lobby-copy.copied { border-color: #7dab63; color: #a9d18e; }
+
+/* ---- match bar: room code + click-to-copy invite ---- */
+#netbar {
+  position: fixed; top: 54px; left: 50%; transform: translateX(-50%);
+  z-index: 30; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: rgba(13,17,11,0.94); border: 1px solid #35422f; color: #cfd8c4;
+  padding: 8px 12px; font-size: 11px; letter-spacing: 0.04em;
+  max-width: min(720px, 92vw); box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+}
+#netbar b { color: #e9ddb8; letter-spacing: 0.18em; }
+#netbar code { color: #9aa892; }
+
+.sync-ok { color: #86a86f; margin-left: 4px; }
+.sync-bad { color: #e2705a; font-weight: 700; margin-left: 4px; letter-spacing: 0.08em; }
+
+/* ---- lobby: match choice ---- */
+.lobby-matchline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; grid-column: 2; }
+.lobby-match { grid-template-columns: 60px 1fr; }
+.lobby-actions { display: flex; gap: 8px; flex-wrap: wrap; grid-column: 2; margin-top: 8px; }
+.lobby-alt {
+  background: transparent; border: 1px solid #4a5a42; color: #a9b5a0; padding: 12px 18px;
+  font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+  text-transform: uppercase; cursor: pointer;
+}
+.lobby-alt:hover { border-color: #c9a85e; color: #e9ddb8; }
+.lobby-alt:disabled, .lobby-go:disabled { opacity: 0.6; cursor: default; }
+.lobby-hint { font-size: 10px; color: #6f7c68; letter-spacing: 0.06em; }
+
+/* ---- start countdown ---- */
+#countdown {
+  position: fixed; left: 50%; top: 34%; transform: translate(-50%, -50%);
+  z-index: 35; font-size: 92px; font-weight: 700; letter-spacing: 0.08em;
+  color: #efe6cf; text-shadow: 0 6px 30px rgba(0,0,0,0.75), 0 0 40px rgba(233,221,184,0.35);
+  pointer-events: none; font-variant-numeric: tabular-nums;
+}
+
+/* Muster cost readout: the price of the next host, on the HUD. */
+.stat.wide { grid-column: span 2; }
+.stat .v.small { font-size: 11px; letter-spacing: 0.02em; }
+.stat .v.short { color: #d2664f; }
+
+/* Host orders: what you can do to the formation you have picked. */
+#host-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--parch);
+  border: 1px solid var(--parch-line);
+  border-radius: 4px;
+  backdrop-filter: blur(3px);
+  color: var(--ink);
+  font-family: var(--serif);
+}
+
+#host-bar #host-info {
+  font-size: 12px;
+  color: var(--ink-dim);
+  min-width: 150px;
+}
+
+#host-bar button {
+  padding: 5px 10px;
+  background: rgba(58, 47, 30, 0.7);
+  border: 1px solid rgba(217, 181, 101, 0.25);
+  border-radius: 3px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+#host-bar button:hover:not(:disabled) {
+  background: rgba(84, 68, 42, 0.85);
+  border-color: rgba(217, 181, 101, 0.55);
+}
+
+#host-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
