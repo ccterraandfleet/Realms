@@ -437,10 +437,11 @@ function refreshHud() {
 
   if (game.phase === "over" && endOverlay.classList.contains("hidden")) {
     const won = game.winner === game.human;
-    endTitle.textContent = won ? "The realm is yours" : "Your line has fallen";
+    const rivals = game.players.filter((p) => p.id !== game.human && p.isBot).length;
+    endTitle.textContent = won ? "Last realm standing" : "Your line has fallen";
     endBody.textContent = won
-      ? `You hold ${(game.landShare(me) * 100).toFixed(1)}% of the land with ${me.castles} castles flying your banner.`
-      : "Rival lords hold the field. Raise a new world and try again.";
+      ? `Every rival broke. You hold ${(game.landShare(me) * 100).toFixed(1)}% of the land with ${me.castles} castles flying your banner.`
+      : `A rival took 80% of your ground, so the rest went over with the crown. ${rivals} lords still hold the field.`;
     endOverlay.classList.remove("hidden");
   }
 }

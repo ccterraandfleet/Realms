@@ -93,6 +93,12 @@ export interface Player {
   frontTimer: number;
   /** Sum of the richness of every held tile: what the land actually pays. */
   yieldSum: number;
+  /** Most ground this realm ever held: the yardstick for capitulation. */
+  peak: number;
+  /** Tiles each rival has taken off this realm, by attacker id. */
+  capturedBy: Record<number, number>;
+  /** Set when the realm broke and was absorbed. */
+  surrenderTo: number;
   /** Seconds until the "not enough kit" note may fire again. */
   kitWarn: number;
 }
@@ -201,6 +207,18 @@ export const TERRAIN_FOR: Partial<Record<StructureKind, number>> = {
  */
 export const BASE_YIELD = 10;
 
+/**
+ * Last man standing, fought to a decision rather than to the last tile.
+ *
+ * When a rival has lost this share of the ground the realm ever held, the
+ * remainder capitulates and passes to whoever took the most of it, so a war
+ * ends when it is decided instead of costing a month of mopping up single
+ * tiles. 0.2 kept means 80% captured.
+ */
+export const SURRENDER_KEEP = 0.2;
+/** A realm too small to have ever been a realm cannot capitulate on a spike. */
+export const SURRENDER_FLOOR = 20;
+
 export const TILE_YIELD = {
   grain: 0.02,
   timber: 0.008,
@@ -305,6 +323,9 @@ export class Game {
       rates: { grain: 0, timber: 0, ore: 0, gold: 0 },
       troops: 0,
       tileCount: 0,
+      peak: 0,
+      capturedBy: {},
+      surrenderTo: -1,
       castles: 0,
       immune: 0,
       frontTiles: 1,
@@ -449,10 +470,13 @@ export class Game {
       old.density -= dens;
       old.yieldSum -= rich;
       old.tiles.delete(t);
+      // Who is taking this realm apart? Capitulation goes to the biggest hand.
+      old.capturedBy[playerId] = (old.capturedBy[playerId] ?? 0) + 1;
     }
     const p = this.players[playerId];
     this.owners[t] = playerId;
     p.tileCount++;
+    if (p.tileCount > p.peak) p.peak = p.tileCount;
     p.density += dens;
     p.yieldSum += rich;
     p.tiles.add(t);
@@ -1402,6 +1426,54 @@ export class Game {
   /* Tick                                                                */
   /* ------------------------------------------------------------------ */
 
+  private surrenderTimer = 0;
+
+  /**
+   * 80% captured and the realm breaks: the rest of its ground passes to the
+   * rival who took the most of it. Elimination is therefore a decision, not a
+   * hunt for the last tile, which is what last-man-standing needs to be
+   * survivable in a game that runs for a month.
+   */
+  private checkSurrender(dt: number) {
+    this.surrenderTimer -= dt;
+    if (this.surrenderTimer > 0) return;
+    this.surrenderTimer = 0.5;
+
+    for (const p of this.players) {
+      if (!p.alive || p.peak < SURRENDER_FLOOR) continue;
+      if (p.tileCount > p.peak * SURRENDER_KEEP) continue;
+
+      let taker = -1;
+      let most = 0;
+      for (const key of Object.keys(p.capturedBy)) {
+        const id = Number(key);
+        const taken = p.capturedBy[id] ?? 0;
+        const other = this.players[id];
+        if (!other || !other.alive || id === p.id) continue;
+        if (taken > most) {
+          most = taken;
+          taker = id;
+        }
+      }
+      if (taker < 0) continue;
+
+      // The rest of the realm goes over with the crown.
+      for (const t of [...p.tiles]) this.claim(t, taker);
+      p.alive = false;
+      p.surrenderTo = taker;
+      p.soldiers = 0;
+      p.troops = 0;
+      this.note(`${p.name} has broken: ${this.players[taker].name} takes the field.`);
+      if (p.id === this.human) this.finish(-2);
+    }
+  }
+
+  /** Last man standing: one realm left holding ground ends the world. */
+  private checkStanding() {
+    const standing = this.players.filter((p) => p.alive && p.tileCount > 0);
+    if (standing.length === 1) this.finish(standing[0].id);
+  }
+
   private finish(winner: number) {
     if (this.phase === "over") return;
     this.phase = "over";
@@ -1463,8 +1535,8 @@ export class Game {
     }
 
     if (this.phase === "playing") {
-      const human = this.players[this.human];
-      if (human && human.tileCount > this.world.landTiles * 0.5) this.finish(this.human);
+      this.checkSurrender(dt);
+      this.checkStanding();
     }
   }
 
@@ -1602,6 +1674,7 @@ export class Game {
       gp: +p.grainProd.toFixed(3),
       ca: Math.round(this.capacity(p)),
       st: p.starving ? 1 : 0,
+      pk: Math.round(p.peak),
       r: [
         +p.rates.grain.toFixed(3),
         +p.rates.timber.toFixed(3),
@@ -1671,6 +1744,7 @@ export class Game {
       p.soldiers = d.s;
       p.grainProd = d.gp;
       p.starving = !!d.st;
+      p.peak = Math.round(d.pk ?? p.tileCount);
       p.rates = { grain: d.r[0], timber: d.r[1], ore: d.r[2], gold: d.r[3] };
       p.tiles = new Set<number>();
       p.tileCount = 0;
