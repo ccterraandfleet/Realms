@@ -3021,6 +3021,18 @@
         b.textContent = "starting\u2026";
       };
       if (opts.inviteCode) {
+        const known = (() => {
+          try {
+            const raw = localStorage.getItem("realms.faction");
+            return !!raw;
+          } catch {
+            return false;
+          }
+        })();
+        if (known) {
+          finish(opts.inviteCode, false, Date.now() - 6e4);
+          return;
+        }
         setLine(opts.inviteCode, "you were invited to this match");
         addButton("JOIN MATCH", true, () => finish(opts.inviteCode, false, Date.now() - 6e4));
         paint();
