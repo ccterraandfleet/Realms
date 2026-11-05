@@ -3293,6 +3293,13 @@
       log("A camp needs a host holding ground at least three tiles from its castle.");
     }
   }
+  function lookAt(tile, scale = 7) {
+    const [x, y] = [tile % game.world.w, tile / game.world.w | 0];
+    cam.scale = scale;
+    cam.x = window.innerWidth / 2 - x * cam.scale;
+    cam.y = window.innerHeight / 2 - y * cam.scale;
+    clampCamera();
+  }
   function pullBack() {
     const me = game.players[game.human];
     if (!me || selectedHome === null) {
@@ -3807,6 +3814,11 @@
     myName = myFaction?.name ?? myName;
     document.getElementById("takeover")?.remove();
     lastChangeAt = Date.now();
+    if (hasWorld) {
+      const mineCastle = [...game.structs.values()].find((st) => st.owner === seat && st.kind === "castle");
+      if (mineCastle) lookAt(mineCastle.tile, cam.scale || 7);
+      else if (game.players[seat]?.tiles.size) lookAt([...game.players[seat].tiles][0], cam.scale || 7);
+    }
     log("You took the world over. This match now runs from your side.");
   }
   function updateCountdown(_now) {
