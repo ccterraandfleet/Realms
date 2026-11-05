@@ -3926,6 +3926,27 @@
     const bar = document.getElementById("netbar");
     if (!bar) return;
     showBuild();
+    if (!document.getElementById("resync")) {
+      const rs = document.createElement("button");
+      rs.id = "resync";
+      rs.className = "copy-link";
+      rs.textContent = "Resync";
+      rs.title = "Force this session back into step with the world";
+      rs.addEventListener("click", () => {
+        onWake("button");
+        if (isHost && roomCode) {
+          posts++;
+          void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot(), true).catch(() => {
+          });
+          log("Republished this world to the server.");
+        } else if (isGuest) {
+          guestTick();
+          log("Asked the host for the latest state of the world.");
+        }
+        refreshHud();
+      });
+      bar.append(rs);
+    }
     let flag = document.getElementById("sync-flag");
     if (!flag) {
       flag = document.createElement("span");
@@ -3958,25 +3979,6 @@
           becomeHost();
         });
         bar.append(btn);
-      }
-      if (!document.getElementById("resync")) {
-        const rs = document.createElement("button");
-        rs.id = "resync";
-        rs.className = "copy-link";
-        rs.textContent = "Resync";
-        rs.title = "Force this session back into step with the world";
-        rs.addEventListener("click", () => {
-          onWake("button");
-          if (isHost) {
-            posts++;
-            void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot(), true).catch(() => {
-            });
-            log("Republished this world to the server.");
-          } else {
-            log("Asked the host for the latest state of the world.");
-          }
-        });
-        bar.append(rs);
       }
       return;
     }
