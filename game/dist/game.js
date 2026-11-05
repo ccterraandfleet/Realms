@@ -204,6 +204,15 @@
   };
   var BASE_YIELD = 10;
   var SURRENDER_KEEP = 0.2;
+  function fieldPower(a) {
+    const supply = Number.isFinite(a.supply) ? a.supply : 1;
+    const morale = Number.isFinite(a.morale) ? a.morale : 1;
+    return a.troops * (0.34 + 0.66 * supply) * (0.55 + 0.45 * morale);
+  }
+  var SUPPLY_GAIN = 0.55;
+  var SUPPLY_CUT = 0.5;
+  var SUPPLY_HUNGRY = 0.3;
+  var MORALE_RALLY = 0.4;
   var SURRENDER_FLOOR = 20;
   var TILE_YIELD = {
     grain: 0.02,
@@ -860,6 +869,11 @@
           cutOff: false,
           speed: 0,
           supplyTimer: 0,
+          supply: 1,
+          morale: 1,
+          routed: false,
+          rallyTimer: 0,
+          contactTimer: 0,
           holding: true,
           holdTimer: 0
         });
@@ -878,6 +892,11 @@
       const a = this.armyOf(p, home);
       if (!a) return false;
       if (target < 0 || !this.isLand(target)) return false;
+      if (a.routed && a.rallyTimer > 0) {
+        if (!p.isBot) this.note("That host is still reforming. Give it a moment.");
+        return false;
+      }
+      if (a.routed) a.routed = false;
       if (target === a.tile && a.holding) return false;
       a.target = target;
       a.holding = false;
@@ -943,29 +962,69 @@
       }
     }
     /** Two hosts on the same ground: the bigger one carries the field. */
+    /**
+     * Two hosts in contact grind instead of resolving in one sum.
+     *
+     * Each beat of contact bleeds both sides in proportion to the pressure they
+     * are under, and shakes the line's morale. Neither passes until one breaks,
+     * so a stronger army on the same tick is not an automatic win: it has to be
+     * sustained. A broken host routes for home and can be brought back in once it
+     * has rallied, which is what makes the front active rather than a single
+     * decisive click.
+     */
     armyBattle(a, p, foe) {
-      if (a.troops > foe.troops) {
-        a.troops -= foe.troops * 0.55;
-        const i = this.armies.indexOf(foe);
-        if (i >= 0) this.armies.splice(i, 1);
+      const atk = fieldPower(a);
+      const def = fieldPower(foe);
+      if (atk <= 0 || def <= 0) return;
+      a.contactTimer = 1.5;
+      foe.contactTimer = 1.5;
+      const ratio = atk / Math.max(1, def);
+      const clamp = (v) => Math.max(0.3, Math.min(3, v));
+      const dmgToFoe = Math.min(foe.troops * 0.25, atk * 0.12);
+      const dmgToSelf = Math.min(a.troops * 0.25, def * 0.12);
+      foe.troops = Math.max(1, foe.troops - dmgToFoe);
+      a.troops = Math.max(1, a.troops - dmgToSelf);
+      foe.morale = Math.max(0, foe.morale - 0.16 * clamp(ratio));
+      a.morale = Math.max(0, a.morale - 0.16 * clamp(1 / ratio));
+      const foeBroken = foe.troops < 20 || foe.morale <= 0.02;
+      const myBroken = a.troops < 20 || a.morale <= 0.02;
+      if (foeBroken && !myBroken) {
+        this.route(foe);
         const st = this.structs.get(foe.tile);
         if (st && st.kind === "camp" && st.owner === foe.owner) {
-          const garrison = this.campGarrison(st);
-          if (a.troops > garrison) {
-            a.troops -= garrison * 0.4;
-            this.structs.delete(st.tile);
-            this.structDirty = true;
-            if (!p.isBot) this.note("The camp falls with its garrison.");
-          }
+          this.structs.delete(st.tile);
+          this.structDirty = true;
+          if (!p.isBot) this.note("The camp falls with its garrison.");
         }
         this.capture(foe.tile, a.owner);
         a.tile = foe.tile;
-        if (!p.isBot) this.note("Two hosts meet. Yours holds the field.");
-      } else {
-        foe.troops = Math.max(1, foe.troops - a.troops * 0.55);
+        a.morale = Math.min(1, a.morale + 0.12);
+        if (!p.isBot) this.note("Two hosts meet. Their line breaks and yours holds the field.");
+        return;
+      }
+      if (myBroken && !foeBroken) {
+        this.route(a);
+        if (!p.isBot) this.note("Your host is broken in the open field and falls back.");
+        return;
+      }
+      if (myBroken && foeBroken) {
+        this.route(a);
+        this.route(foe);
+        if (!p.isBot) this.note("Both hosts break off and fall back.");
+        return;
+      }
+      if (!p.isBot && a.holdTimer <= 0) this.note("Hosts lock shields. The line is grinding.");
+      a.holdTimer = Math.max(a.holdTimer, 1.5);
+    }
+    /** Send a breaking host home to reform, or destroy it if too few are left. */
+    route(a) {
+      a.routed = true;
+      a.holding = false;
+      a.target = a.home;
+      a.rallyTimer = 9;
+      if (a.troops < 10) {
         const i = this.armies.indexOf(a);
         if (i >= 0) this.armies.splice(i, 1);
-        if (!p.isBot) this.note("Your host is broken in the open field.");
       }
     }
     /** Assaulting a war camp: beat the men holding it and the camp falls. */
@@ -1014,6 +1073,10 @@
           this.armies.splice(i, 1);
           continue;
         }
+        if (!Number.isFinite(a.supply)) a.supply = 1;
+        if (!Number.isFinite(a.morale)) a.morale = 1;
+        if (typeof a.routed !== "boolean") a.routed = false;
+        if (!Number.isFinite(a.rallyTimer)) a.rallyTimer = 0;
         a.supplyTimer -= dt;
         if (a.supplyTimer <= 0) {
           a.supplyTimer = 0.35;
@@ -1023,11 +1086,27 @@
             if (a.cutOff && !p.isBot) this.note("A push has been cut off from home.");
           }
         }
-        if (a.cutOff) {
-          a.troops *= 1 - 0.16 * dt;
-          if (a.troops < 45) {
+        if (a.cutOff) a.supply = Math.max(0, a.supply - SUPPLY_CUT * dt);
+        else if (p.grain > 0 && p.rates.grain >= 0) a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
+        else a.supply = Math.max(0, a.supply - SUPPLY_HUNGRY * dt);
+        if (a.contactTimer > 0) a.contactTimer = Math.max(0, a.contactTimer - dt);
+        const steady = 0.32 + 0.68 * a.supply;
+        if (a.contactTimer <= 0) {
+          if (a.morale < steady) a.morale = Math.min(steady, a.morale + MORALE_RALLY * dt);
+          else a.morale = Math.max(steady, a.morale - MORALE_RALLY * 0.5 * dt);
+        }
+        if (a.routed && a.rallyTimer > 0) {
+          a.rallyTimer = Math.max(0, a.rallyTimer - dt);
+          if (a.rallyTimer === 0 && a.morale > 0.5) {
+            a.routed = false;
+            if (!p.isBot) this.note("A routed host has rallied at home.");
+          }
+        }
+        if (a.supply <= 0.02) {
+          a.troops *= 1 - 0.12 * dt;
+          if (a.troops < 40) {
             this.armies.splice(i, 1);
-            if (!p.isBot) this.note("An isolated push has been routed.");
+            if (!p.isBot) this.note("A push with no supply line has melted away.");
             continue;
           }
         }
@@ -1038,6 +1117,23 @@
             if (!p.isBot) this.note("A host that could not be fed has melted away.");
             continue;
           }
+        }
+        if (a.routed) {
+          const back = this.nextOwnTile(a);
+          a.progress += this.armySpeed(a.troops) * dt * 0.85;
+          while (a.progress >= 1) {
+            a.progress -= 1;
+            const step = this.nextOwnTile(a);
+            if (step < 0) break;
+            a.tile = step;
+          }
+          if (a.tile === a.home || back < 0) {
+            p.troops += Math.round(a.troops);
+            this.armies.splice(i, 1);
+            if (!p.isBot) this.note("Broken men are back behind the walls and ready to be mustered.");
+            continue;
+          }
+          continue;
         }
         if (a.holding) {
           a.holdTimer += dt;
@@ -1105,14 +1201,16 @@
         return;
       }
       const def = this.defenseAt(next, owner);
+      const atk = fieldPower(a);
       if (!this.canAfford(p, PRICE.pushTile)) {
         a.holding = true;
         if (!p.isBot) this.note("Your host is out of stores and cannot press the attack.");
         return;
       }
-      if (a.troops > def) {
+      if (atk > def) {
         this.pay(p, PRICE.pushTile);
-        a.troops -= def * 0.7;
+        a.troops = Math.max(1, a.troops - def * 0.7 / (0.34 + 0.66 * a.supply));
+        a.morale = Math.max(0.05, a.morale - 0.05);
         const defender = this.players[owner];
         defender.troops = Math.max(0, defender.troops - def * 0.45);
         this.capture(next, a.owner);
@@ -1122,10 +1220,14 @@
         if (!p.isBot && a.taken === 1) this.note("The line has been broken.");
       } else {
         const defender = this.players[owner];
-        defender.troops = Math.max(0, defender.troops - a.troops * 0.35);
-        a.troops -= Math.min(a.troops, def * 0.8);
+        defender.troops = Math.max(0, defender.troops - fieldPower(a) * 0.35);
+        a.troops = Math.max(0, a.troops - def * 0.8 / (0.34 + 0.66 * a.supply));
+        a.morale = Math.max(0, a.morale - 0.16);
         a.holding = true;
-        if (a.troops < 45) {
+        if (a.morale <= 0.02) {
+          this.route(a);
+          if (!p.isBot) this.note("Your host has had enough and falls back.");
+        } else if (a.troops < 45) {
           const idx2 = this.armies.indexOf(a);
           if (idx2 >= 0) this.armies.splice(idx2, 1);
           if (!p.isBot) this.note("A push has broken against the line.");
@@ -1516,7 +1618,10 @@
         g: a.target,
         c: a.cutOff ? 1 : 0,
         m: a.home,
-        h: a.holding ? 1 : 0
+        h: a.holding ? 1 : 0,
+        sp: +a.supply.toFixed(2),
+        mo: +a.morale.toFixed(2),
+        rt: a.routed ? 1 : 0
       }));
       const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
@@ -1602,6 +1707,11 @@
           cutOff: !!d.c,
           speed: 0,
           supplyTimer: 0,
+          supply: typeof d.sp === "number" ? d.sp : 1,
+          morale: typeof d.mo === "number" ? d.mo : 1,
+          routed: !!d.rt,
+          rallyTimer: 0,
+          contactTimer: 0,
           holding: d.h === 1,
           holdTimer: 0
         });
@@ -1892,6 +2002,7 @@
         ctx.globalAlpha = 1;
         const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
         const r = Math.max(1.2, cam2.scale * 0.16);
+        ctx.globalAlpha = 0.35 + 0.65 * a.supply;
         for (let i = 0; i < dots; i++) {
           const ang = i / dots * 6.283;
           const rad = cam2.scale * (0.3 + 0.11 * (i % 3));
@@ -1901,6 +2012,34 @@
           ctx.beginPath();
           ctx.arc(px, py, r, 0, 6.283);
           ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        const cond = Math.max(0, Math.min(1, a.supply * 0.55 + a.morale * 0.45));
+        if (cond < 0.97) {
+          const bw = Math.max(10, cam2.scale * 1.25);
+          const bh = Math.max(2, cam2.scale * 0.12);
+          const bx0 = ax - bw / 2;
+          const by0 = ay + cam2.scale * 1;
+          ctx.fillStyle = "rgba(12,10,6,0.6)";
+          ctx.fillRect(bx0, by0, bw, bh);
+          ctx.fillStyle = cond > 0.66 ? "rgba(150,214,120,0.95)" : cond > 0.33 ? "rgba(240,196,90,0.95)" : "rgba(232,88,74,0.95)";
+          ctx.fillRect(bx0, by0, bw * cond, bh);
+        }
+        if (a.routed) {
+          const [hx, hy] = toScreen(a.home);
+          ctx.strokeStyle = "rgba(232,88,74,0.75)";
+          ctx.lineWidth = Math.max(1, cam2.scale * 0.1);
+          ctx.setLineDash([Math.max(3, cam2.scale * 0.4), Math.max(3, cam2.scale * 0.3)]);
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(hx, hy);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.strokeStyle = "rgba(255,246,214,0.9)";
+          ctx.lineWidth = Math.max(1.2, cam2.scale * 0.12);
+          ctx.beginPath();
+          ctx.arc(ax, ay, cam2.scale * 1.05, 0, 6.283);
+          ctx.stroke();
         }
         if (a.cutOff) {
           ctx.strokeStyle = "rgba(240,90,80,0.9)";

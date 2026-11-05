@@ -334,9 +334,11 @@ export class Renderer {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      // The column itself: dots, one per slice of strength.
+      // The column itself: dots, one per slice of strength. They thin out as
+      // supply fails, so a starving host looks like one from across the map.
       const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
       const r = Math.max(1.2, cam.scale * 0.16);
+      ctx.globalAlpha = 0.35 + 0.65 * a.supply;
       for (let i = 0; i < dots; i++) {
         const ang = (i / dots) * 6.283;
         const rad = cam.scale * (0.3 + 0.11 * (i % 3));
@@ -346,6 +348,41 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(px, py, r, 0, 6.283);
         ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+
+      // Condition bar: supply and morale together are what actually reaches the
+      // field, so a weakened host shows it instead of hiding it in a number.
+      const cond = Math.max(0, Math.min(1, a.supply * 0.55 + a.morale * 0.45));
+      if (cond < 0.97) {
+        const bw = Math.max(10, cam.scale * 1.25);
+        const bh = Math.max(2, cam.scale * 0.12);
+        const bx0 = ax - bw / 2;
+        const by0 = ay + cam.scale * 1.0;
+        ctx.fillStyle = "rgba(12,10,6,0.6)";
+        ctx.fillRect(bx0, by0, bw, bh);
+        ctx.fillStyle = cond > 0.66 ? "rgba(150,214,120,0.95)" : cond > 0.33 ? "rgba(240,196,90,0.95)" : "rgba(232,88,74,0.95)";
+        ctx.fillRect(bx0, by0, bw * cond, bh);
+      }
+
+      // A broken host: hollow, with a dashed line back to its castle, so a rout
+      // reads instantly and you can see where your men are running to.
+      if (a.routed) {
+        const [hx, hy] = toScreen(a.home);
+        ctx.strokeStyle = "rgba(232,88,74,0.75)";
+        ctx.lineWidth = Math.max(1, cam.scale * 0.1);
+        ctx.setLineDash([Math.max(3, cam.scale * 0.4), Math.max(3, cam.scale * 0.3)]);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(hx, hy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(255,246,214,0.9)";
+        ctx.lineWidth = Math.max(1.2, cam.scale * 0.12);
+        ctx.beginPath();
+        ctx.arc(ax, ay, cam.scale * 1.05, 0, 6.283);
+        ctx.stroke();
       }
 
       if (a.cutOff) {

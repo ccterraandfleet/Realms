@@ -122,6 +122,28 @@ export interface Army {
   /** Tiles per second, recomputed from strength each tick. */
   speed: number;
   supplyTimer: number;
+  /**
+   * 0..1. Graded, not a flag: a column that can walk home over its own ground
+   * and is fed fights at full strength; one that has lost the corridor or is
+   * living off nothing fades until it is only a crowd.
+   */
+  supply: number;
+  /**
+   * 0..1. Morale is what makes a line break and reform instead of every fight
+   * being arithmetic. Under 0.02 the host routes for home and can be ordered
+   * back in once it has rallied.
+   */
+  morale: number;
+  /** Routed: falling back to its castle, cannot attack until it rallies. */
+  routed: boolean;
+  /** Seconds of regrouping left before a routed host will take orders again. */
+  rallyTimer: number;
+  /**
+   * Seconds since this host last traded blows. Morale only recovers while it is
+   * out of contact, so a front that stays engaged keeps grinding down instead
+   * of letting both sides shrug it off between steps.
+   */
+  contactTimer: number;
   /** Set when the army has reached its objective and is standing there. */
   holding: boolean;
   /** Seconds spent standing at the objective before it folds back into the host. */
@@ -216,6 +238,32 @@ export const BASE_YIELD = 10;
  * tiles. 0.2 kept means 80% captured.
  */
 export const SURRENDER_KEEP = 0.2;
+
+/**
+ * How much of a host's paper strength actually reaches the field.
+ *
+ * Supply is the spine of the whole war: a well-fed column with an open road
+ * home fights at full strength, and an impoverished one at roughly a third,
+ * which is why an army that outran its roads loses to a smaller maintained
+ * one no matter what the counter says.
+ */
+export function fieldPower(a: Army): number {
+  // Older snapshots and hand-built fixtures predate supply and morale; treat a
+  // missing value as a fresh, willing host rather than poisoning every sum
+  // downstream with NaN.
+  const supply = Number.isFinite(a.supply) ? a.supply : 1;
+  const morale = Number.isFinite(a.morale) ? a.morale : 1;
+  return a.troops * (0.34 + 0.66 * supply) * (0.55 + 0.45 * morale);
+}
+
+/** Supply gained per second with an open road home and grain in store. */
+export const SUPPLY_GAIN = 0.55;
+/** Supply lost per second with the corridor cut. */
+export const SUPPLY_CUT = 0.5;
+/** Supply lost per second while the realm cannot feed its men. */
+export const SUPPLY_HUNGRY = 0.3;
+/** Morale recovered per second while nothing is fighting. */
+export const MORALE_RALLY = 0.4;
 /** A realm too small to have ever been a realm cannot capitulate on a spike. */
 export const SURRENDER_FLOOR = 20;
 
@@ -933,6 +981,11 @@ export class Game {
         cutOff: false,
         speed: 0,
         supplyTimer: 0,
+        supply: 1,
+        morale: 1,
+        routed: false,
+        rallyTimer: 0,
+        contactTimer: 0,
         holding: true,
         holdTimer: 0,
       });
@@ -953,6 +1006,13 @@ export class Game {
     const a = this.armyOf(p, home);
     if (!a) return false;
     if (target < 0 || !this.isLand(target)) return false;
+    // A host that routed has to be given a moment to reform; once it has, the
+    // same order sends it straight back into the line.
+    if (a.routed && a.rallyTimer > 0) {
+      if (!p.isBot) this.note("That host is still reforming. Give it a moment.");
+      return false;
+    }
+    if (a.routed) a.routed = false;
     if (target === a.tile && a.holding) return false;
     a.target = target;
     a.holding = false;
@@ -1025,30 +1085,79 @@ export class Game {
   }
 
   /** Two hosts on the same ground: the bigger one carries the field. */
+  /**
+   * Two hosts in contact grind instead of resolving in one sum.
+   *
+   * Each beat of contact bleeds both sides in proportion to the pressure they
+   * are under, and shakes the line's morale. Neither passes until one breaks,
+   * so a stronger army on the same tick is not an automatic win: it has to be
+   * sustained. A broken host routes for home and can be brought back in once it
+   * has rallied, which is what makes the front active rather than a single
+   * decisive click.
+   */
   private armyBattle(a: Army, p: Player, foe: Army) {
-    if (a.troops > foe.troops) {
-      a.troops -= foe.troops * 0.55;
-      const i = this.armies.indexOf(foe);
-      if (i >= 0) this.armies.splice(i, 1);
-      // The men we just broke were standing on a camp: it falls with them.
+    const atk = fieldPower(a);
+    const def = fieldPower(foe);
+    if (atk <= 0 || def <= 0) return;
+    a.contactTimer = 1.5;
+    foe.contactTimer = 1.5;
+    const ratio = atk / Math.max(1, def);
+    const clamp = (v: number) => Math.max(0.3, Math.min(3, v));
+    // No single beat can wipe a host: contact kills at most a quarter of the men
+    // in front of it, so a broken line ROUTS with men still alive to reform
+    // rather than being deleted by arithmetic.
+    const dmgToFoe = Math.min(foe.troops * 0.25, atk * 0.12);
+    const dmgToSelf = Math.min(a.troops * 0.25, def * 0.12);
+
+    foe.troops = Math.max(1, foe.troops - dmgToFoe);
+    a.troops = Math.max(1, a.troops - dmgToSelf);
+    // Morale falls by how badly the other side outweighs you, so a hopeless
+    // match breaks quickly and an even one grinds for a while.
+    foe.morale = Math.max(0, foe.morale - 0.16 * clamp(ratio));
+    a.morale = Math.max(0, a.morale - 0.16 * clamp(1 / ratio));
+
+    const foeBroken = foe.troops < 20 || foe.morale <= 0.02;
+    const myBroken = a.troops < 20 || a.morale <= 0.02;
+    if (foeBroken && !myBroken) {
+      this.route(foe);
+      // The men we broke were standing on a camp: it falls with them.
       const st = this.structs.get(foe.tile);
       if (st && st.kind === "camp" && st.owner === foe.owner) {
-        const garrison = this.campGarrison(st);
-        if (a.troops > garrison) {
-          a.troops -= garrison * 0.4;
-          this.structs.delete(st.tile);
-          this.structDirty = true;
-          if (!p.isBot) this.note("The camp falls with its garrison.");
-        }
+        this.structs.delete(st.tile);
+        this.structDirty = true;
+        if (!p.isBot) this.note("The camp falls with its garrison.");
       }
       this.capture(foe.tile, a.owner);
       a.tile = foe.tile;
-      if (!p.isBot) this.note("Two hosts meet. Yours holds the field.");
-    } else {
-      foe.troops = Math.max(1, foe.troops - a.troops * 0.55);
+      a.morale = Math.min(1, a.morale + 0.12);
+      if (!p.isBot) this.note("Two hosts meet. Their line breaks and yours holds the field.");
+      return;
+    }
+    if (myBroken && !foeBroken) {
+      this.route(a);
+      if (!p.isBot) this.note("Your host is broken in the open field and falls back.");
+      return;
+    }
+    if (myBroken && foeBroken) {
+      this.route(a);
+      this.route(foe);
+      if (!p.isBot) this.note("Both hosts break off and fall back.");
+      return;
+    }
+    // Still standing, both of them: the front holds and the grinding continues.
+    if (!p.isBot && a.holdTimer <= 0) this.note("Hosts lock shields. The line is grinding.");
+    a.holdTimer = Math.max(a.holdTimer, 1.5);
+  }
+
+  /** Send a breaking host home to reform, or destroy it if too few are left. */
+  private route(a: Army) {
+    a.routed = true;
+    a.holding = false;
+    a.target = a.home;
+    a.rallyTimer = 9;
+    if (a.troops < 10) {
       const i = this.armies.indexOf(a);
       if (i >= 0) this.armies.splice(i, 1);
-      if (!p.isBot) this.note("Your host is broken in the open field.");
     }
   }
 
@@ -1101,6 +1210,10 @@ export class Game {
         this.armies.splice(i, 1);
         continue;
       }
+      if (!Number.isFinite(a.supply)) a.supply = 1;
+      if (!Number.isFinite(a.morale)) a.morale = 1;
+      if (typeof a.routed !== "boolean") a.routed = false;
+      if (!Number.isFinite(a.rallyTimer)) a.rallyTimer = 0;
 
       // Supply check: can this column still trace a land route home?
       a.supplyTimer -= dt;
@@ -1113,12 +1226,35 @@ export class Game {
         }
       }
 
-      // Cut off and surrounded: the column bleeds out fast and can be routed.
-      if (a.cutOff) {
-        a.troops *= 1 - 0.16 * dt;
-        if (a.troops < 45) {
+      // Supply is graded, so a column can starve slowly rather than snap.
+      if (a.cutOff) a.supply = Math.max(0, a.supply - SUPPLY_CUT * dt);
+      else if (p.grain > 0 && p.rates.grain >= 0) a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
+      else a.supply = Math.max(0, a.supply - SUPPLY_HUNGRY * dt);
+
+      // Morale drifts toward what the supply state can sustain, and climbs
+      // back while the host is out of contact.
+      if (a.contactTimer > 0) a.contactTimer = Math.max(0, a.contactTimer - dt);
+      const steady = 0.32 + 0.68 * a.supply;
+      if (a.contactTimer <= 0) {
+        if (a.morale < steady) a.morale = Math.min(steady, a.morale + MORALE_RALLY * dt);
+        else a.morale = Math.max(steady, a.morale - MORALE_RALLY * 0.5 * dt);
+      }
+
+      // A routed host spends its time regrouping, then answers to orders again.
+      if (a.routed && a.rallyTimer > 0) {
+        a.rallyTimer = Math.max(0, a.rallyTimer - dt);
+        if (a.rallyTimer === 0 && a.morale > 0.5) {
+          a.routed = false;
+          if (!p.isBot) this.note("A routed host has rallied at home.");
+        }
+      }
+
+      // Nothing left to hold the line with: the column melts away.
+      if (a.supply <= 0.02) {
+        a.troops *= 1 - 0.12 * dt;
+        if (a.troops < 40) {
           this.armies.splice(i, 1);
-          if (!p.isBot) this.note("An isolated push has been routed.");
+          if (!p.isBot) this.note("A push with no supply line has melted away.");
           continue;
         }
       }
@@ -1133,6 +1269,27 @@ export class Game {
           if (!p.isBot) this.note("A host that could not be fed has melted away.");
           continue;
         }
+      }
+
+      if (a.routed) {
+        // Falling back: home ground, not the objective, and no fighting on the
+        // way, so a broken host can be rebuilt and thrown in again.
+        const back = this.nextOwnTile(a);
+        a.progress += this.armySpeed(a.troops) * dt * 0.85;
+        while (a.progress >= 1) {
+          a.progress -= 1;
+          const step = this.nextOwnTile(a);
+          if (step < 0) break;
+          a.tile = step;
+        }
+        if (a.tile === a.home || back < 0) {
+          // Back at the castle: the men go into the pool to be mustered again.
+          p.troops += Math.round(a.troops);
+          this.armies.splice(i, 1);
+          if (!p.isBot) this.note("Broken men are back behind the walls and ready to be mustered.");
+          continue;
+        }
+        continue;
       }
 
       if (a.holding) {
@@ -1215,14 +1372,17 @@ export class Game {
     // Battle for a held border tile. Taking ground costs munitions, so a realm
     // with no iron and no grain simply cannot advance.
     const def = this.defenseAt(next, owner);
+    const atk = fieldPower(a);
     if (!this.canAfford(p, PRICE.pushTile)) {
       a.holding = true;
       if (!p.isBot) this.note("Your host is out of stores and cannot press the attack.");
       return;
     }
-    if (a.troops > def) {
+    if (atk > def) {
       this.pay(p, PRICE.pushTile);
-      a.troops -= def * 0.7;
+      // Men lost taking ground, worse when the column is running light.
+      a.troops = Math.max(1, a.troops - (def * 0.7) / (0.34 + 0.66 * a.supply));
+      a.morale = Math.max(0.05, a.morale - 0.05);
       const defender = this.players[owner];
       defender.troops = Math.max(0, defender.troops - def * 0.45);
       this.capture(next, a.owner);
@@ -1233,10 +1393,16 @@ export class Game {
     } else {
       // The push is spent: survivors fall back or are destroyed.
       const defender = this.players[owner];
-      defender.troops = Math.max(0, defender.troops - a.troops * 0.35);
-      a.troops -= Math.min(a.troops, def * 0.8);
+      defender.troops = Math.max(0, defender.troops - fieldPower(a) * 0.35);
+      a.troops = Math.max(0, a.troops - (def * 0.8) / (0.34 + 0.66 * a.supply));
+      a.morale = Math.max(0, a.morale - 0.16);
       a.holding = true;
-      if (a.troops < 45) {
+      // Beaten back is not the same as wiped out: a host whose stomach for the
+      // fight is gone falls back to reform rather than evaporating here.
+      if (a.morale <= 0.02) {
+        this.route(a);
+        if (!p.isBot) this.note("Your host has had enough and falls back.");
+      } else if (a.troops < 45) {
         const idx = this.armies.indexOf(a);
         if (idx >= 0) this.armies.splice(idx, 1);
         if (!p.isBot) this.note("A push has broken against the line.");
@@ -1691,6 +1857,9 @@ export class Game {
       c: a.cutOff ? 1 : 0,
       m: a.home,
       h: a.holding ? 1 : 0,
+      sp: +a.supply.toFixed(2),
+      mo: +a.morale.toFixed(2),
+      rt: a.routed ? 1 : 0,
     }));
     const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
     const structs = [...this.structs.values()].map((st) => [
@@ -1777,6 +1946,11 @@ export class Game {
         cutOff: !!d.c,
         speed: 0,
         supplyTimer: 0,
+        supply: typeof d.sp === "number" ? d.sp : 1,
+        morale: typeof d.mo === "number" ? d.mo : 1,
+        routed: !!d.rt,
+        rallyTimer: 0,
+        contactTimer: 0,
         holding: d.h === 1,
         holdTimer: 0,
       });
