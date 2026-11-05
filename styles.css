@@ -495,3 +495,83 @@ button.primary:hover {
 #host-bar button.hidden {
   display: none;
 }
+
+/* ------------------------------------------------------------------ */
+/* Fluid HUD: the interface follows the window, whatever shape it is   */
+/* ------------------------------------------------------------------ */
+
+/* Nothing is measured in fixed pixels it does not have to be. The bars wrap
+   instead of overflowing, and the readouts scale with the viewport so a full
+   screen looks like a full screen rather than a phone layout stretched wide. */
+#topbar {
+  flex-wrap: wrap;
+  gap: clamp(10px, 1.4vw, 26px);
+  padding: clamp(6px, 0.8vh, 14px) clamp(10px, 1.2vw, 22px);
+}
+
+.stats {
+  gap: clamp(8px, 1.1vw, 20px);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+}
+
+.stat {
+  min-width: clamp(48px, 4.6vw, 84px);
+}
+
+.stat .k {
+  font-size: clamp(9px, 0.72vw, 12px);
+}
+
+.stat .v {
+  font-size: clamp(12px, 1.05vw, 19px);
+}
+
+#bottom {
+  gap: clamp(5px, 0.7vh, 10px);
+  max-width: 96vw;
+}
+
+#build-bar,
+#host-bar,
+#ratio-box {
+  max-width: 96vw;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+#build-bar button {
+  min-width: clamp(72px, 7vw, 108px);
+  padding: clamp(5px, 0.7vh, 9px) clamp(6px, 0.7vw, 12px) clamp(4px, 0.6vh, 7px);
+}
+
+#build-bar .label {
+  font-size: clamp(11px, 0.85vw, 14px);
+}
+
+#build-bar .cost {
+  font-size: clamp(9px, 0.7vw, 12px);
+}
+
+/* A short or narrow window stacks the HUD instead of pushing it off screen. */
+@media (max-width: 900px), (max-height: 620px) {
+  #log {
+    display: none;
+  }
+
+  #build-bar button {
+    min-width: 62px;
+  }
+
+  #host-bar {
+    gap: 5px;
+  }
+}
+
+/* Tall, wide displays: give the world more room by trimming chrome. */
+@media (min-width: 1900px) and (min-height: 1000px) {
+  #bottom {
+    bottom: clamp(14px, 1.6vh, 30px);
+  }
+}
