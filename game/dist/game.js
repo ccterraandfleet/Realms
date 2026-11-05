@@ -1941,6 +1941,8 @@
         ca: Math.round(this.capacity(p)),
         st: p.starving ? 1 : 0,
         pk: Math.round(p.peak),
+        cx: p.crossed ? 1 : 0,
+        cb: Object.keys(p.capturedBy).map((k) => [Number(k), p.capturedBy[Number(k)]]),
         r: [
           +p.rates.grain.toFixed(3),
           +p.rates.timber.toFixed(3),
@@ -1975,6 +1977,12 @@
         v: 1,
         tm: +this.time.toFixed(1),
         ph: this.phase,
+        // Without these a reload put the world back in year one of peacetime and
+        // every war in progress simply stopped: the refresh looked like a ruined
+        // game. The era is part of the world, not of the session.
+        er: this.era,
+        yr: this.year,
+        wn: this.winner,
         hm: this.human,
         ms: this.messages.slice(-10),
         p: players,
@@ -1988,6 +1996,9 @@
       const snap = JSON.parse(text);
       this.time = snap.tm;
       this.phase = snap.ph;
+      this.era = snap.er === "war" ? "war" : "peace";
+      this.year = Number.isFinite(snap.yr) ? snap.yr : Math.floor((this.time || 0) / YEAR_SECONDS);
+      this.winner = Number.isFinite(snap.wn) ? snap.wn : -1;
       this.human = snap.hm ?? 0;
       this.messages = snap.ms ?? [];
       this.owners.fill(-1);
@@ -2016,6 +2027,9 @@
         p.grainProd = d.gp;
         p.starving = !!d.st;
         p.peak = Math.round(d.pk ?? p.tileCount);
+        p.crossed = !!d.cx;
+        p.capturedBy = {};
+        for (const pair of d.cb ?? []) p.capturedBy[pair[0]] = pair[1];
         p.rates = { grain: d.r[0], timber: d.r[1], ore: d.r[2], gold: d.r[3] };
         p.tiles = /* @__PURE__ */ new Set();
         p.tileCount = 0;
@@ -3781,13 +3795,15 @@
     if (isHost) return;
     isHost = true;
     isGuest = false;
-    localPlayer = 0;
-    const mine0 = game.players[0];
+    const mine = myName ? game.players.findIndex((pp) => pp.name === myName) : -1;
+    const seat = mine >= 0 ? mine : 0;
+    localPlayer = seat;
+    const mine0 = game.players[seat];
     if (mine0 && myFaction) {
       mine0.name = myFaction.name;
       mine0.color = myFaction.color;
     }
-    game.human = 0;
+    game.human = seat;
     myName = myFaction?.name ?? myName;
     document.getElementById("takeover")?.remove();
     lastChangeAt = Date.now();
