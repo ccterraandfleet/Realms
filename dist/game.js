@@ -3356,6 +3356,11 @@
       return;
     }
     if (!me) return;
+    const onMyHost = myArmyAt(tile);
+    if (onMyHost && buildKind) {
+      select(onMyHost.home);
+      return;
+    }
     if (buildKind) {
       if (isGuest) {
         void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "build", k: buildKind, tile });
@@ -3569,6 +3574,28 @@
   var lastPostAt = 0;
   var posts = 0;
   var pollInFlight = false;
+  function onWake(why) {
+    lastWall = performance.now();
+    simAcc = 0;
+    lastHud = 0;
+    resize();
+    refreshHud();
+    if (isGuest) {
+      lastChangeAt = Date.now() - 4e3;
+      guestTick();
+    } else if (isHost && roomCode) {
+      lastPostAt = 0;
+      posts++;
+      void postSnapshot(roomCode, Math.round(game.time * 10), game.snapshot(), true).catch(() => {
+      });
+    }
+    if (why !== "loop") lastChangeAt = Math.max(lastChangeAt, Date.now() - 6e3);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) onWake("visible");
+  });
+  window.addEventListener("focus", () => onWake("focus"));
+  window.addEventListener("pageshow", () => onWake("pageshow"));
   function advance() {
     const now = performance.now();
     let dt = (now - lastWall) / 1e3;
@@ -3727,6 +3754,9 @@
       inviteBtn.addEventListener("click", () => void copyText(link, inviteBtn, "Link copied"));
     }
     window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
+    window.setInterval(() => {
+      if (isGuest && !document.hidden && Date.now() - lastSnapshotAt > 2500) guestTick();
+    }, 250);
     window.setInterval(watchSync, 2e3);
     log(isHost ? `Match ${roomCode}. ${game.players.length - 1} rival lords are loose.` : `Joined match ${roomCode}.`);
   }
