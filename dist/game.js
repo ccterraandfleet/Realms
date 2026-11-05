@@ -203,6 +203,8 @@
     mine: MOUNTAIN
   };
   var BASE_YIELD = 10;
+  var SURRENDER_KEEP = 0.2;
+  var SURRENDER_FLOOR = 20;
   var TILE_YIELD = {
     grain: 0.02,
     timber: 8e-3,
@@ -285,6 +287,10 @@
       this.seats = [];
       this.claimNodes = [];
       this.nextArmyId = 1;
+      /* ------------------------------------------------------------------ */
+      /* Tick                                                                */
+      /* ------------------------------------------------------------------ */
+      this.surrenderTimer = 0;
       this.world = generateWorld(seed2, w, h);
       this.owners = new Int16Array(w * h).fill(-1);
       this.rng = mulberry32(seed2 ^ 2654435769);
@@ -310,6 +316,9 @@
         rates: { grain: 0, timber: 0, ore: 0, gold: 0 },
         troops: 0,
         tileCount: 0,
+        peak: 0,
+        capturedBy: {},
+        surrenderTo: -1,
         castles: 0,
         immune: 0,
         frontTiles: 1,
@@ -429,10 +438,12 @@
         old.density -= dens;
         old.yieldSum -= rich;
         old.tiles.delete(t);
+        old.capturedBy[playerId] = (old.capturedBy[playerId] ?? 0) + 1;
       }
       const p = this.players[playerId];
       this.owners[t] = playerId;
       p.tileCount++;
+      if (p.tileCount > p.peak) p.peak = p.tileCount;
       p.density += dens;
       p.yieldSum += rich;
       p.tiles.add(t);
@@ -1278,9 +1289,46 @@
       if (!p.isBot) this.note(`${STRUCTURE_LABEL[kind]} raised.`);
       return true;
     }
-    /* ------------------------------------------------------------------ */
-    /* Tick                                                                */
-    /* ------------------------------------------------------------------ */
+    /**
+     * 80% captured and the realm breaks: the rest of its ground passes to the
+     * rival who took the most of it. Elimination is therefore a decision, not a
+     * hunt for the last tile, which is what last-man-standing needs to be
+     * survivable in a game that runs for a month.
+     */
+    checkSurrender(dt) {
+      this.surrenderTimer -= dt;
+      if (this.surrenderTimer > 0) return;
+      this.surrenderTimer = 0.5;
+      for (const p of this.players) {
+        if (!p.alive || p.peak < SURRENDER_FLOOR) continue;
+        if (p.tileCount > p.peak * SURRENDER_KEEP) continue;
+        let taker = -1;
+        let most = 0;
+        for (const key of Object.keys(p.capturedBy)) {
+          const id = Number(key);
+          const taken = p.capturedBy[id] ?? 0;
+          const other = this.players[id];
+          if (!other || !other.alive || id === p.id) continue;
+          if (taken > most) {
+            most = taken;
+            taker = id;
+          }
+        }
+        if (taker < 0) continue;
+        for (const t of [...p.tiles]) this.claim(t, taker);
+        p.alive = false;
+        p.surrenderTo = taker;
+        p.soldiers = 0;
+        p.troops = 0;
+        this.note(`${p.name} has broken: ${this.players[taker].name} takes the field.`);
+        if (p.id === this.human) this.finish(-2);
+      }
+    }
+    /** Last man standing: one realm left holding ground ends the world. */
+    checkStanding() {
+      const standing = this.players.filter((p) => p.alive && p.tileCount > 0);
+      if (standing.length === 1) this.finish(standing[0].id);
+    }
     finish(winner) {
       if (this.phase === "over") return;
       this.phase = "over";
@@ -1332,8 +1380,8 @@
         if (p.isBot && p.alive) this.botThink(p, dt);
       }
       if (this.phase === "playing") {
-        const human = this.players[this.human];
-        if (human && human.tileCount > this.world.landTiles * 0.5) this.finish(this.human);
+        this.checkSurrender(dt);
+        this.checkStanding();
       }
     }
     botThink(p, dt) {
@@ -1452,6 +1500,7 @@
         gp: +p.grainProd.toFixed(3),
         ca: Math.round(this.capacity(p)),
         st: p.starving ? 1 : 0,
+        pk: Math.round(p.peak),
         r: [
           +p.rates.grain.toFixed(3),
           +p.rates.timber.toFixed(3),
@@ -1520,6 +1569,7 @@
         p.soldiers = d.s;
         p.grainProd = d.gp;
         p.starving = !!d.st;
+        p.peak = Math.round(d.pk ?? p.tileCount);
         p.rates = { grain: d.r[0], timber: d.r[1], ore: d.r[2], gold: d.r[3] };
         p.tiles = /* @__PURE__ */ new Set();
         p.tileCount = 0;
@@ -2872,8 +2922,9 @@
     }
     if (game.phase === "over" && endOverlay.classList.contains("hidden")) {
       const won = game.winner === game.human;
-      endTitle.textContent = won ? "The realm is yours" : "Your line has fallen";
-      endBody.textContent = won ? `You hold ${(game.landShare(me) * 100).toFixed(1)}% of the land with ${me.castles} castles flying your banner.` : "Rival lords hold the field. Raise a new world and try again.";
+      const rivals = game.players.filter((p) => p.id !== game.human && p.isBot).length;
+      endTitle.textContent = won ? "Last realm standing" : "Your line has fallen";
+      endBody.textContent = won ? `Every rival broke. You hold ${(game.landShare(me) * 100).toFixed(1)}% of the land with ${me.castles} castles flying your banner.` : `A rival took 80% of your ground, so the rest went over with the crown. ${rivals} lords still hold the field.`;
       endOverlay.classList.remove("hidden");
     }
   }
