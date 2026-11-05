@@ -3862,7 +3862,8 @@
       return;
     }
     const silentFor = Date.now() - lastChangeAt;
-    if (silentFor > 3e4) {
+    const graceFor = hasWorld ? 8e3 : 3e4;
+    if (silentFor > graceFor) {
       flag.textContent = "\xB7 NOT SYNCED \u2014 host silent";
       flag.className = "sync-bad";
       if (!document.getElementById("takeover")) {
