@@ -3318,6 +3318,16 @@
     if (n >= 1e4) return `${(n / 1e3).toFixed(1)}k`;
     return Math.floor(n).toString();
   }
+  var shownMessages = 0;
+  function drainWorldNews() {
+    const msgs = game.messages;
+    if (shownMessages > msgs.length) shownMessages = 0;
+    for (let i = shownMessages; i < msgs.length; i++) {
+      const text = msgs[i];
+      if (typeof text === "string" && text) log(text);
+    }
+    shownMessages = msgs.length;
+  }
   function log(text) {
     const line = document.createElement("div");
     line.className = "log-line";
@@ -3336,6 +3346,7 @@
   function refreshHud() {
     const me = game.players[game.human];
     if (!me) return;
+    drainWorldNews();
     statGrain.textContent = flow(me.grain, me.rates.grain);
     statTimber.textContent = flow(me.timber, me.rates.timber);
     statOre.textContent = flow(me.ore, me.rates.ore);
