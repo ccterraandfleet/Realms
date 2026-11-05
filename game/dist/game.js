@@ -207,12 +207,23 @@
   function fieldPower(a) {
     const supply = Number.isFinite(a.supply) ? a.supply : 1;
     const morale = Number.isFinite(a.morale) ? a.morale : 1;
-    return a.troops * (0.34 + 0.66 * supply) * (0.55 + 0.45 * morale);
+    const tier = Number.isFinite(a.tier) ? Math.max(1, Math.min(3, a.tier)) : 1;
+    return a.troops * (0.34 + 0.66 * supply) * (0.55 + 0.45 * morale) * TIER_POWER[tier];
   }
   var SUPPLY_GAIN = 0.55;
   var SUPPLY_CUT = 0.5;
   var SUPPLY_HUNGRY = 0.3;
   var MORALE_RALLY = 0.4;
+  var YEAR_SECONDS = 600;
+  var PEACE_YEARS = 3;
+  var MIDDLE_MARK = 1.15;
+  var TIER_POWER = [1, 1, 1.35, 1.8];
+  var TIER_COST_SCALE = 2.2;
+  function tierUpCost(tier) {
+    const step = Math.pow(TIER_COST_SCALE, Math.max(0, tier - 1));
+    return { grain: 40 * step, timber: 30 * step, ore: 60 * step, gold: 55 * step };
+  }
+  var TIER_NAME = ["", "Levy", "Shieldwall", "Testudo"];
   var SURRENDER_FLOOR = 20;
   var TILE_YIELD = {
     grain: 0.02,
@@ -287,6 +298,10 @@
       this.time = 0;
       this.phase = "spawn";
       this.winner = -1;
+      /** Peace while realms build their roads, war once the middle is contested. */
+      this.era = "peace";
+      /** Whole game years elapsed since the world started moving. */
+      this.year = 0;
       /** Tiles whose ownership changed since the renderer last repainted. */
       this.dirty = /* @__PURE__ */ new Set();
       this.structDirty = true;
@@ -328,6 +343,7 @@
         peak: 0,
         capturedBy: {},
         surrenderTo: -1,
+        crossed: false,
         castles: 0,
         immune: 0,
         frontTiles: 1,
@@ -453,6 +469,7 @@
       this.owners[t] = playerId;
       p.tileCount++;
       if (p.tileCount > p.peak) p.peak = p.tileCount;
+      if (this.world.richness[t] > MIDDLE_MARK) p.crossed = true;
       p.density += dens;
       p.yieldSum += rich;
       p.tiles.add(t);
@@ -874,6 +891,11 @@
           routed: false,
           rallyTimer: 0,
           contactTimer: 0,
+          tier: 1,
+          support: 0,
+          threat: 0,
+          flankSides: 0,
+          pulling: false,
           holding: true,
           holdTimer: 0
         });
@@ -897,10 +919,63 @@
         return false;
       }
       if (a.routed) a.routed = false;
+      a.pulling = false;
       if (target === a.tile && a.holding) return false;
       a.target = target;
       a.holding = false;
       a.progress = 0;
+      return true;
+    }
+    /**
+     * Pull a host back to its castle without it having to be broken first.
+     *
+     * This is the other half of front control: push costs ground and men, pulling
+     * costs position and time, and the men come home intact to be sent out again.
+     */
+    withdrawArmy(p, home) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      const a = this.armyOf(p, home);
+      if (!a) return false;
+      if (a.tile === a.home && a.holding) return false;
+      a.pulling = true;
+      a.routed = false;
+      a.rallyTimer = 0;
+      a.holding = false;
+      a.progress = 0;
+      a.target = a.home;
+      return true;
+    }
+    /**
+     * Take a formation up a tier. Quality is the slow clock: the cost multiplies
+     * every step, so a tier 3 host is an investment a realm plans for, and the
+     * castle has to be big enough to field men of that quality at all.
+     */
+    upgradeHost(p, home) {
+      if (this.phase !== "playing" || !p.alive) return false;
+      const a = this.armyOf(p, home);
+      if (!a) return false;
+      if (a.tier >= 3) {
+        if (!p.isBot) this.note("That host is already testudo, the finest we can field.");
+        return false;
+      }
+      const castle = this.structs.get(a.home);
+      if (!castle || castle.kind !== "castle") return false;
+      if (castle.level < a.tier + 1) {
+        if (!p.isBot) this.note(`A tier ${a.tier + 1} host needs a level ${a.tier + 1} castle.`);
+        return false;
+      }
+      const cost = tierUpCost(a.tier);
+      if (!this.canAfford(p, cost)) {
+        if (!p.isBot) {
+          this.note(
+            `Tier ${a.tier + 1} wants ${Math.ceil(cost.ore)} iron and ${Math.ceil(cost.gold)} gold.`
+          );
+        }
+        return false;
+      }
+      this.pay(p, cost);
+      a.tier += 1;
+      if (!p.isBot) this.note(`Your host drills as ${TIER_NAME[a.tier]} (tier ${a.tier}).`);
       return true;
     }
     /**
@@ -951,6 +1026,7 @@
         for (const n of this.neighbors4(st.tile)) {
           if (!this.isLand(n) || this.owners[n] === st.owner) continue;
           const o = this.owners[n];
+          if (this.era === "peace" && o >= 0) continue;
           if (o >= 0 && this.players[o].immune > 0) continue;
           const d = o >= 0 ? this.defenseAt(n, o) : this.neutralDefense(n);
           if (d < bestDef) {
@@ -973,15 +1049,22 @@
      * decisive click.
      */
     armyBattle(a, p, foe) {
+      if (this.era === "peace") return;
       const atk = fieldPower(a);
       const def = fieldPower(foe);
       if (atk <= 0 || def <= 0) return;
       a.contactTimer = 1.5;
       foe.contactTimer = 1.5;
+      const pressed = (x) => x.threat > 0 && (x.flankSides >= 2 || x.threat > x.support);
+      const guarded = (x) => {
+        if (x.tier >= 3) return pressed(x) ? 0.35 : 0.72;
+        if (x.tier === 2) return pressed(x) ? 0.72 : 0.85;
+        return 1;
+      };
       const ratio = atk / Math.max(1, def);
       const clamp = (v) => Math.max(0.3, Math.min(3, v));
-      const dmgToFoe = Math.min(foe.troops * 0.25, atk * 0.12);
-      const dmgToSelf = Math.min(a.troops * 0.25, def * 0.12);
+      const dmgToFoe = Math.min(foe.troops * 0.25, atk * 0.12) * guarded(foe);
+      const dmgToSelf = Math.min(a.troops * 0.25, def * 0.12) * guarded(a);
       foe.troops = Math.max(1, foe.troops - dmgToFoe);
       a.troops = Math.max(1, a.troops - dmgToSelf);
       foe.morale = Math.max(0, foe.morale - 0.16 * clamp(ratio));
@@ -1029,6 +1112,7 @@
     }
     /** Assaulting a war camp: beat the men holding it and the camp falls. */
     campBattle(a, p, st) {
+      if (this.era === "peace") return;
       const garrison = this.campGarrison(st);
       if (a.troops > garrison) {
         a.troops -= garrison * 0.6;
@@ -1065,6 +1149,52 @@
     armySpeed(troops) {
       return Math.max(0.45, Math.min(3.4, 0.5 + Math.sqrt(Math.max(1, troops)) * 0.035));
     }
+    /**
+     * Who is standing around this host, and on how many sides.
+     *
+     * Morale is not a private number: it is a reading of the field. Friendly
+     * formations near a host steady it, enemy formations erode it, and being
+     * pressed from several directions at once is what flanking actually feels
+     * like. Tiered men handle that differently, which is the whole point of
+     * paying for tiers.
+     */
+    surveyPressure(a) {
+      let friendly = 0;
+      let enemy = 0;
+      const sides = /* @__PURE__ */ new Set();
+      const at = a.tile;
+      const ax = at % this.world.w;
+      const ay = Math.floor(at / this.world.w);
+      for (const other of this.armies) {
+        if (other === a) continue;
+        const d = this.tileDistance(at, other.tile);
+        if (d > 3) continue;
+        const power = fieldPower(other);
+        if (other.owner === a.owner) {
+          friendly += power;
+          continue;
+        }
+        enemy += power;
+        const ox = other.tile % this.world.w;
+        const oy = Math.floor(other.tile / this.world.w);
+        const ang = Math.atan2(oy - ay, ox - ax);
+        sides.add(Math.round(ang / (Math.PI * 2) * 8) & 7);
+      }
+      a.support = friendly;
+      a.threat = enemy;
+      a.flankSides = sides.size;
+    }
+    /** What this host's morale is trying to be, given supply and the field. */
+    moraleTarget(a) {
+      const base = 0.32 + 0.68 * a.supply;
+      const balance = (a.support + 400) / (a.threat + 400);
+      let target = base + 0.22 * (Math.min(2.2, balance) - 1);
+      const extra = Math.max(0, a.flankSides - 1);
+      const flankWeight = a.tier >= 3 ? 0 : a.tier === 2 ? 0.11 : 0.22;
+      target -= extra * flankWeight;
+      if (a.tier === 1 && a.threat > a.support * 1.6 && a.flankSides >= 3) target -= 0.2;
+      return Math.max(0.05, Math.min(1, target));
+    }
     armyTick(dt) {
       for (let i = this.armies.length - 1; i >= 0; i--) {
         const a = this.armies[i];
@@ -1090,7 +1220,9 @@
         else if (p.grain > 0 && p.rates.grain >= 0) a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
         else a.supply = Math.max(0, a.supply - SUPPLY_HUNGRY * dt);
         if (a.contactTimer > 0) a.contactTimer = Math.max(0, a.contactTimer - dt);
-        const steady = 0.32 + 0.68 * a.supply;
+        a.supplyTimer -= 0;
+        this.surveyPressure(a);
+        const steady = this.moraleTarget(a);
         if (a.contactTimer <= 0) {
           if (a.morale < steady) a.morale = Math.min(steady, a.morale + MORALE_RALLY * dt);
           else a.morale = Math.max(steady, a.morale - MORALE_RALLY * 0.5 * dt);
@@ -1118,7 +1250,7 @@
             continue;
           }
         }
-        if (a.routed) {
+        if (a.routed || a.pulling) {
           const back = this.nextOwnTile(a);
           a.progress += this.armySpeed(a.troops) * dt * 0.85;
           while (a.progress >= 1) {
@@ -1130,7 +1262,11 @@
           if (a.tile === a.home || back < 0) {
             p.troops += Math.round(a.troops);
             this.armies.splice(i, 1);
-            if (!p.isBot) this.note("Broken men are back behind the walls and ready to be mustered.");
+            if (!p.isBot) {
+              this.note(
+                a.pulling ? "Your host is back behind the walls, ready to be thrown in again." : "Broken men are back behind the walls and ready to be mustered."
+              );
+            }
             continue;
           }
           continue;
@@ -1155,6 +1291,7 @@
      * the move became a fight, so the caller does not also move the host.
      */
     contestTile(a, p, t) {
+      if (this.era === "peace") return false;
       const foe = this.armies.find((x) => x !== a && x.owner !== a.owner && x.tile === t);
       if (foe) {
         this.armyBattle(a, p, foe);
@@ -1200,6 +1337,11 @@
         a.holding = true;
         return;
       }
+      if (this.era === "peace") {
+        a.holding = true;
+        if (!p.isBot) this.note("The peace holds. Your host will not cross the border.");
+        return;
+      }
       const def = this.defenseAt(next, owner);
       const atk = fieldPower(a);
       if (!this.canAfford(p, PRICE.pushTile)) {
@@ -1209,7 +1351,8 @@
       }
       if (atk > def) {
         this.pay(p, PRICE.pushTile);
-        a.troops = Math.max(1, a.troops - def * 0.7 / (0.34 + 0.66 * a.supply));
+        const armour = a.tier >= 3 ? 0.55 : a.tier === 2 ? 0.8 : 1;
+        a.troops = Math.max(1, a.troops - def * 0.7 / (0.34 + 0.66 * a.supply) * armour);
         a.morale = Math.max(0.05, a.morale - 0.05);
         const defender = this.players[owner];
         defender.troops = Math.max(0, defender.troops - def * 0.45);
@@ -1482,6 +1625,17 @@
         if (p.isBot && p.alive) this.botThink(p, dt);
       }
       if (this.phase === "playing") {
+        this.year = Math.floor(this.time / YEAR_SECONDS);
+        if (this.era === "peace") {
+          const living = this.players.filter((p) => p.alive && p.tileCount > 0);
+          const allCrossed = living.length > 0 && living.every((p) => p.crossed);
+          if (allCrossed || this.year >= PEACE_YEARS) {
+            this.era = "war";
+            this.note(
+              allCrossed ? "Every banner stands on middle ground. The peace is broken." : "The years of peace are over. The roads belong to armies now."
+            );
+          }
+        }
         this.checkSurrender(dt);
         this.checkStanding();
       }
@@ -1621,7 +1775,9 @@
         h: a.holding ? 1 : 0,
         sp: +a.supply.toFixed(2),
         mo: +a.morale.toFixed(2),
-        rt: a.routed ? 1 : 0
+        rt: a.routed ? 1 : 0,
+        tr: a.tier,
+        pl: a.pulling ? 1 : 0
       }));
       const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
@@ -1712,6 +1868,11 @@
           routed: !!d.rt,
           rallyTimer: 0,
           contactTimer: 0,
+          tier: typeof d.tr === "number" ? d.tr : 1,
+          support: 0,
+          threat: 0,
+          flankSides: 0,
+          pulling: !!d.pl,
           holding: d.h === 1,
           holdTimer: 0
         });
@@ -2024,6 +2185,17 @@
           ctx.fillRect(bx0, by0, bw, bh);
           ctx.fillStyle = cond > 0.66 ? "rgba(150,214,120,0.95)" : cond > 0.33 ? "rgba(240,196,90,0.95)" : "rgba(232,88,74,0.95)";
           ctx.fillRect(bx0, by0, bw * cond, bh);
+        }
+        const tier = Math.max(1, Math.min(3, a.tier ?? 1));
+        if (tier > 1) {
+          const pw = Math.max(2, cam2.scale * 0.14);
+          const gap = Math.max(1, cam2.scale * 0.12);
+          const totalW = tier * pw + (tier - 1) * gap;
+          const py = ay - cam2.scale * 0.95;
+          ctx.fillStyle = tier >= 3 ? "rgba(255,239,178,0.95)" : "rgba(214,190,132,0.9)";
+          for (let i = 0; i < tier; i++) {
+            ctx.fillRect(ax - totalW / 2 + i * (pw + gap), py, pw, Math.max(2, cam2.scale * 0.09));
+          }
         }
         if (a.routed) {
           const [hx, hy] = toScreen(a.home);
@@ -2729,6 +2901,10 @@
   var statCastles = el("stat-castles");
   var statLords = el("stat-lords");
   var armyNote = el("army-note");
+  var statEra = el("stat-era");
+  var hostInfo = el("host-info");
+  var pullBtn = el("pull-btn");
+  var tierBtn = el("tier-btn");
   var logEl = el("log");
   var spawnOverlay = el("spawn-overlay");
   var endOverlay = el("end-overlay");
@@ -2900,6 +3076,33 @@
       log("A camp needs a host holding ground at least three tiles from its castle.");
     }
   }
+  function pullBack() {
+    const me = game.players[game.human];
+    if (!me || selectedHome === null) {
+      log("Pick one of your hosts first, then pull it back.");
+      return;
+    }
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "pull", home: selectedHome });
+      return;
+    }
+    if (!game.withdrawArmy(me, selectedHome)) log("That host is already home.");
+  }
+  function tierUp() {
+    const me = game.players[game.human];
+    if (!me || selectedHome === null) {
+      log("Pick one of your hosts first, then drill it.");
+      return;
+    }
+    if (isGuest) {
+      void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "tier", home: selectedHome });
+      return;
+    }
+    if (!game.upgradeHost(me, selectedHome)) return;
+    refreshHud();
+  }
+  pullBtn.addEventListener("click", () => pullBack());
+  tierBtn.addEventListener("click", () => tierUp());
   function click(tile) {
     if (tile < 0) return;
     const me = game.players[game.human];
@@ -3039,6 +3242,29 @@
     statTroops.classList.toggle("starving", me.starving);
     const alive = game.players.filter((p) => p.alive).length - 1;
     statLords.textContent = `${alive}`;
+    if (statEra) {
+      if (game.era === "war") {
+        statEra.textContent = "WAR";
+        statEra.classList.add("short");
+      } else {
+        statEra.textContent = `Peace \xB7 yr ${game.year + 1} of ${PEACE_YEARS}`;
+        statEra.classList.remove("short");
+      }
+    }
+    if (hostInfo) {
+      const host = selectedHome === null ? void 0 : game.armies.find((a) => a.owner === me.id && a.home === selectedHome);
+      if (!host) {
+        hostInfo.textContent = "No host picked";
+        pullBtn.disabled = true;
+        tierBtn.disabled = true;
+      } else {
+        const label = TIER_NAME[host.tier] ?? "Levy";
+        const state = host.routed ? "routed" : host.pulling ? "pulling back" : host.holding ? "holding" : "on the march";
+        hostInfo.textContent = `${label} \xB7 ${fmt(host.troops)} men \xB7 ${state} \xB7 supply ${host.supply * 100 | 0}%`;
+        pullBtn.disabled = host.tile === host.home;
+        tierBtn.disabled = host.tier >= 3;
+      }
+    }
     if (armyNote) {
       const castle = [...game.structs.values()].find((s) => s.owner === me.id && s.kind === "castle");
       if (castle) {
@@ -3261,6 +3487,8 @@
         if (it.data.kind === "order") game.orderArmy(p, it.data.tile, it.data.ratio ?? 0.3);
         else if (it.data.kind === "armyMove") game.moveArmy(p, it.data.home, it.data.tile);
         else if (it.data.kind === "camp") game.establishCamp(p, it.data.home);
+        else if (it.data.kind === "pull") game.withdrawArmy(p, it.data.home);
+        else if (it.data.kind === "tier") game.upgradeHost(p, it.data.home);
         else if (it.data.kind === "build") game.build(p, it.data.k, it.data.tile);
       }
     }).catch(() => {

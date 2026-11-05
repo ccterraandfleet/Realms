@@ -82,6 +82,7 @@ const s2 = h.neighbors4(s1).find((n) => h.isLand(n))!;
 h.armies.length = 0;
 h.armies.push({ id: 900, owner: small.id, home: s1, troops: 100, tile: s1, target: s2, progress: 0, taken: 0, cutOff: false, speed: 2, supplyTimer: 9, holding: false, holdTimer: 0 });
 h.armies.push({ id: 901, owner: big.id, home: s2, troops: 1000, tile: s2, target: s1, progress: 0, taken: 0, cutOff: false, speed: 0, supplyTimer: 9, holding: true, holdTimer: 0 });
+h.era = "war";
 for (let i = 0; i < 60; i++) h.tick(0.1);
 const smallArmy = h.armies.find((a) => a.id === 900);
 // A beaten host now breaks and routs rather than being deleted by arithmetic,
@@ -103,6 +104,7 @@ k.armies.length = 0;
 k.structs.set(kt, { kind: "camp", owner: holder.id, tile: kt, level: 1, acc: 0 });
 k.armies.push({ id: 950, owner: holder.id, home: kt, troops: 120, tile: kt, target: kt, progress: 0, taken: 0, cutOff: false, speed: 0, supplyTimer: 9, holding: true, holdTimer: 0 });
 k.armies.push({ id: 951, owner: attacker.id, home: kt2, troops: 900, tile: kt2, target: kt, progress: 0, taken: 0, cutOff: false, speed: 2, supplyTimer: 9, holding: false, holdTimer: 0 });
+k.era = "war";
 for (let i = 0; i < 60; i++) k.tick(0.1);
 say(
   "a bigger host breaks an enemy camp on your land",

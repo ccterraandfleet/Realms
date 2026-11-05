@@ -23,6 +23,7 @@ say("supply and morale decide what a host actually fields", fieldPower(hungry) <
 // grinding contact: both bleed, neither evaporates in one beat
 const g = new Game(7);
 g.startMultiplayer(2);
+g.era = "war";
 const a = mk(0, 900, 0);
 const b = mk(1, 500, 0);
 raw(g).armyBattle(a, g.players[0], b);

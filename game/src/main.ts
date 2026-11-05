@@ -7,7 +7,18 @@
  */
 
 import { Camera, Renderer } from "./render/renderer";
-import { ARMY_CAP, BUILD, Bundle, Game, PALETTE, PRICE, STRUCTURE_LABEL, StructureKind } from "./sim/game";
+import {
+  ARMY_CAP,
+  BUILD,
+  Bundle,
+  Game,
+  PALETTE,
+  PEACE_YEARS,
+  PRICE,
+  STRUCTURE_LABEL,
+  StructureKind,
+  TIER_NAME,
+} from "./sim/game";
 import { OCEAN } from "./sim/world";
 import * as net from "./net";
 import { badgeDataUrl } from "./faction";
@@ -37,6 +48,10 @@ const statLand = el("stat-land");
 const statCastles = el("stat-castles");
 const statLords = el("stat-lords");
 const armyNote = el("army-note");
+const statEra = el("stat-era");
+const hostInfo = el("host-info");
+const pullBtn = el("pull-btn") as HTMLButtonElement;
+const tierBtn = el("tier-btn") as HTMLButtonElement;
 const logEl = el("log");
 const spawnOverlay = el("spawn-overlay");
 const endOverlay = el("end-overlay");
@@ -244,6 +259,38 @@ function raiseCamp() {
   }
 }
 
+/** Pull the picked host home: position given up, men kept. */
+function pullBack() {
+  const me = game.players[game.human];
+  if (!me || selectedHome === null) {
+    log("Pick one of your hosts first, then pull it back.");
+    return;
+  }
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "pull", home: selectedHome });
+    return;
+  }
+  if (!game.withdrawArmy(me, selectedHome)) log("That host is already home.");
+}
+
+/** Drill the picked host up a tier. What it can do is what it is. */
+function tierUp() {
+  const me = game.players[game.human];
+  if (!me || selectedHome === null) {
+    log("Pick one of your hosts first, then drill it.");
+    return;
+  }
+  if (isGuest) {
+    void net.postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "tier", home: selectedHome });
+    return;
+  }
+  if (!game.upgradeHost(me, selectedHome)) return;
+  refreshHud();
+}
+
+pullBtn.addEventListener("click", () => pullBack());
+tierBtn.addEventListener("click", () => tierUp());
+
 function click(tile: number) {
   if (tile < 0) return;
   const me = game.players[game.human];
@@ -411,6 +458,33 @@ function refreshHud() {
   statTroops.classList.toggle("starving", me.starving);
   const alive = game.players.filter((p) => p.alive).length - 1;
   statLords.textContent = `${alive}`;
+
+  // Peace or war, and how long the peace has left.
+  if (statEra) {
+    if (game.era === "war") {
+      statEra.textContent = "WAR";
+      statEra.classList.add("short");
+    } else {
+      statEra.textContent = `Peace · yr ${game.year + 1} of ${PEACE_YEARS}`;
+      statEra.classList.remove("short");
+    }
+  }
+
+  // The picked host: which tier, and what the next one costs.
+  if (hostInfo) {
+    const host = selectedHome === null ? undefined : game.armies.find((a) => a.owner === me.id && a.home === selectedHome);
+    if (!host) {
+      hostInfo.textContent = "No host picked";
+      pullBtn.disabled = true;
+      tierBtn.disabled = true;
+    } else {
+      const label = TIER_NAME[host.tier] ?? "Levy";
+      const state = host.routed ? "routed" : host.pulling ? "pulling back" : host.holding ? "holding" : "on the march";
+      hostInfo.textContent = `${label} · ${fmt(host.troops)} men · ${state} · supply ${(host.supply * 100) | 0}%`;
+      pullBtn.disabled = host.tile === host.home;
+      tierBtn.disabled = host.tier >= 3;
+    }
+  }
 
   // What the next host costs, so "need x to do x" is on screen.
   if (armyNote) {
@@ -694,6 +768,8 @@ function hostTick() {
         if (it.data.kind === "order") game.orderArmy(p, it.data.tile as number, (it.data.ratio as number) ?? 0.3);
         else if (it.data.kind === "armyMove") game.moveArmy(p, it.data.home as number, it.data.tile as number);
         else if (it.data.kind === "camp") game.establishCamp(p, it.data.home as number);
+        else if (it.data.kind === "pull") game.withdrawArmy(p, it.data.home as number);
+        else if (it.data.kind === "tier") game.upgradeHost(p, it.data.home as number);
         else if (it.data.kind === "build") game.build(p, it.data.k as StructureKind, it.data.tile as number);
       }
     })

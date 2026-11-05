@@ -366,6 +366,20 @@ export class Renderer {
         ctx.fillRect(bx0, by0, bw * cond, bh);
       }
 
+      // Tier pips above the column: the men are levy, shieldwall or testudo,
+      // which is exactly what decides whether a flank holds.
+      const tier = Math.max(1, Math.min(3, a.tier ?? 1));
+      if (tier > 1) {
+        const pw = Math.max(2, cam.scale * 0.14);
+        const gap = Math.max(1, cam.scale * 0.12);
+        const totalW = tier * pw + (tier - 1) * gap;
+        const py = ay - cam.scale * 0.95;
+        ctx.fillStyle = tier >= 3 ? "rgba(255,239,178,0.95)" : "rgba(214,190,132,0.9)";
+        for (let i = 0; i < tier; i++) {
+          ctx.fillRect(ax - totalW / 2 + i * (pw + gap), py, pw, Math.max(2, cam.scale * 0.09));
+        }
+      }
+
       // A broken host: hollow, with a dashed line back to its castle, so a rout
       // reads instantly and you can see where your men are running to.
       if (a.routed) {
