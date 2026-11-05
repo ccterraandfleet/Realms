@@ -298,6 +298,8 @@
       this.time = 0;
       this.phase = "spawn";
       this.winner = -1;
+      /** Rough tally of what the AI lords spend their turns on. Diagnostics only. */
+      this.botDebug = {};
       /** Peace while realms build their roads, war once the middle is contested. */
       this.era = "peace";
       /** Whole game years elapsed since the world started moving. */
@@ -673,7 +675,7 @@
      */
     lineStrength(p) {
       const front = Math.max(1, p.frontTiles);
-      return Math.max(3, p.troops / front * 3);
+      return Math.max(3, p.troops / front * 1.2);
     }
     /** Count how much border a realm actually has to hold. */
     refreshFront(p) {
@@ -1341,6 +1343,15 @@
         if (a.holding) {
           a.holdTimer += dt;
           this.garrisonTick(a, p, dt);
+          if (a.supply > 0.25 && p.troops > 0) {
+            const homeCastle = this.structs.get(a.home);
+            const cap = homeCastle && homeCastle.kind === "castle" ? ARMY_CAP(homeCastle.level) : 100;
+            if (a.troops < cap) {
+              const take = Math.min(cap - a.troops, p.troops, Math.max(6, cap * 0.06) * dt);
+              a.troops += take;
+              p.troops -= take;
+            }
+          }
           continue;
         }
         const terrain = this.world.terrain[a.tile];
@@ -1742,9 +1753,32 @@
           const terr = TERRAIN_FOR[kind];
           t = own.find((x) => empty(x) && this.world.terrain[x] === terr) ?? -1;
         }
-        if (t >= 0 && this.build(p, kind, t)) return;
+        if (t >= 0 && this.build(p, kind, t)) {
+          this.botDebug["build:" + kind] = (this.botDebug["build:" + kind] ?? 0) + 1;
+          return;
+        }
       }
-      if (p.rates.grain <= 0.05) return;
+      if (p.rates.grain > 3 && p.gold > 260 && p.timber > 220) {
+        const seat = [...this.structs.values()].filter((st) => st.owner === p.id && st.kind === "castle").sort((a, b) => b.level - a.level)[0];
+        if (seat && this.build(p, "castle", seat.tile)) {
+          this.botDebug["raise-seat"] = (this.botDebug["raise-seat"] ?? 0) + 1;
+          return;
+        }
+      }
+      if (!p.crossed && this.botBridge(p)) {
+        this.botDebug.bridge = (this.botDebug.bridge ?? 0) + 1;
+        return;
+      }
+      if (p.rates.grain <= 0.05) {
+        const surplus = this.armies.filter((a) => a.owner === p.id && !a.routed);
+        if (surplus.length > 1) {
+          this.route(surplus[surplus.length - 1]);
+          this.botDebug.starveRoute = (this.botDebug.starveRoute ?? 0) + 1;
+          return;
+        }
+        this.botDebug.starveIdle = (this.botDebug.starveIdle ?? 0) + 1;
+        return;
+      }
       const targets = [];
       for (const i of p.tiles) {
         for (const n of this.neighbors4(i)) {
@@ -1755,16 +1789,88 @@
           targets.push({ t: n, cost });
         }
       }
-      if (!targets.length) return;
+      if (!targets.length) {
+        this.botDebug.noTargets = (this.botDebug.noTargets ?? 0) + 1;
+        return;
+      }
       targets.sort((a, b) => a.cost - b.cost);
       const pick = targets[Math.floor(this.rng() * Math.min(4, targets.length))];
       const ratio = 0.25 + this.rng() * 0.3;
       for (const a of this.armies) {
         if (a.owner !== p.id || !a.holding) continue;
         if (this.owners[a.tile] === p.id) continue;
-        if (this.rng() < 0.5 && this.establishCamp(p, a.home)) return;
+        if (this.rng() < 0.5 && this.establishCamp(p, a.home)) {
+          this.botDebug.camp = (this.botDebug.camp ?? 0) + 1;
+          return;
+        }
+      }
+      const idle = this.armies.filter((a) => a.owner === p.id && a.holding && !a.routed && !a.pulling);
+      if (idle.length && this.rng() < 0.8) {
+        const host = idle[Math.floor(this.rng() * idle.length)];
+        const local = this.nearestBorderTarget(p, host.tile);
+        const goal = local >= 0 ? local : pick.t;
+        if (host.tile !== goal && this.moveArmy(p, host.home, goal)) {
+          this.botDebug.pushHost = (this.botDebug.pushHost ?? 0) + 1;
+          return;
+        }
       }
       this.orderArmy(p, pick.t, ratio);
+    }
+    /**
+     * Lay one span of the crossing to the middle ground, if this lord can pay.
+     *
+     * The chain is built the same way a player builds it: a span on water that
+     * touches your own ground, which then becomes your ground so the next span
+     * can push further. Each span chosen is the one closest to the middle, so the
+     * bridge goes somewhere instead of wandering along the beach.
+     */
+    botBridge(p) {
+      if (this.era === "war" && this.rng() < 0.5) return false;
+      const cost = this.buildCost("bridge", 1);
+      if (!this.canAfford(p, cost)) return false;
+      const cx = this.world.w >> 1;
+      const cy = this.world.h >> 1;
+      const middle = cy * this.world.w + cx;
+      let best = -1;
+      let bestD = Infinity;
+      for (const i of p.tiles) {
+        for (const n of this.neighbors4(i)) {
+          if (this.isLand(n)) continue;
+          if (this.owners[n] >= 0 && this.owners[n] !== p.id) continue;
+          const d = this.tileDistance(n, middle);
+          if (d < bestD) {
+            bestD = d;
+            best = n;
+          }
+        }
+      }
+      if (best < 0) return false;
+      return this.build(p, "bridge", best);
+    }
+    /**
+     * The border tile nearest a given host, which is where that host should fight.
+     *
+     * Lords used to order a host at whatever weak border they could see anywhere
+     * in the world, so columns spent whole campaigns walking and never met. A host
+     * fights the front it is standing on.
+     */
+    nearestBorderTarget(p, from) {
+      let best = -1;
+      let bestD = Infinity;
+      for (const i of p.tiles) {
+        if (this.tileDistance(i, from) > bestD) continue;
+        for (const n of this.neighbors4(i)) {
+          if (this.owners[n] === p.id || !this.isLand(n)) continue;
+          const owner = this.owners[n];
+          if (owner >= 0 && this.players[owner].immune > 0) continue;
+          const d = this.tileDistance(n, from);
+          if (d < bestD) {
+            bestD = d;
+            best = n;
+          }
+        }
+      }
+      return best;
     }
     /** Fraction of the world's land a player holds. */
     landShare(p) {
@@ -3323,8 +3429,9 @@
     const msgs = game.messages;
     if (shownMessages > msgs.length) shownMessages = 0;
     for (let i = shownMessages; i < msgs.length; i++) {
-      const text = msgs[i];
-      if (typeof text === "string" && text) log(text);
+      const entry = msgs[i];
+      const text = typeof entry === "string" ? entry : entry?.text;
+      if (text) log(text);
     }
     shownMessages = msgs.length;
   }
