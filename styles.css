@@ -480,3 +480,13 @@ button.primary:hover {
   opacity: 0.4;
   cursor: default;
 }
+
+#host-bar button.danger {
+  border-color: rgba(232, 88, 74, 0.55);
+  color: #ffd9cf;
+}
+
+#host-bar button.danger:hover:not(:disabled) {
+  background: rgba(122, 44, 34, 0.85);
+  border-color: rgba(232, 88, 74, 0.9);
+}
