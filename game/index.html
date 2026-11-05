@@ -38,6 +38,7 @@
         <span id="host-info">No host picked</span>
         <button id="pull-btn" title="Walk the picked host home, intact">Pull back</button>
         <button id="tier-btn" title="Take the picked host up a tier">Tier up</button>
+        <button id="war-btn" class="danger" title="End the peace now (host only)">Break peace</button>
       </div>
       <div id="build-bar"></div>
       <div id="ratio-box">
@@ -69,7 +70,7 @@
       // one and re-requests the document under a fresh cache key, keeping any
       // ?room= pin, so a tab can never sit on an old bundle.
       (function () {
-        var BUILD = "20261105.064417";
+        var BUILD = "20261105.064524";
         function check(first) {
           fetch("dist/version.json?t=" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -85,6 +86,6 @@
         setInterval(check, 45000);
       })();
     </script>
-    <script src="dist/game.js?v=20261105.064417"></script>
+    <script src="dist/game.js?v=20261105.064524"></script>
   </body>
 </html>

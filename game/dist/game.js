@@ -928,6 +928,17 @@
       a.progress = 0;
       return true;
     }
+    /**
+     * End the peace early. Host only, so a guest cannot start a war on a whim; this
+     * exists so a world can be played forward without sitting out the full years.
+     */
+    breakPeace(p) {
+      if (p.id !== this.human) return false;
+      if (this.era !== "peace") return false;
+      this.era = "war";
+      this.note("The peace is broken by decree. The roads belong to armies now.");
+      return true;
+    }
     /** Is this tile one of the realm's own cities (a castle or a market)? */
     isOwnCity(p, tile) {
       const st = this.structs.get(tile);
@@ -2974,6 +2985,7 @@
   var hostInfo = el("host-info");
   var pullBtn = el("pull-btn");
   var tierBtn = el("tier-btn");
+  var warBtn = el("war-btn");
   var logEl = el("log");
   var spawnOverlay = el("spawn-overlay");
   var endOverlay = el("end-overlay");
@@ -3174,7 +3186,13 @@
     if (!game.upgradeHost(me, selectedHome)) return;
     refreshHud();
   }
+  function breakPeace() {
+    const me = game.players[game.human];
+    if (!me || isGuest) return;
+    if (game.breakPeace(me)) refreshHud();
+  }
   pullBtn.addEventListener("click", () => pullBack());
+  warBtn.addEventListener("click", () => breakPeace());
   tierBtn.addEventListener("click", () => tierUp());
   function click(tile) {
     if (tile < 0) return;
@@ -3336,6 +3354,7 @@
         statEra.textContent = `Peace \xB7 yr ${game.year + 1} of ${PEACE_YEARS}`;
         statEra.classList.remove("short");
       }
+      if (warBtn) warBtn.classList.toggle("hidden", game.era !== "peace" || isGuest);
     }
     if (hostInfo) {
       const host = selectedHome === null ? void 0 : game.armies.find((a) => a.owner === me.id && a.home === selectedHome);
