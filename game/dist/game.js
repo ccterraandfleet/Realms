@@ -2090,7 +2090,7 @@
   };
 
   // src/render/renderer.ts
-  var P = 3;
+  var P = 6;
   var TERRAIN = {
     [OCEAN]: [26, 55, 74],
     [SAND]: [201, 182, 141],
@@ -2155,64 +2155,264 @@
     /* ---------------------------------------------------------------- */
     /* Terrain                                                          */
     /* ---------------------------------------------------------------- */
-    paintTerrain() {
+    /**
+     * A tile-level height field with rolling noise on top of the terrain classes.
+     *
+     * The old map shaded a tile by comparing it with the one above it, which gives
+     * stripes rather than landform. This is the base for a real hillshade: smooth
+     * heights, so a light from the north-west reads ridges, valleys and coast.
+     */
+    heightField() {
       const { w, h, terrain } = this.g.world;
-      const ctx = this.terrainCv.getContext("2d");
-      const img = ctx.createImageData(w * P, h * P);
-      const d = img.data;
+      const out = new Float32Array(w * h);
+      const base = [0.02, 0.16, 0.34, 0.52, 0.86];
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const t = terrain[y * w + x];
-          const base = TERRAIN[t];
-          const n = hash(x, y, 11) - 0.5;
-          const lift = 1 + n * (t === OCEAN ? 0.1 : 0.24);
-          let slope = 1;
-          if (y > 0) {
-            const up = terrain[(y - 1) * w + x];
-            slope = t === OCEAN ? 1 : 1 + (t - up) * 0.06;
+          const t = y * w + x;
+          const cls = terrain[t];
+          let n = 0;
+          let amp = 0.5;
+          let freq = 0.035;
+          for (let o = 0; o < 2; o++) {
+            const gx = x * freq;
+            const gy = y * freq;
+            const x0 = Math.floor(gx);
+            const y0 = Math.floor(gy);
+            const tx = gx - x0;
+            const ty = gy - y0;
+            const sx = tx * tx * (3 - 2 * tx);
+            const sy = ty * ty * (3 - 2 * ty);
+            const a = hash(x0, y0, 91 + o);
+            const b = hash(x0 + 1, y0, 91 + o);
+            const c = hash(x0, y0 + 1, 91 + o);
+            const d = hash(x0 + 1, y0 + 1, 91 + o);
+            const top = a + (b - a) * sx;
+            const bot = c + (d - c) * sx;
+            n += (top + (bot - top) * sy) * amp;
+            amp *= 0.5;
+            freq *= 2.4;
           }
-          const rich = this.g.world.richness[y * w + x] || 1;
-          const wealth = t === OCEAN ? 1 : 1 + (rich - 1) * 0.16;
-          const r = Math.min(255, base[0] * lift * slope * wealth);
-          const gch = Math.min(255, base[1] * lift * slope * (1 + (rich - 1) * 0.1));
-          const b = Math.min(255, base[2] * lift * slope * (1 - (rich - 1) * 0.05));
-          for (let py = 0; py < P; py++) {
-            for (let px = 0; px < P; px++) {
-              const i = ((y * P + py) * w * P + (x * P + px)) * 4;
-              d[i] = r;
-              d[i + 1] = gch;
-              d[i + 2] = b;
-              d[i + 3] = 255;
+          const rough = cls === MOUNTAIN ? 0.5 : cls === FOREST ? 0.28 : cls === OCEAN ? 0.1 : 0.18;
+          out[t] = base[cls] + (n - 0.35) * rough;
+        }
+      }
+      const tmp = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const t = y * w + x;
+          let sum = 0;
+          let count = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              sum += out[ny * w + nx];
+              count++;
             }
           }
+          tmp[t] = sum / count;
+        }
+      }
+      return tmp;
+    }
+    /** Tiles of open water between each sea tile and the nearest shore. */
+    depthField() {
+      const { w, h, terrain } = this.g.world;
+      const far = 64;
+      const out = new Float32Array(w * h).fill(far);
+      for (let t = 0; t < w * h; t++) if (terrain[t] !== OCEAN) out[t] = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const t = y * w + x;
+          let v = out[t];
+          if (x > 0) v = Math.min(v, out[t - 1] + 1);
+          if (y > 0) v = Math.min(v, out[t - w] + 1);
+          if (x > 0 && y > 0) v = Math.min(v, out[t - w - 1] + 1.4);
+          if (x < w - 1 && y > 0) v = Math.min(v, out[t - w + 1] + 1.4);
+          out[t] = v;
+        }
+      }
+      for (let y = h - 1; y >= 0; y--) {
+        for (let x = w - 1; x >= 0; x--) {
+          const t = y * w + x;
+          let v = out[t];
+          if (x < w - 1) v = Math.min(v, out[t + 1] + 1);
+          if (y < h - 1) v = Math.min(v, out[t + w] + 1);
+          if (x < w - 1 && y < h - 1) v = Math.min(v, out[t + w + 1] + 1.4);
+          if (x > 0 && y < h - 1) v = Math.min(v, out[t + w - 1] + 1.4);
+          out[t] = v;
+        }
+      }
+      return out;
+    }
+    paintTerrain() {
+      const { w, h, terrain, richness } = this.g.world;
+      const ctx = this.terrainCv.getContext("2d");
+      const W = w * P;
+      const H = h * P;
+      const img = ctx.createImageData(W, H);
+      const d = img.data;
+      const heights = this.heightField();
+      const depth = this.depthField();
+      const lx = -0.62;
+      const ly = -0.62;
+      const lz = 0.48;
+      const llen = Math.hypot(lx, ly, lz);
+      const Lx = lx / llen, Ly = ly / llen, Lz = lz / llen;
+      const relief = 9.5;
+      const at = (x, y) => x < 0 || y < 0 || x >= w || y >= h ? 0 : y * w + x;
+      for (let py = 0; py < H; py++) {
+        const fy = py / P - 0.5;
+        const y0 = Math.floor(fy);
+        const ty = fy - y0;
+        for (let px = 0; px < W; px++) {
+          const fx = px / P - 0.5;
+          const x0 = Math.floor(fx);
+          const tx = fx - x0;
+          const t00 = at(x0, y0);
+          const t10 = at(x0 + 1, y0);
+          const t01 = at(x0, y0 + 1);
+          const t11 = at(x0 + 1, y0 + 1);
+          const b00 = TERRAIN[terrain[t00] ?? OCEAN];
+          const b10 = TERRAIN[terrain[t10] ?? OCEAN];
+          const b01 = TERRAIN[terrain[t01] ?? OCEAN];
+          const b11 = TERRAIN[terrain[t11] ?? OCEAN];
+          const w00 = (1 - tx) * (1 - ty);
+          const w10 = tx * (1 - ty);
+          const w01 = (1 - tx) * ty;
+          const w11 = tx * ty;
+          let r = b00[0] * w00 + b10[0] * w10 + b01[0] * w01 + b11[0] * w11;
+          let gch = b00[1] * w00 + b10[1] * w10 + b01[1] * w01 + b11[1] * w11;
+          let b = b00[2] * w00 + b10[2] * w10 + b01[2] * w01 + b11[2] * w11;
+          const h00 = heights[t00] ?? 0;
+          const h10 = heights[t10] ?? 0;
+          const h01 = heights[t01] ?? 0;
+          const h11 = heights[t11] ?? 0;
+          const hv = h00 * w00 + h10 * w10 + h01 * w01 + h11 * w11;
+          const dhdx = (h10 - h00) * (1 - ty) + (h11 - h01) * ty;
+          const dhdy = (h01 - h00) * (1 - tx) + (h11 - h10) * tx;
+          const nx = -dhdx * relief;
+          const ny = -dhdy * relief;
+          const nlen = Math.hypot(nx, ny, 1);
+          const diffuse = Math.max(0, (nx * Lx + ny * Ly + Lz) / nlen);
+          let lum = 0.52 + 0.95 * diffuse;
+          const wet = terrain[t00] === OCEAN && terrain[t10] === OCEAN && terrain[t01] === OCEAN && terrain[t11] === OCEAN;
+          if (wet) {
+            const dep = depth[t00] ?? 8;
+            const k = Math.min(1, dep / 7);
+            const shallow = [58, 116, 128];
+            const deep = [13, 32, 48];
+            r = shallow[0] + (deep[0] - shallow[0]) * k;
+            gch = shallow[1] + (deep[1] - shallow[1]) * k;
+            b = shallow[2] + (deep[2] - shallow[2]) * k;
+            lum = 0.9 + 0.22 * diffuse;
+            if (dep < 1.2) lum *= 1.16;
+          } else {
+            const rich = richness[t00] ?? 1;
+            const wealth = 1 + (rich - 1) * 0.1;
+            r *= wealth * 1.04;
+            gch *= wealth;
+            b *= 1 - (rich - 1) * 0.04;
+            if (terrain[t00] === MOUNTAIN && hv > 0.94) {
+              const snow = Math.min(1, (hv - 0.94) * 6);
+              r += (238 - r) * snow;
+              gch += (240 - gch) * snow;
+              b += (236 - b) * snow;
+            }
+          }
+          const grain = (hash(px, py, 17) - 0.5) * 15;
+          const i = (py * W + px) * 4;
+          d[i] = Math.min(255, Math.max(0, r * lum + grain));
+          d[i + 1] = Math.min(255, Math.max(0, gch * lum + grain));
+          d[i + 2] = Math.min(255, Math.max(0, b * lum + grain + (wet ? 6 : 0)));
+          d[i + 3] = 255;
         }
       }
       ctx.putImageData(img, 0, 0);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const t = terrain[y * w + x];
-          const r = hash(x, y, 5);
-          if (t === FOREST && r > 0.35) {
-            ctx.fillStyle = r > 0.8 ? "#4e7d47" : "#31502e";
-            const cx = x * P + 1 + hash(x, y, 3) * 1.2;
-            const cy = y * P + 1.2 + hash(x, y, 4) * 1.2;
-            ctx.beginPath();
-            ctx.moveTo(cx, cy - 1.5);
-            ctx.lineTo(cx + 1.15, cy + 1.2);
-            ctx.lineTo(cx - 1.15, cy + 1.2);
-            ctx.closePath();
-            ctx.fill();
-          } else if (t === MOUNTAIN && r > 0.55) {
-            ctx.fillStyle = r > 0.85 ? "#efece4" : "#a9a49a";
-            ctx.beginPath();
-            ctx.moveTo(x * P + 1.5, y * P + 0.4);
-            ctx.lineTo(x * P + 2.9, y * P + 2.6);
-            ctx.lineTo(x * P + 0.1, y * P + 2.6);
-            ctx.closePath();
-            ctx.fill();
-          } else if (t === OCEAN && r > 0.86) {
-            ctx.fillStyle = "rgba(150,196,214,0.18)";
-            ctx.fillRect(x * P, y * P + 1, P, 1);
+          const t = y * w + x;
+          const cls = terrain[t];
+          const cx = x * P + P / 2;
+          const cy = y * P + P / 2;
+          const rnd = hash(x, y, 5);
+          if (cls === FOREST) {
+            const count = 3 + Math.floor(hash(x, y, 6) * 3);
+            for (let k = 0; k < count; k++) {
+              const ang = hash(x * 7 + k, y * 13, 8) * 6.283;
+              const rad = hash(x * 3 + k, y * 5, 9) * P * 0.34;
+              const tx0 = cx + Math.cos(ang) * rad;
+              const ty0 = cy + Math.sin(ang) * rad * 0.85;
+              const size = P * (0.32 + hash(x + k, y * 2, 10) * 0.3);
+              const grd = ctx.createRadialGradient(tx0 - size * 0.35, ty0 - size * 0.45, size * 0.2, tx0, ty0, size);
+              grd.addColorStop(0, "rgba(126,166,96,0.95)");
+              grd.addColorStop(0.55, "rgba(64,104,58,0.92)");
+              grd.addColorStop(1, "rgba(30,54,32,0.0)");
+              ctx.fillStyle = grd;
+              ctx.beginPath();
+              ctx.arc(tx0, ty0 + size * 0.35, size, 0, 6.283);
+              ctx.fill();
+            }
+          } else if (cls === MOUNTAIN) {
+            if (rnd > 0.3) {
+              const peakX = cx + (hash(x, y, 12) - 0.5) * P * 0.5;
+              const peakY = cy - P * (0.35 + hash(x, y, 13) * 0.25);
+              const halfW = P * (0.36 + hash(x, y, 14) * 0.22);
+              ctx.beginPath();
+              ctx.moveTo(peakX, peakY);
+              ctx.lineTo(peakX + halfW, cy + P * 0.4);
+              ctx.lineTo(peakX - halfW * 0.15, cy + P * 0.42);
+              ctx.closePath();
+              ctx.fillStyle = "rgba(92,88,80,0.85)";
+              ctx.fill();
+              ctx.beginPath();
+              ctx.moveTo(peakX, peakY);
+              ctx.lineTo(peakX - halfW, cy + P * 0.4);
+              ctx.lineTo(peakX - halfW * 0.15, cy + P * 0.42);
+              ctx.closePath();
+              ctx.fillStyle = "rgba(186,182,170,0.8)";
+              ctx.fill();
+              if (rnd > 0.72) {
+                ctx.fillStyle = "rgba(246,248,248,0.9)";
+                ctx.beginPath();
+                ctx.moveTo(peakX, peakY);
+                ctx.lineTo(peakX + halfW * 0.34, peakY + P * 0.28);
+                ctx.lineTo(peakX - halfW * 0.3, peakY + P * 0.26);
+                ctx.closePath();
+                ctx.fill();
+              }
+            }
+          } else if (cls === PLAINS) {
+            const blades = 3 + Math.floor(hash(x, y, 15) * 3);
+            for (let k = 0; k < blades; k++) {
+              const bx = x * P + hash(x * 5 + k, y, 18) * P;
+              const by = y * P + hash(x, y * 5 + k, 19) * P;
+              const len = P * (0.16 + hash(x + k, y, 20) * 0.18);
+              ctx.strokeStyle = hash(bx, by, 21) > 0.5 ? "rgba(150,178,104,0.5)" : "rgba(70,96,52,0.45)";
+              ctx.lineWidth = Math.max(0.6, P * 0.09);
+              ctx.beginPath();
+              ctx.moveTo(bx, by);
+              ctx.lineTo(bx + (hash(bx, by, 22) - 0.5) * len, by - len);
+              ctx.stroke();
+            }
+          } else if (cls === SAND) {
+            const specks = 4;
+            for (let k = 0; k < specks; k++) {
+              ctx.fillStyle = hash(x + k, y, 23) > 0.5 ? "rgba(232,216,178,0.5)" : "rgba(158,138,104,0.4)";
+              ctx.fillRect(x * P + hash(x * 3 + k, y, 24) * P, y * P + hash(x, y * 3 + k, 25) * P, P * 0.16, P * 0.16);
+            }
+          } else if (cls === OCEAN) {
+            const dep = depth[t] ?? 9;
+            if (dep < 4 && hash(x, y, 26) > 0.55) {
+              ctx.strokeStyle = "rgba(196,226,232,0.28)";
+              ctx.lineWidth = Math.max(0.7, P * 0.1);
+              const wy = y * P + hash(x, y, 27) * P;
+              ctx.beginPath();
+              ctx.moveTo(x * P + 0.5, wy);
+              ctx.quadraticCurveTo(x * P + P * 0.5, wy - P * 0.16, x * P + P - 0.5, wy);
+              ctx.stroke();
+            }
           }
         }
       }
@@ -2229,7 +2429,7 @@
       const bctx = this.borderCv.getContext("2d");
       octx.clearRect(x * P, y * P, P, P);
       if (owner >= 0) {
-        octx.globalAlpha = 0.5;
+        octx.globalAlpha = 0.34;
         octx.fillStyle = PALETTE[owner % PALETTE.length];
         octx.fillRect(x * P, y * P, P, P);
         octx.globalAlpha = 1;
@@ -2295,7 +2495,10 @@
       ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
       const dw = w * cam2.scale;
       const dh = h * cam2.scale;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(this.terrainCv, 0, 0, this.terrainCv.width, this.terrainCv.height, cam2.x, cam2.y, dw, dh);
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this.ownerCv, 0, 0, this.ownerCv.width, this.ownerCv.height, cam2.x, cam2.y, dw, dh);
       ctx.drawImage(this.borderCv, 0, 0, this.borderCv.width, this.borderCv.height, cam2.x, cam2.y, dw, dh);
       const toScreen = (t) => {
