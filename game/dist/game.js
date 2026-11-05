@@ -3730,6 +3730,7 @@
   var MATCH_DELAY_MS = 3e4;
   var countdownEl = null;
   var myFaction = null;
+  var hasWorld = false;
   function guestTick() {
     if (pollInFlight) return;
     pollInFlight = true;
@@ -3741,6 +3742,7 @@
       }
       try {
         game.applySnapshot(res.state);
+        hasWorld = true;
         snapshotBroken = false;
       } catch {
         snapshotBroken = true;
@@ -3848,8 +3850,12 @@
         const btn = document.createElement("button");
         btn.id = "takeover";
         btn.className = "copy-link";
-        btn.textContent = "Take over world";
-        btn.addEventListener("click", () => becomeHost());
+        btn.textContent = hasWorld ? "Resume world" : "Take over world";
+        btn.title = hasWorld ? "Carry on from the last saved moment of this match" : "Host this match from your side";
+        btn.addEventListener("click", () => {
+          if (hasWorld) log("Resumed from the last saved moment of this world.");
+          becomeHost();
+        });
         bar.append(btn);
       }
       return;
