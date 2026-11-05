@@ -1188,7 +1188,7 @@
     }
     /** Stronger columns advance faster; rough ground slows them. */
     armySpeed(troops) {
-      return Math.max(0.45, Math.min(3.4, 0.5 + Math.sqrt(Math.max(1, troops)) * 0.035));
+      return Math.max(0.7, Math.min(4.2, 0.82 + Math.sqrt(Math.max(1, troops)) * 0.05));
     }
     /**
      * Who is standing around this host, and on how many sides.
@@ -3559,7 +3559,7 @@
     }
     window.setInterval(isHost ? hostTick : guestTick, isHost ? 250 : 400);
     window.setInterval(watchSync, 2e3);
-    log(isHost ? `Match ${roomCode}. ${game.players.length - 2} rival lords are loose.` : `Joined match ${roomCode}.`);
+    log(isHost ? `Match ${roomCode}. ${game.players.length - 1} rival lords are loose.` : `Joined match ${roomCode}.`);
   }
   function showIdentity(f) {
     const host = document.getElementById("you");

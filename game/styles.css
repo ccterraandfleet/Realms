@@ -490,3 +490,8 @@ button.primary:hover {
   background: rgba(122, 44, 34, 0.85);
   border-color: rgba(232, 88, 74, 0.9);
 }
+
+/* A collapsed control. The overlay rules only cover panels, not buttons. */
+#host-bar button.hidden {
+  display: none;
+}
