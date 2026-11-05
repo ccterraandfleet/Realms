@@ -27,12 +27,18 @@
         <div class="stat"><span class="k">Castles</span><span id="stat-castles" class="v">0</span></div>
         <div class="stat"><span class="k">Rivals</span><span id="stat-lords" class="v">0</span></div>
         <div class="stat wide"><span class="k">Muster</span><span id="army-note" class="v small">—</span></div>
+        <div class="stat"><span class="k">Era</span><span id="stat-era" class="v small">—</span></div>
       </div>
     </header>
 
     <div id="log"></div>
 
     <footer id="bottom">
+      <div id="host-bar">
+        <span id="host-info">No host picked</span>
+        <button id="pull-btn" title="Walk the picked host home, intact">Pull back</button>
+        <button id="tier-btn" title="Take the picked host up a tier">Tier up</button>
+      </div>
       <div id="build-bar"></div>
       <div id="ratio-box">
         <span class="k">Host sent</span>
@@ -63,7 +69,7 @@
       // one and re-requests the document under a fresh cache key, keeping any
       // ?room= pin, so a tab can never sit on an old bundle.
       (function () {
-        var BUILD = "20261105.062817";
+        var BUILD = "20261105.063640";
         function check(first) {
           fetch("dist/version.json?t=" + Date.now(), { cache: "no-store" })
             .then(function (r) { return r.json(); })
@@ -79,6 +85,6 @@
         setInterval(check, 45000);
       })();
     </script>
-    <script src="dist/game.js?v=20261105.062817"></script>
+    <script src="dist/game.js?v=20261105.063640"></script>
   </body>
 </html>
