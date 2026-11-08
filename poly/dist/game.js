@@ -1,5 +1,8 @@
-"use strict";
 (() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
   // src/sim/world.ts
   var OCEAN = 0;
   var PLAINS = 1;
@@ -401,9 +404,11 @@
   var HOST_MAX_MEN = [0, 240, 420, 700, 1100];
   var Game = class _Game {
     constructor(world, resumed) {
-      this.ownerTimer = 0;
-      this.aiTimer = 0;
-      this.convoyTimer = 0;
+      __publicField(this, "state");
+      __publicField(this, "world");
+      __publicField(this, "ownerTimer", 0);
+      __publicField(this, "aiTimer", 0);
+      __publicField(this, "convoyTimer", 0);
       this.world = world;
       this.state = resumed ?? this.freshState();
     }
@@ -18719,6 +18724,13 @@
       this.dispatchEvent({ type: "dispose" });
     }
   };
+  var CanvasTexture = class extends Texture {
+    constructor(canvas2, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy) {
+      super(canvas2, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy);
+      this.isCanvasTexture = true;
+      this.needsUpdate = true;
+    }
+  };
   var CylinderGeometry = class _CylinderGeometry extends BufferGeometry {
     constructor(radiusTop = 1, radiusBottom = 1, height = 1, radialSegments = 32, heightSegments = 1, openEnded = false, thetaStart = 0, thetaLength = Math.PI * 2) {
       super();
@@ -20544,7 +20556,7 @@
     }
   }
 
-  // src/view/poly.ts
+  // src/view/look.ts
   var TILT = 0.22;
   var CAM_DIST = 300;
   var CHUNK = 3;
@@ -20580,27 +20592,37 @@
     const d = hash2(x0 + 1, y0 + 1, seed2);
     return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
   }
-  var PolyView = class {
+  var Look = class {
     constructor(canvas2, game) {
       this.game = game;
       /** Facet size in tiles: 1 for a sculpted preset world, CHUNK otherwise. */
-      this.chunk = CHUNK;
-      this.scene = new Scene();
-      this.terrain = null;
-      this.drape = null;
-      this.drapeTex = null;
-      this.trees = null;
-      this.rocks = null;
-      this.men = null;
-      this.banners = null;
-      this.carts = null;
-      this.keeps = /* @__PURE__ */ new Map();
-      this.cw = 0;
-      this.ch = 0;
-      this.ray = new Raycaster();
-      this.plane = new Plane(new Vector3(0, 1, 0), 0);
-      this.ownerSig = "";
-      this.sizeKey = "";
+      __publicField(this, "chunk", CHUNK);
+      __publicField(this, "renderer");
+      __publicField(this, "scene", new Scene());
+      __publicField(this, "cam");
+      __publicField(this, "sun");
+      __publicField(this, "canvas");
+      __publicField(this, "terrain", null);
+      __publicField(this, "drape", null);
+      __publicField(this, "drapeTex", null);
+      __publicField(this, "water", null);
+      __publicField(this, "waterUniforms", null);
+      __publicField(this, "trees", null);
+      __publicField(this, "rocks", null);
+      __publicField(this, "men", null);
+      __publicField(this, "banners", null);
+      __publicField(this, "carts", null);
+      __publicField(this, "hoverRing");
+      __publicField(this, "selectRing");
+      __publicField(this, "keeps", /* @__PURE__ */ new Map());
+      __publicField(this, "heights");
+      __publicField(this, "corners");
+      __publicField(this, "cw", 0);
+      __publicField(this, "ch", 0);
+      __publicField(this, "ray", new Raycaster());
+      __publicField(this, "plane", new Plane(new Vector3(0, 1, 0), 0));
+      __publicField(this, "ownerSig", "");
+      __publicField(this, "sizeKey", "");
       this.canvas = canvas2;
       this.renderer = new WebGLRenderer({ canvas: canvas2, antialias: true });
       this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
@@ -20608,7 +20630,7 @@
       this.renderer.shadowMap.type = PCFSoftShadowMap;
       this.renderer.outputColorSpace = SRGBColorSpace;
       this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.46;
+      this.renderer.toneMappingExposure = 1.54;
       this.scene.background = new Color(1319724);
       this.scene.fog = new Fog(11058372, 320, 700);
       this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1200);
@@ -20694,7 +20716,7 @@
         for (let t = 0; t < w * h; t++) {
           const code = world.presetClass[t];
           const e = elev ? elev[t] : code === 0 ? 0 : 0.3;
-          fine[t] = code === 0 ? 0 : e * RELIEF;
+          fine[t] = code === 0 ? -0.9 : e * RELIEF;
         }
         for (let y = 0; y < h; y++) {
           for (let x = 0; x < w; x++) {
@@ -20883,13 +20905,80 @@
       }
       this.terrain.receiveShadow = true;
       this.scene.add(this.terrain);
-      const apron = new Mesh(
-        new PlaneGeometry(w * 4, h * 4),
-        new MeshStandardMaterial({ color: 2850470, flatShading: true, roughness: 0.94 })
-      );
+      this.waterUniforms = {
+        uTime: { value: 0 },
+        uDeep: { value: new Color(2058892) },
+        uShallow: { value: new Color(5815510) },
+        uLight: { value: new Vector3(-0.6, 0.75, -0.3).normalize() },
+        uSun: { value: new Color(16773330) }
+      };
+      const waterMat = new ShaderMaterial({
+        uniforms: this.waterUniforms,
+        // Translucent: the picture's own sea colours still show through, but the
+        // surface moves over them.
+        transparent: true,
+        depthWrite: false,
+        blending: NormalBlending,
+        vertexShader: `
+        varying vec3 vWorld;
+        varying float vWave;
+        uniform float uTime;
+        void main() {
+          vec3 p = position;
+          // three swells at different scales so the surface never reads as a pattern
+          float a = sin(p.x * 0.31 + uTime * 0.9) * cos(p.y * 0.27 + uTime * 0.7);
+          float b = sin(p.x * 0.09 - uTime * 0.35 + p.y * 0.11) * 0.7;
+          float c = sin(p.y * 0.53 + uTime * 1.4) * 0.35;
+          vWave = a + b + c;
+          p.z += vWave * 0.42;
+          vec4 wp = modelMatrix * vec4(p, 1.0);
+          vWorld = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+        fragmentShader: `
+        varying vec3 vWorld;
+        varying float vWave;
+        uniform vec3 uDeep;
+        uniform vec3 uShallow;
+        uniform vec3 uLight;
+        uniform vec3 uSun;
+        uniform float uTime;
+        void main() {
+          // cheap normal from the wave field's own gradient
+          float h  = vWave;
+          vec3 n = normalize(vec3(-cos(vWorld.x * 0.31 + uTime * 0.9) * 0.55, 1.0,
+                                  -cos(vWorld.z * 0.27 + uTime * 0.7) * 0.55));
+          float diff = max(dot(n, uLight), 0.0);
+          float spec = pow(max(dot(reflect(-uLight, n), vec3(0.0, 1.0, 0.0)), 0.0), 24.0);
+          vec3 col = mix(uDeep, uShallow, clamp(0.5 + h * 0.45, 0.0, 1.0));
+          col *= 0.72 + diff * 0.5;
+          col += uSun * spec * 0.5;
+          // Brighter crests are more opaque: the swell reads even when zoomed out.
+          float alpha = 0.42 + clamp(h, 0.0, 1.0) * 0.22 + spec * 0.5;
+          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.85));
+        }
+      `
+      });
+      const apron = new Mesh(new PlaneGeometry(w * 4, h * 4, 240, 240), waterMat);
       apron.rotation.x = -Math.PI / 2;
-      apron.position.set(w / 2, -0.35, h / 2);
+      apron.position.set(w / 2, 0.1, h / 2);
+      apron.receiveShadow = false;
       this.scene.add(apron);
+      this.water = apron;
+      const skyCanvas = document.createElement("canvas");
+      skyCanvas.width = 4;
+      skyCanvas.height = 256;
+      const sctx = skyCanvas.getContext("2d");
+      const grad = sctx.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, "#8fb6c9");
+      grad.addColorStop(0.55, "#c3d6d9");
+      grad.addColorStop(1, "#e3ddc8");
+      sctx.fillStyle = grad;
+      sctx.fillRect(0, 0, 4, 256);
+      const skyTex = new CanvasTexture(skyCanvas);
+      skyTex.colorSpace = SRGBColorSpace;
+      this.scene.background = skyTex;
       this.buildDrape();
       this.buildScatter();
       this.buildCrowd();
@@ -21150,6 +21239,7 @@
         this.ownerSig = sig;
         this.paintDrape();
       }
+      if (this.waterUniforms) this.waterUniforms.uTime.value = performance.now() / 1e3;
       this.syncKeeps();
       this.syncCrowd(hover, selected);
       this.renderer.render(this.scene, this.cam);
@@ -21261,11 +21351,107 @@
     }
   };
 
+  // src/cam.ts
+  var CANT = 0.24;
+  var MIN_SCALE = 2.6;
+  var MAX_SCALE = 16;
+  var FIT_MARGIN = 1.045;
+  var EASE = 7;
+  var Camera2 = class {
+    constructor() {
+      __publicField(this, "cur", { x: 0, y: 0, scale: 7 });
+      __publicField(this, "goal", { x: 0, y: 0, scale: 7 });
+      __publicField(this, "vw", 1);
+      __publicField(this, "vh", 1);
+      __publicField(this, "vx", 0);
+      __publicField(this, "vy", 0);
+    }
+    resize(vw, vh) {
+      this.vw = vw;
+      this.vh = vh;
+    }
+    /** The whole country in frame. */
+    fit(world) {
+      const fit = Math.max(this.vw / world.w, this.vh / (world.h * Math.cos(CANT))) * FIT_MARGIN;
+      this.goal.scale = clamp2(fit, MIN_SCALE, MAX_SCALE);
+      this.goal.x = this.vw / 2 - world.w / 2 * this.goal.scale;
+      this.goal.y = this.vh / 2 - world.h / 2 * this.goal.scale;
+      this.clampGoal(world);
+    }
+    centre(tile, scale, world) {
+      this.goal.scale = clamp2(scale, MIN_SCALE, MAX_SCALE);
+      this.goal.x = this.vw / 2 - (tile % world.w + 0.5) * this.goal.scale;
+      this.goal.y = this.vh / 2 - (Math.floor(tile / world.w) + 0.5) * this.goal.scale;
+      this.clampGoal(world);
+    }
+    /** Move the goal immediately, used while dragging so panning feels direct. */
+    panBy(dx, dy, world) {
+      this.goal.x += dx;
+      this.goal.y += dy;
+      this.clampGoal(world);
+    }
+    /**
+     * Zoom toward or away from whatever sits under the pointer.
+     *
+     * screen -> world is affine for this camera: worldX = (px - x) / scale, so the
+     * point under the cursor can be held exactly still by solving the new offset:
+     * x' = px - worldX * scale'. Doing this in goal-space (never in rendered space)
+     * is what stops a burst of wheel events from dragging the map sideways.
+     */
+    zoomAt(px, py, factor) {
+      const worldX = (px - this.goal.x) / this.goal.scale;
+      const worldY = (py - this.goal.y) / this.goal.scale;
+      this.goal.scale = clamp2(this.goal.scale * factor, MIN_SCALE, MAX_SCALE);
+      this.goal.x = px - worldX * this.goal.scale;
+      this.goal.y = py - worldY * this.goal.scale;
+    }
+    /** Zoom about the middle of the frame (keys). */
+    zoomCentre(factor, world) {
+      this.zoomAt(this.vw / 2, this.vh / 2, factor);
+      this.clampGoal(world);
+    }
+    /** Public clamp, for input that sets the goal directly. */
+    clampTo(world) {
+      this.clampGoal(world);
+    }
+    /** Keep the country on screen: centred when smaller than the frame, else bounded. */
+    clampGoal(world) {
+      const mw = world.w * this.goal.scale;
+      const mh = world.h * this.goal.scale;
+      const pad = 80;
+      this.goal.x = mw <= this.vw ? (this.vw - mw) / 2 : clamp2(this.goal.x, this.vw - mw, 0);
+      this.goal.y = mh <= this.vh ? (this.vh - mh) / 2 : clamp2(this.goal.y, this.vh - mh, 0);
+      void pad;
+    }
+    /** Advance one frame. dt in seconds. */
+    ease(dt) {
+      const d = Math.min(0.25, dt);
+      const k = 1 - Math.exp(-EASE * d);
+      this.cur.x += (this.goal.x - this.cur.x) * k;
+      this.cur.y += (this.goal.y - this.cur.y) * k;
+      const ks = 1 - Math.exp(-EASE * 0.72 * d);
+      this.cur.scale += (this.goal.scale - this.cur.scale) * ks;
+      if (Math.abs(this.cur.scale - this.goal.scale) < 5e-4) this.cur.scale = this.goal.scale;
+    }
+    /** Jump without easing, for boot and for tests. */
+    snap() {
+      this.cur.x = this.goal.x;
+      this.cur.y = this.goal.y;
+      this.cur.scale = this.goal.scale;
+    }
+    get moving() {
+      return Math.abs(this.cur.x - this.goal.x) > 0.2 || Math.abs(this.cur.y - this.goal.y) > 0.2 || Math.abs(this.cur.scale - this.goal.scale) > 2e-3;
+    }
+  };
+  function clamp2(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+
   // src/main.ts
-  var SAVE_KEY = "realms.poly.v1";
+  var SAVE_KEY = "realms.look.v1";
   var canvas = document.getElementById("map");
   var params = new URLSearchParams(location.search);
-  var seed = Number(params.get("seed") ?? localStorage.getItem("realms.poly.seed") ?? 7) || 7;
+  var seed = Number(params.get("seed") ?? localStorage.getItem("realms.look.seed") ?? 7) || 7;
   async function loadWorld() {
     if (params.get("seed")) return generateWorld(seed);
     try {
@@ -21278,52 +21464,40 @@
     }
     return generateWorld(seed);
   }
+  var easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
   async function boot() {
     const world = await loadWorld();
     const resumedRaw = params.get("fresh") ? null : localStorage.getItem(SAVE_KEY);
     const game = (resumedRaw ? Game.load(world, resumedRaw) : null) ?? new Game(world);
     if (params.get("fresh")) localStorage.removeItem(SAVE_KEY);
-    const view = new PolyView(canvas, game);
-    window.__realms = { game, view, cam: null };
-    const cam = { x: 0, y: 0, scale: 7 };
-    window.__realms.cam = cam;
+    const look = new Look(canvas, game);
+    const cam = new Camera2();
     const selected = { host: null, city: null };
     let hover = -1;
     let speed = 1;
-    function fitMap() {
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const fit = Math.max(vw / world.w, vh / (world.h * Math.cos(0.22))) * 1.04;
-      cam.scale = Math.max(2.2, Math.min(16, fit));
-      cam.x = vw / 2 - world.w / 2 * cam.scale;
-      cam.y = vh / 2 - world.h / 2 * cam.scale;
-      clampCam();
-    }
-    function centreOn(tile, scale = cam.scale) {
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const cx = tile % world.w + 0.5;
-      const cz = Math.floor(tile / world.w) + 0.5;
-      cam.scale = scale;
-      cam.x = vw / 2 - cx * scale;
-      cam.y = vh / 2 - cz * scale;
-      clampCam();
-    }
-    function clampCam() {
-      const mw = world.w * cam.scale;
-      const mh = world.h * cam.scale;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      cam.x = mw <= vw ? (vw - mw) / 2 : Math.min(60, Math.max(vw - mw - 60, cam.x));
-      cam.y = mh <= vh ? (vh - mh) / 2 : Math.min(60, Math.max(vh - mh - 60, cam.y));
-    }
-    const home = game.citiesOf(0)[0] ?? game.state.cities[0];
+    const vw = () => window.innerWidth;
+    const vh = () => window.innerHeight;
+    const fitMap = () => {
+      cam.resize(vw(), vh());
+      cam.fit(world);
+    };
+    const goHome = (scale = 9.5) => {
+      const c = game.citiesOf(0)[0] ?? game.state.cities[0];
+      if (c) {
+        cam.resize(vw(), vh());
+        cam.centre(c.tile, scale, world);
+      }
+    };
+    cam.resize(vw(), vh());
     fitMap();
+    cam.snap();
+    window.__realms = { game, view: look, cam, world };
     let dragging = false;
     let dragX = 0;
     let dragY = 0;
     let moved = 0;
     canvas.addEventListener("pointerdown", (e) => {
+      if (e.button === 2) return;
       dragging = true;
       moved = 0;
       dragX = e.clientX;
@@ -21331,51 +21505,46 @@
       canvas.setPointerCapture(e.pointerId);
     });
     canvas.addEventListener("pointermove", (e) => {
-      hover = view.tileAtScreen(e.clientX, e.clientY);
+      hover = look.tileAtScreen(e.clientX, e.clientY);
       if (!dragging) return;
       const dx = e.clientX - dragX;
       const dy = e.clientY - dragY;
-      moved += Math.abs(dx) + Math.abs(dy);
-      cam.x += dx;
-      cam.y += dy;
       dragX = e.clientX;
       dragY = e.clientY;
-      clampCam();
+      moved += Math.abs(dx) + Math.abs(dy);
+      cam.panBy(dx, dy, world);
+      cam.cur.x = cam.goal.x;
+      cam.cur.y = cam.goal.y;
     });
     canvas.addEventListener("pointerup", (e) => {
+      if (dragging && moved < 6) selectTile(look.tileAtScreen(e.clientX, e.clientY));
       dragging = false;
-      if (moved > 6) return;
-      const tile = view.tileAtScreen(e.clientX, e.clientY);
-      if (tile < 0) return;
-      if (e.button === 2) {
-        orderMarch(tile);
-        return;
-      }
-      selectTile(tile);
     });
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      orderMarch(look.tileAtScreen(e.clientX, e.clientY));
+    });
     canvas.addEventListener(
       "wheel",
       (e) => {
         e.preventDefault();
-        const before = view.tileAtScreen(e.clientX, e.clientY);
         const factor = Math.pow(1.0016, -e.deltaY);
-        cam.scale = Math.max(2.2, Math.min(16, cam.scale * factor));
-        const after = view.tileAtScreen(e.clientX, e.clientY);
-        if (before >= 0 && after >= 0 && before !== after) {
-          const bx = before % world.w;
-          const bz = Math.floor(before / world.w);
-          const ax = after % world.w;
-          const az = Math.floor(after / world.w);
-          cam.x += (ax - bx) * cam.scale;
-          cam.y += (az - bz) * cam.scale;
-        }
-        clampCam();
+        cam.zoomAt(e.clientX, e.clientY, factor);
+        cam.clampTo(world);
       },
       { passive: false }
     );
-    window.addEventListener("resize", clampCam);
+    window.addEventListener("resize", () => {
+      cam.resize(vw(), vh());
+      cam.goal && cam.fit(world);
+      cam.snap();
+    });
     function selectTile(tile) {
+      if (tile < 0) {
+        selected.host = null;
+        selected.city = null;
+        return;
+      }
       const host = game.state.hosts.find((h) => h.tile === tile);
       if (host) {
         selected.host = host.id;
@@ -21392,11 +21561,10 @@
       selected.city = null;
     }
     function orderMarch(tile) {
-      if (selected.host === null) return;
+      if (selected.host === null || tile < 0) return;
       const nearest = game.state.cities.slice().sort((a, b) => game.tileDistance(a.tile, tile) - game.tileDistance(b.tile, tile))[0];
       if (!nearest) return;
-      const msg = game.march(selected.host, nearest.id);
-      flash(msg);
+      flash(game.march(selected.host, nearest.id));
     }
     const el = (id) => document.getElementById(id);
     const statsEl = el("stats");
@@ -21418,48 +21586,46 @@
     }
     function renderHud() {
       const st = game.stats(0);
-      const cities = game.state.cities.length;
-      const mine = st.cities;
       statsEl.innerHTML = `
-    <div class="stat"><span>Grain</span><b>${st.grain.toLocaleString()}</b></div>
-    <div class="stat"><span>People</span><b>${st.pop.toLocaleString()}</b></div>
-    <div class="stat"><span>Men</span><b>${st.men}</b></div>
-    <div class="stat"><span>Holdings</span><b>${mine}/${cities}</b></div>
-    <div class="stat"><span>Season</span><b class="${game.isWinter() ? "cold" : ""}">${seasonName()}</b></div>
-    <div class="stat"><span>Supply</span><b>${Math.round(st.supply * 100)}%</b></div>
-  `;
+      <div class="stat"><span>Grain</span><b>${st.grain.toLocaleString()}</b></div>
+      <div class="stat"><span>People</span><b>${st.pop.toLocaleString()}</b></div>
+      <div class="stat"><span>Men</span><b>${st.men}</b></div>
+      <div class="stat"><span>Holdings</span><b>${st.cities}/${game.state.cities.length}</b></div>
+      <div class="stat"><span>Season</span><b class="${game.isWinter() ? "cold" : ""}">${seasonName()}</b></div>
+      <div class="stat"><span>Supply</span><b>${Math.round(st.supply * 100)}%</b></div>
+    `;
       if (selected.city !== null) {
         const c = game.cityById(selected.city);
         if (!c) return;
         const owner = c.owner >= 0 ? game.state.players[c.owner].name : "unclaimed";
         panelEl.innerHTML = `
-      <h2>${c.name}</h2>
-      <p class="sub">${owner}${c.owner === 0 ? " \xB7 yours" : ""}</p>
-      <dl>
-        <div><dt>People</dt><dd>${Math.round(c.pop)}</dd></div>
-        <div><dt>Barn</dt><dd>${Math.round(c.stock).toLocaleString()} / ${c.barnCap.toLocaleString()}</dd></div>
-        <div><dt>Morale</dt><dd>${Math.round(c.morale * 100)}%</dd></div>
-        <div><dt>Tier</dt><dd>${c.tier}</dd></div>
-      </dl>
-      ${c.owner === 0 ? `<button id="muster">Muster men</button>` : ""}
-    `;
+        <h2>${c.name}</h2>
+        <p class="sub">${owner}${c.owner === 0 ? " \xB7 yours" : ""}</p>
+        <dl>
+          <div><dt>People</dt><dd>${Math.round(c.pop)}</dd></div>
+          <div><dt>Barn</dt><dd>${Math.round(c.stock).toLocaleString()} / ${c.barnCap.toLocaleString()}</dd></div>
+          <div><dt>Morale</dt><dd>${Math.round(c.morale * 100)}%</dd></div>
+          <div><dt>Tier</dt><dd>${c.tier}</dd></div>
+        </dl>
+        ${c.owner === 0 ? `<button id="muster">Muster men</button>` : ""}
+      `;
         el("muster")?.addEventListener("click", () => flash(game.muster(c.id)));
       } else if (selected.host !== null) {
         const h = game.hostById(selected.host);
         if (!h) return;
         const owner = game.state.players[h.owner]?.name ?? "unknown";
         panelEl.innerHTML = `
-      <h2>Host of ${h.men} men</h2>
-      <p class="sub">${owner}${h.owner === 0 ? " \xB7 yours" : ""}</p>
-      <dl>
-        <div><dt>Supply</dt><dd>${Math.round(h.supply * 100)}%</dd></div>
-        <div><dt>Morale</dt><dd>${Math.round(h.morale * 100)}%</dd></div>
-        <div><dt>Orders</dt><dd>${h.besieging !== null ? "besieging" : h.path.length ? "marching" : "holding"}</dd></div>
-      </dl>
-      <p class="hint">Right-click a city to march on it.</p>
-    `;
+        <h2>Host of ${h.men} men</h2>
+        <p class="sub">${owner}${h.owner === 0 ? " \xB7 yours" : ""}</p>
+        <dl>
+          <div><dt>Supply</dt><dd>${Math.round(h.supply * 100)}%</dd></div>
+          <div><dt>Morale</dt><dd>${Math.round(h.morale * 100)}%</dd></div>
+          <div><dt>Orders</dt><dd>${h.besieging !== null ? "besieging" : h.path.length ? "marching" : "holding"}</dd></div>
+        </dl>
+        <p class="hint">Right-click a hold to march on it.</p>
+      `;
       } else {
-        panelEl.innerHTML = `<h2>Nothing selected</h2><p class="hint">Click a keep to muster, or a host to give orders. Drag to pan, scroll to zoom.</p>`;
+        panelEl.innerHTML = `<h2>Nothing selected</h2><p class="hint">Click a keep to muster, a host to give orders. Drag to pan, scroll to zoom, F for the whole map.</p>`;
       }
       logEl.innerHTML = game.state.log.slice(0, 7).map((l) => `<div>${l}</div>`).join("");
     }
@@ -21467,26 +21633,25 @@
       speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
       el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
     });
-    el("mapbtn").addEventListener("click", () => fitMap());
+    el("mapbtn").addEventListener("click", fitMap);
+    el("homebtn").addEventListener("click", () => goHome());
+    el("fresh").addEventListener("click", () => {
+      const next = Math.floor(Math.random() * 9e3) + 100;
+      localStorage.setItem("realms.look.seed", String(next));
+      localStorage.removeItem(SAVE_KEY);
+      location.href = `?seed=${next}&fresh=1`;
+    });
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
       if (k === "f") fitMap();
-      if (k === "h") {
-        const c = game.citiesOf(0)[0] ?? game.state.cities[0];
-        if (c) centreOn(c.tile, 9);
+      if (k === "h") goHome();
+      if (k === "=" || k === "+") cam.zoomCentre(1.3, world);
+      if (k === "-" || k === "_") cam.zoomCentre(1 / 1.3, world);
+      if (k === " ") {
+        speed = speed === 0 ? 1 : 0;
+        el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
+        e.preventDefault();
       }
-      if (k === "+" || k === "=") cam.scale = Math.min(16, cam.scale * 1.25);
-      if (k === "-" || k === "_") cam.scale = Math.max(2.2, cam.scale / 1.25);
-    });
-    el("homebtn").addEventListener("click", () => {
-      const c = game.citiesOf(0)[0] ?? game.state.cities[0];
-      if (c) centreOn(c.tile, 8);
-    });
-    el("fresh").addEventListener("click", () => {
-      const next = Math.floor(Math.random() * 9e3) + 100;
-      localStorage.setItem("realms.poly.seed", String(next));
-      localStorage.removeItem(SAVE_KEY);
-      location.href = `?seed=${next}&fresh=1`;
     });
     let last = performance.now();
     let saveTimer = 0;
@@ -21494,19 +21659,19 @@
     function frame(now) {
       const dt = Math.min(0.25, (now - last) / 1e3);
       last = now;
+      cam.ease(dt);
       if (speed > 0) {
-        const scaled = dt * speed;
-        let left = scaled;
+        let left = dt * speed;
         while (left > 0) {
           const step = Math.min(0.1, left);
           game.tick(step);
           left -= step;
         }
       }
-      view.draw(cam, hover, selected, Math.min(2, window.devicePixelRatio || 1));
+      look.draw(cam.cur, hover, selected, Math.min(2, window.devicePixelRatio || 1));
       hudTimer -= dt;
       if (hudTimer <= 0) {
-        hudTimer = 0.2;
+        hudTimer = 0.25;
         renderHud();
       }
       if (flashTimer > 0) {
@@ -21525,6 +21690,8 @@
     }
     renderHud();
     requestAnimationFrame(frame);
+    void easeInOut;
+    void CANT;
   }
   boot();
 })();
