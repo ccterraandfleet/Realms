@@ -1,91 +1,32 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Realms</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23140f08'/%3E%3Cpath d='M16 3l8 7v16H8V10z' fill='%23d9b565'/%3E%3Cpath d='M13 26V17h6v9z' fill='%23140f08'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="data:," />
   </head>
   <body>
     <canvas id="map"></canvas>
 
     <header id="topbar">
-      <div class="brand">
-        <span class="crest">&#9670;</span>
-        <span class="title">REALMS</span>
-        <span id="seed-badge" class="seed"></span>
-        <span id="you" class="you"></span>
-      </div>
-      <div class="stats">
-        <div class="stat r-grain"><span class="k">Grain</span><span id="stat-grain" class="v">0</span></div>
-        <div class="stat r-timber"><span class="k">Timber</span><span id="stat-timber" class="v">0</span></div>
-        <div class="stat r-ore"><span class="k">Iron</span><span id="stat-ore" class="v">0</span></div>
-        <div class="stat r-gold"><span class="k">Gold</span><span id="stat-gold" class="v">0</span></div>
-        <div class="stat"><span class="k">Host</span><span id="stat-troops" class="v">0</span></div>
-        <div class="stat"><span class="k">Land</span><span id="stat-land" class="v">0%</span></div>
-        <div class="stat"><span class="k">Castles</span><span id="stat-castles" class="v">0</span></div>
-        <div class="stat"><span class="k">Rivals</span><span id="stat-lords" class="v">0</span></div>
-        <div class="stat wide"><span class="k">Muster</span><span id="army-note" class="v small">—</span></div>
-        <div class="stat"><span class="k">Era</span><span id="stat-era" class="v small">—</span></div>
+      <div id="brand">REALMS</div>
+      <div id="stats"></div>
+      <div id="tools">
+        <button id="speed">1x</button>
+        <button id="homebtn">Home</button>
+        <button id="fresh">New world</button>
       </div>
     </header>
 
-    <div id="log"></div>
-
-    <footer id="bottom">
-      <div id="host-bar">
-        <span id="host-info">No host picked</span>
-        <button id="pull-btn" title="Walk the picked host home, intact">Pull back</button>
-        <button id="tier-btn" title="Take the picked host up a tier">Tier up</button>
-        <button id="war-btn" class="danger" title="End the peace now (host only)">Break peace</button>
-      </div>
-      <div id="build-bar"></div>
-      <div id="ratio-box">
-        <span class="k">Host sent</span>
-        <input id="ratio" type="range" min="5" max="100" step="5" value="30" />
-        <span id="ratio-val">30%</span>
-      </div>
-    </footer>
-
-    <div id="spawn-overlay" class="overlay hidden">
-      <div class="card">
-        <h1>Take a seat</h1>
-        <p id="spawn-hint">Click open land to plant your castle.</p>
-        <p class="faint">Double left click sends an advance toward that point. Wheel zooms, right-drag pans.</p>
-      </div>
-    </div>
-
-    <div id="end-overlay" class="overlay hidden">
-      <div class="card">
-        <h1 id="end-title">The realm is yours</h1>
-        <p id="end-body"></p>
-        <button id="new-world" class="primary">Raise a new world</button>
-      </div>
-    </div>
+    <aside id="panel"></aside>
+    <section id="log"></section>
+    <div id="flash"></div>
 
     <script>
-      // The page itself can come out of the browser cache, so the stale copy has
-      // to be the one that notices. It compares its own build with the published
-      // one and re-requests the document under a fresh cache key, keeping any
-      // ?room= pin, so a tab can never sit on an old bundle.
-      (function () {
-        var BUILD = "20261108.090500";
-        function check(first) {
-          fetch("dist/version.json?t=" + Date.now(), { cache: "no-store" })
-            .then(function (r) { return r.json(); })
-            .then(function (v) {
-              if (!v || !v.build || v.build === BUILD) return;
-              var q = new URLSearchParams(location.search);
-              q.set("b", v.build);
-              location.replace(location.pathname + "?" + q.toString());
-            })
-            .catch(function () {});
-        }
-        check(true);
-        setInterval(check, 45000);
-      })();
+      var BUILD = "20261108.100212";
     </script>
-    <script src="dist/game.js?v=20261108.090500"></script>
+    <script src="dist/game.js?v=20261108.100212"></script>
   </body>
 </html>
