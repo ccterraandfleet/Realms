@@ -20545,7 +20545,7 @@
   }
 
   // src/view/poly.ts
-  var TILT = 0.1;
+  var TILT = 0.22;
   var CAM_DIST = 300;
   var CHUNK = 3;
   var RELIEF = 6.2;
@@ -20871,9 +20871,13 @@
       const groundMat = this.game.world.presetClass ? new MeshStandardMaterial({ flatShading: true, roughness: 0.95 }) : new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92 });
       this.terrain = new Mesh(geo, groundMat);
       if (this.game.world.presetClass) {
-        const tex = new TextureLoader().load("preset/ground.png");
+        const lo = new URLSearchParams(location.search).get("texlo");
+        const tex = new TextureLoader().load(lo ? "preset/ground.png" : "preset/ground_hd.jpg");
         tex.colorSpace = SRGBColorSpace;
-        tex.anisotropy = 4;
+        tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+        tex.minFilter = LinearMipmapLinearFilter;
+        tex.magFilter = LinearFilter;
+        tex.generateMipmaps = true;
         groundMat.map = tex;
         groundMat.needsUpdate = true;
       }
@@ -21286,6 +21290,15 @@
     const selected = { host: null, city: null };
     let hover = -1;
     let speed = 1;
+    function fitMap() {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const fit = Math.max(vw / world.w, vh / (world.h * Math.cos(0.22))) * 1.04;
+      cam.scale = Math.max(2.2, Math.min(16, fit));
+      cam.x = vw / 2 - world.w / 2 * cam.scale;
+      cam.y = vh / 2 - world.h / 2 * cam.scale;
+      clampCam();
+    }
     function centreOn(tile, scale = cam.scale) {
       const vw = window.innerWidth;
       const vh = window.innerHeight;
@@ -21305,7 +21318,7 @@
       cam.y = mh <= vh ? (vh - mh) / 2 : Math.min(60, Math.max(vh - mh - 60, cam.y));
     }
     const home = game.citiesOf(0)[0] ?? game.state.cities[0];
-    if (home) centreOn(home.tile, 7);
+    fitMap();
     let dragging = false;
     let dragX = 0;
     let dragY = 0;
@@ -21347,7 +21360,7 @@
         e.preventDefault();
         const before = view.tileAtScreen(e.clientX, e.clientY);
         const factor = Math.pow(1.0016, -e.deltaY);
-        cam.scale = Math.max(2.2, Math.min(22, cam.scale * factor));
+        cam.scale = Math.max(2.2, Math.min(16, cam.scale * factor));
         const after = view.tileAtScreen(e.clientX, e.clientY);
         if (before >= 0 && after >= 0 && before !== after) {
           const bx = before % world.w;
@@ -21453,6 +21466,17 @@
     el("speed").addEventListener("click", () => {
       speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
       el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
+    });
+    el("mapbtn").addEventListener("click", () => fitMap());
+    window.addEventListener("keydown", (e) => {
+      const k = e.key.toLowerCase();
+      if (k === "f") fitMap();
+      if (k === "h") {
+        const c = game.citiesOf(0)[0] ?? game.state.cities[0];
+        if (c) centreOn(c.tile, 9);
+      }
+      if (k === "+" || k === "=") cam.scale = Math.min(16, cam.scale * 1.25);
+      if (k === "-" || k === "_") cam.scale = Math.max(2.2, cam.scale / 1.25);
     });
     el("homebtn").addEventListener("click", () => {
       const c = game.citiesOf(0)[0] ?? game.state.cities[0];
