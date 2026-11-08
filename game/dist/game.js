@@ -3523,6 +3523,7 @@
   var GreaterEqualCompare = 518;
   var AlwaysCompare = 519;
   var StaticDrawUsage = 35044;
+  var DynamicDrawUsage = 35048;
   var GLSL3 = "300 es";
   var _SRGBAFormat = 1035;
   var WebGLCoordinateSystem = 2e3;
@@ -21046,6 +21047,27 @@
   var WebGL1Renderer = class extends WebGLRenderer {
   };
   WebGL1Renderer.prototype.isWebGL1Renderer = true;
+  var Fog = class _Fog {
+    constructor(color, near = 1, far = 1e3) {
+      this.isFog = true;
+      this.name = "";
+      this.color = new Color(color);
+      this.near = near;
+      this.far = far;
+    }
+    clone() {
+      return new _Fog(this.color, this.near, this.far);
+    }
+    toJSON() {
+      return {
+        type: "Fog",
+        name: this.name,
+        color: this.color.getHex(),
+        near: this.near,
+        far: this.far
+      };
+    }
+  };
   var Scene = class extends Object3D {
     constructor() {
       super();
@@ -21078,6 +21100,16 @@
       if (this.backgroundBlurriness > 0) data.object.backgroundBlurriness = this.backgroundBlurriness;
       if (this.backgroundIntensity !== 1) data.object.backgroundIntensity = this.backgroundIntensity;
       return data;
+    }
+  };
+  var DataTexture = class extends Texture {
+    constructor(data = null, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, colorSpace) {
+      super(null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, colorSpace);
+      this.isDataTexture = true;
+      this.image = { data, width, height };
+      this.generateMipmaps = false;
+      this.flipY = false;
+      this.unpackAlignment = 1;
     }
   };
   var InstancedBufferAttribute = class extends BufferAttribute {
@@ -21202,13 +21234,6 @@
     }
     dispose() {
       this.dispatchEvent({ type: "dispose" });
-    }
-  };
-  var CanvasTexture = class extends Texture {
-    constructor(canvas2, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy) {
-      super(canvas2, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy);
-      this.isCanvasTexture = true;
-      this.needsUpdate = true;
     }
   };
   var CylinderGeometry = class _CylinderGeometry extends BufferGeometry {
@@ -21352,6 +21377,279 @@
     }
     static fromJSON(data) {
       return new _ConeGeometry(data.radius, data.height, data.radialSegments, data.heightSegments, data.openEnded, data.thetaStart, data.thetaLength);
+    }
+  };
+  var PolyhedronGeometry = class _PolyhedronGeometry extends BufferGeometry {
+    constructor(vertices = [], indices = [], radius = 1, detail = 0) {
+      super();
+      this.type = "PolyhedronGeometry";
+      this.parameters = {
+        vertices,
+        indices,
+        radius,
+        detail
+      };
+      const vertexBuffer = [];
+      const uvBuffer = [];
+      subdivide(detail);
+      applyRadius(radius);
+      generateUVs();
+      this.setAttribute("position", new Float32BufferAttribute(vertexBuffer, 3));
+      this.setAttribute("normal", new Float32BufferAttribute(vertexBuffer.slice(), 3));
+      this.setAttribute("uv", new Float32BufferAttribute(uvBuffer, 2));
+      if (detail === 0) {
+        this.computeVertexNormals();
+      } else {
+        this.normalizeNormals();
+      }
+      function subdivide(detail2) {
+        const a = new Vector3();
+        const b = new Vector3();
+        const c = new Vector3();
+        for (let i = 0; i < indices.length; i += 3) {
+          getVertexByIndex(indices[i + 0], a);
+          getVertexByIndex(indices[i + 1], b);
+          getVertexByIndex(indices[i + 2], c);
+          subdivideFace(a, b, c, detail2);
+        }
+      }
+      function subdivideFace(a, b, c, detail2) {
+        const cols = detail2 + 1;
+        const v = [];
+        for (let i = 0; i <= cols; i++) {
+          v[i] = [];
+          const aj = a.clone().lerp(c, i / cols);
+          const bj = b.clone().lerp(c, i / cols);
+          const rows = cols - i;
+          for (let j = 0; j <= rows; j++) {
+            if (j === 0 && i === cols) {
+              v[i][j] = aj;
+            } else {
+              v[i][j] = aj.clone().lerp(bj, j / rows);
+            }
+          }
+        }
+        for (let i = 0; i < cols; i++) {
+          for (let j = 0; j < 2 * (cols - i) - 1; j++) {
+            const k = Math.floor(j / 2);
+            if (j % 2 === 0) {
+              pushVertex(v[i][k + 1]);
+              pushVertex(v[i + 1][k]);
+              pushVertex(v[i][k]);
+            } else {
+              pushVertex(v[i][k + 1]);
+              pushVertex(v[i + 1][k + 1]);
+              pushVertex(v[i + 1][k]);
+            }
+          }
+        }
+      }
+      function applyRadius(radius2) {
+        const vertex2 = new Vector3();
+        for (let i = 0; i < vertexBuffer.length; i += 3) {
+          vertex2.x = vertexBuffer[i + 0];
+          vertex2.y = vertexBuffer[i + 1];
+          vertex2.z = vertexBuffer[i + 2];
+          vertex2.normalize().multiplyScalar(radius2);
+          vertexBuffer[i + 0] = vertex2.x;
+          vertexBuffer[i + 1] = vertex2.y;
+          vertexBuffer[i + 2] = vertex2.z;
+        }
+      }
+      function generateUVs() {
+        const vertex2 = new Vector3();
+        for (let i = 0; i < vertexBuffer.length; i += 3) {
+          vertex2.x = vertexBuffer[i + 0];
+          vertex2.y = vertexBuffer[i + 1];
+          vertex2.z = vertexBuffer[i + 2];
+          const u = azimuth(vertex2) / 2 / Math.PI + 0.5;
+          const v = inclination(vertex2) / Math.PI + 0.5;
+          uvBuffer.push(u, 1 - v);
+        }
+        correctUVs();
+        correctSeam();
+      }
+      function correctSeam() {
+        for (let i = 0; i < uvBuffer.length; i += 6) {
+          const x0 = uvBuffer[i + 0];
+          const x1 = uvBuffer[i + 2];
+          const x2 = uvBuffer[i + 4];
+          const max = Math.max(x0, x1, x2);
+          const min = Math.min(x0, x1, x2);
+          if (max > 0.9 && min < 0.1) {
+            if (x0 < 0.2) uvBuffer[i + 0] += 1;
+            if (x1 < 0.2) uvBuffer[i + 2] += 1;
+            if (x2 < 0.2) uvBuffer[i + 4] += 1;
+          }
+        }
+      }
+      function pushVertex(vertex2) {
+        vertexBuffer.push(vertex2.x, vertex2.y, vertex2.z);
+      }
+      function getVertexByIndex(index, vertex2) {
+        const stride = index * 3;
+        vertex2.x = vertices[stride + 0];
+        vertex2.y = vertices[stride + 1];
+        vertex2.z = vertices[stride + 2];
+      }
+      function correctUVs() {
+        const a = new Vector3();
+        const b = new Vector3();
+        const c = new Vector3();
+        const centroid = new Vector3();
+        const uvA = new Vector2();
+        const uvB = new Vector2();
+        const uvC = new Vector2();
+        for (let i = 0, j = 0; i < vertexBuffer.length; i += 9, j += 6) {
+          a.set(vertexBuffer[i + 0], vertexBuffer[i + 1], vertexBuffer[i + 2]);
+          b.set(vertexBuffer[i + 3], vertexBuffer[i + 4], vertexBuffer[i + 5]);
+          c.set(vertexBuffer[i + 6], vertexBuffer[i + 7], vertexBuffer[i + 8]);
+          uvA.set(uvBuffer[j + 0], uvBuffer[j + 1]);
+          uvB.set(uvBuffer[j + 2], uvBuffer[j + 3]);
+          uvC.set(uvBuffer[j + 4], uvBuffer[j + 5]);
+          centroid.copy(a).add(b).add(c).divideScalar(3);
+          const azi = azimuth(centroid);
+          correctUV(uvA, j + 0, a, azi);
+          correctUV(uvB, j + 2, b, azi);
+          correctUV(uvC, j + 4, c, azi);
+        }
+      }
+      function correctUV(uv, stride, vector, azimuth2) {
+        if (azimuth2 < 0 && uv.x === 1) {
+          uvBuffer[stride] = uv.x - 1;
+        }
+        if (vector.x === 0 && vector.z === 0) {
+          uvBuffer[stride] = azimuth2 / 2 / Math.PI + 0.5;
+        }
+      }
+      function azimuth(vector) {
+        return Math.atan2(vector.z, -vector.x);
+      }
+      function inclination(vector) {
+        return Math.atan2(-vector.y, Math.sqrt(vector.x * vector.x + vector.z * vector.z));
+      }
+    }
+    copy(source) {
+      super.copy(source);
+      this.parameters = Object.assign({}, source.parameters);
+      return this;
+    }
+    static fromJSON(data) {
+      return new _PolyhedronGeometry(data.vertices, data.indices, data.radius, data.details);
+    }
+  };
+  var IcosahedronGeometry = class _IcosahedronGeometry extends PolyhedronGeometry {
+    constructor(radius = 1, detail = 0) {
+      const t = (1 + Math.sqrt(5)) / 2;
+      const vertices = [
+        -1,
+        t,
+        0,
+        1,
+        t,
+        0,
+        -1,
+        -t,
+        0,
+        1,
+        -t,
+        0,
+        0,
+        -1,
+        t,
+        0,
+        1,
+        t,
+        0,
+        -1,
+        -t,
+        0,
+        1,
+        -t,
+        t,
+        0,
+        -1,
+        t,
+        0,
+        1,
+        -t,
+        0,
+        -1,
+        -t,
+        0,
+        1
+      ];
+      const indices = [
+        0,
+        11,
+        5,
+        0,
+        5,
+        1,
+        0,
+        1,
+        7,
+        0,
+        7,
+        10,
+        0,
+        10,
+        11,
+        1,
+        5,
+        9,
+        5,
+        11,
+        4,
+        11,
+        10,
+        2,
+        10,
+        7,
+        6,
+        7,
+        1,
+        8,
+        3,
+        9,
+        4,
+        3,
+        4,
+        2,
+        3,
+        2,
+        6,
+        3,
+        6,
+        8,
+        3,
+        8,
+        9,
+        4,
+        9,
+        5,
+        2,
+        4,
+        11,
+        6,
+        2,
+        10,
+        8,
+        6,
+        7,
+        9,
+        8,
+        1
+      ];
+      super(vertices, indices, radius, detail);
+      this.type = "IcosahedronGeometry";
+      this.parameters = {
+        radius,
+        detail
+      };
+    }
+    static fromJSON(data) {
+      return new _IcosahedronGeometry(data.radius, data.detail);
     }
   };
   var RingGeometry = class _RingGeometry extends BufferGeometry {
@@ -22098,6 +22396,21 @@
       return data;
     }
   };
+  var HemisphereLight = class extends Light {
+    constructor(skyColor, groundColor, intensity) {
+      super(skyColor, intensity);
+      this.isHemisphereLight = true;
+      this.type = "HemisphereLight";
+      this.position.copy(Object3D.DEFAULT_UP);
+      this.updateMatrix();
+      this.groundColor = new Color(groundColor);
+    }
+    copy(source, recursive) {
+      super.copy(source, recursive);
+      this.groundColor.copy(source.groundColor);
+      return this;
+    }
+  };
   var _projScreenMatrix$1 = /* @__PURE__ */ new Matrix4();
   var _lightPositionWorld$1 = /* @__PURE__ */ new Vector3();
   var _lookTarget$1 = /* @__PURE__ */ new Vector3();
@@ -22216,13 +22529,6 @@
       this.target = source.target.clone();
       this.shadow = source.shadow.clone();
       return this;
-    }
-  };
-  var AmbientLight = class extends Light {
-    constructor(color, intensity) {
-      super(color, intensity);
-      this.isAmbientLight = true;
-      this.type = "AmbientLight";
     }
   };
   var _RESERVED_CHARS_RE = "\\[\\]\\.:\\/";
@@ -22603,6 +22909,64 @@
     ]
   ];
   var _controlInterpolantsResultBuffer = new Float32Array(1);
+  var Raycaster = class {
+    constructor(origin, direction, near = 0, far = Infinity) {
+      this.ray = new Ray(origin, direction);
+      this.near = near;
+      this.far = far;
+      this.camera = null;
+      this.layers = new Layers();
+      this.params = {
+        Mesh: {},
+        Line: { threshold: 1 },
+        LOD: {},
+        Points: { threshold: 1 },
+        Sprite: {}
+      };
+    }
+    set(origin, direction) {
+      this.ray.set(origin, direction);
+    }
+    setFromCamera(coords, camera) {
+      if (camera.isPerspectiveCamera) {
+        this.ray.origin.setFromMatrixPosition(camera.matrixWorld);
+        this.ray.direction.set(coords.x, coords.y, 0.5).unproject(camera).sub(this.ray.origin).normalize();
+        this.camera = camera;
+      } else if (camera.isOrthographicCamera) {
+        this.ray.origin.set(coords.x, coords.y, (camera.near + camera.far) / (camera.near - camera.far)).unproject(camera);
+        this.ray.direction.set(0, 0, -1).transformDirection(camera.matrixWorld);
+        this.camera = camera;
+      } else {
+        console.error("THREE.Raycaster: Unsupported camera type: " + camera.type);
+      }
+    }
+    intersectObject(object, recursive = true, intersects = []) {
+      intersectObject(object, this, intersects, recursive);
+      intersects.sort(ascSort);
+      return intersects;
+    }
+    intersectObjects(objects, recursive = true, intersects = []) {
+      for (let i = 0, l = objects.length; i < l; i++) {
+        intersectObject(objects[i], this, intersects, recursive);
+      }
+      intersects.sort(ascSort);
+      return intersects;
+    }
+  };
+  function ascSort(a, b) {
+    return a.distance - b.distance;
+  }
+  function intersectObject(object, raycaster, intersects, recursive) {
+    if (object.layers.test(raycaster.layers)) {
+      object.raycast(raycaster, intersects);
+    }
+    if (recursive === true) {
+      const children = object.children;
+      for (let i = 0, l = children.length; i < l; i++) {
+        intersectObject(children[i], raycaster, intersects, true);
+      }
+    }
+  }
   if (typeof __THREE_DEVTOOLS__ !== "undefined") {
     __THREE_DEVTOOLS__.dispatchEvent(new CustomEvent("register", { detail: {
       revision: REVISION
@@ -22616,538 +22980,671 @@
     }
   }
 
-  // src/view3d/view.ts
-  var TEX = 8;
-  var rgb = (hex) => {
-    const n = parseInt(hex.slice(1), 16);
-    return [n >> 16 & 255, n >> 8 & 255, n & 255];
+  // src/view3d/diorama.ts
+  var TILT = 0.5;
+  var CAM_DIST = 260;
+  var BIOME = {
+    [OCEAN]: [1920875, 2251130, 1722209, 2516100],
+    [SAND]: [14206093, 13613183, 14732695],
+    [PLAINS]: [7313999, 8037463, 6590279, 8498014],
+    [FOREST]: [4156218, 4682809, 3628851, 5012288],
+    [MOUNTAIN]: [9276294, 10131343, 8289399, 11052186]
   };
+  var TREE_GREENS = [3104052, 3631930, 2641964, 4225602];
+  var ROOF_RED = 10238766;
+  var ROOF_BLUE = 3104646;
+  var STONE = 13617076;
+  var STONE_DARK = 11051150;
   function hash2(x, y, seed2) {
     let h = x * 374761393 + y * 668265263 + seed2 * 2246822519;
     h = (h ^ h >>> 13) * 1274126177;
     return ((h ^ h >>> 16) >>> 0) / 4294967296;
   }
-  var GROUND = {
-    [OCEAN]: [22, 48, 62],
-    [SAND]: [196, 176, 133],
-    [PLAINS]: [104, 126, 68],
-    [FOREST]: [58, 84, 48],
-    [MOUNTAIN]: [124, 118, 106]
-  };
-  var View3D = class {
+  function valueNoise(x, y, scale, seed2) {
+    const gx = x / scale;
+    const gy = y / scale;
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    const tx = gx - x0;
+    const ty = gy - y0;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    const n00 = hash2(x0, y0, seed2);
+    const n10 = hash2(x0 + 1, y0, seed2);
+    const n01 = hash2(x0, y0 + 1, seed2);
+    const n11 = hash2(x0 + 1, y0 + 1, seed2);
+    return (n00 * (1 - sx) + n10 * sx) * (1 - sy) + (n01 * (1 - sx) + n11 * sx) * sy;
+  }
+  var Diorama = class {
     constructor(canvas2, g) {
       this.canvas = canvas2;
       this.g = g;
-      this.scene = new Scene();
-      this.cam3 = new OrthographicCamera(-1, 1, 1, -1, 0.1, 400);
-      this.ground = null;
+      this.terrain = null;
       this.territory = null;
-      this.tex = null;
-      this.ownTex = null;
-      this.ownCv = null;
+      this.territoryTex = null;
       this.trees = null;
+      this.rocks = null;
       this.soldiers = null;
       this.banners = null;
-      this.carts = null;
-      this.structs = /* @__PURE__ */ new Map();
-      this.marks = new Group();
-      this.built = false;
-      this.ownPainted = -1;
-      this.renderer = new WebGLRenderer({
-        canvas: canvas2,
-        antialias: true,
-        alpha: false,
-        powerPreference: "high-performance"
-      });
-      this.renderer.setClearColor(660504, 1);
+      this.buildings = /* @__PURE__ */ new Map();
+      this.heights = null;
+      this.ownerKey = "";
+      this.resizeKey = "";
+      this.ray = new Raycaster();
+      this.groundPlane = new Plane(new Vector3(0, 1, 0), 0);
+      this.renderer = new WebGLRenderer({ canvas: canvas2, antialias: true, alpha: false });
+      this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = PCFSoftShadowMap;
-      this.scene.add(new AmbientLight(10467017, 1.15));
-      this.sun = new DirectionalLight(16773332, 2.1);
-      this.sun.position.set(-60, 90, -70);
-      this.sun.castShadow = true;
-      this.sun.shadow.mapSize.set(2048, 2048);
-      this.sun.shadow.bias = -6e-4;
-      const sc = this.sun.shadow.camera;
-      sc.left = -70;
-      sc.right = 70;
-      sc.top = 70;
-      sc.bottom = -70;
-      sc.near = 1;
-      sc.far = 320;
-      this.scene.add(this.sun);
-      this.scene.add(this.sun.target);
-      const fill = new DirectionalLight(9417928, 0.55);
-      fill.position.set(70, 40, 60);
-      this.scene.add(fill);
-      this.scene.add(this.marks);
-      this.hoverRing = new Mesh(
-        new RingGeometry(0.34, 0.5, 6),
-        new MeshBasicMaterial({ color: 16180920, transparent: true, opacity: 0.9, side: DoubleSide })
-      );
-      this.hoverRing.rotation.x = -Math.PI / 2;
-      this.hoverRing.visible = false;
+      this.renderer.outputColorSpace = SRGBColorSpace;
+      this.renderer.toneMapping = ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.02;
+      this.scene = new Scene();
+      this.scene.background = new Color(1319724);
+      this.scene.fog = new Fog(10465464, 120, 340);
+      this.cam3 = new OrthographicCamera(-1, 1, 1, -1, 0.1, 900);
+      this.cam3.position.set(0, CAM_DIST, 0);
+      this.cam3.lookAt(0, 0, 0);
+      const key = new DirectionalLight(16770754, 2.15);
+      key.position.set(-70, 120, -60);
+      key.castShadow = true;
+      key.shadow.mapSize.set(2048, 2048);
+      key.shadow.camera.left = -80;
+      key.shadow.camera.right = 80;
+      key.shadow.camera.top = 80;
+      key.shadow.camera.bottom = -80;
+      key.shadow.camera.near = 1;
+      key.shadow.camera.far = 420;
+      key.shadow.bias = -6e-4;
+      this.sun = key;
+      this.scene.add(key);
+      this.scene.add(key.target);
+      this.scene.add(new HemisphereLight(12375784, 4872762, 0.85));
+      const rim = new DirectionalLight(10338528, 0.5);
+      rim.position.set(80, 60, 90);
+      this.scene.add(rim);
+      this.hoverRing = this.makeRing(16777215, 0.9);
+      this.selectRing = this.makeRing(16766073, 0.95);
       this.scene.add(this.hoverRing);
+      this.scene.add(this.selectRing);
+      this.buildWorld();
     }
-    reset() {
-      this.built = false;
-      this.ownPainted = -1;
-      if (this.ground) {
-        this.scene.remove(this.ground);
-        this.ground.geometry.dispose();
-        this.ground = null;
-      }
-      if (this.territory) {
-        this.scene.remove(this.territory);
-        this.territory = null;
-      }
+    /* ---------------------------------------------------------------- */
+    /* World construction                                               */
+    /* ---------------------------------------------------------------- */
+    makeRing(color, opacity) {
+      const geo = new RingGeometry(0.52, 0.78, 24);
+      geo.rotateX(-Math.PI / 2);
+      const mat = new MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        side: DoubleSide
+      });
+      const m = new Mesh(geo, mat);
+      m.visible = false;
+      m.renderOrder = 5;
+      return m;
     }
-    repaintAll() {
-      this.ownPainted = -1;
-    }
-    /* ------------------------------------------------------------------ */
-    /* World building                                                     */
-    /* ------------------------------------------------------------------ */
-    heights() {
+    /** Heights: biome base plus two octaves of noise, softened so hills roll. */
+    buildHeights() {
       const { w, h, terrain } = this.g.world;
-      const base = {
-        [OCEAN]: 0,
-        [SAND]: 0.1,
-        [PLAINS]: 0.28,
-        [FOREST]: 0.44,
-        [MOUNTAIN]: 0.95
-      };
       const out = new Float32Array(w * h);
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const t = y * w + x;
-          const n = (hash2(x >> 3, y >> 3, 11) - 0.5) * 0.16 + (hash2(x >> 1, y >> 1, 23) - 0.5) * 0.07;
-          out[t] = Math.max(0, (base[terrain[t]] ?? 0.3) + n);
-        }
+      const base = {
+        [OCEAN]: -0.55,
+        [SAND]: 0.12,
+        [PLAINS]: 0.34,
+        [FOREST]: 0.62,
+        [MOUNTAIN]: 2.35
+      };
+      for (let t = 0; t < w * h; t++) {
+        const x = t % w;
+        const y = t / w | 0;
+        const b = base[terrain[t]] ?? 0.3;
+        const n = valueNoise(x, y, 26, 11) * 0.55 + valueNoise(x, y, 9, 23) * 0.3;
+        out[t] = b + (terrain[t] === OCEAN ? n * 0.12 : (n - 0.42) * 0.9);
       }
-      const soft = new Float32Array(w * h);
+      const soft = new Float32Array(out.length);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const t = y * w + x;
           let sum = 0;
           let n = 0;
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
-              const xx = x + dx;
-              const yy = y + dy;
-              if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-              sum += out[yy * w + xx];
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              sum += out[ny * w + nx];
               n++;
             }
           }
-          soft[t] = sum / n;
+          soft[y * w + x] = sum / Math.max(1, n);
         }
       }
       return soft;
     }
-    /** Ground colour plus a normal map made from the height field. */
-    paintGround() {
-      const { w, h, terrain, richness } = this.g.world;
-      const heights = this.heights();
-      const cv = document.createElement("canvas");
-      cv.width = w * TEX;
-      cv.height = h * TEX;
-      const ctx = cv.getContext("2d");
-      const img = ctx.createImageData(cv.width, cv.height);
-      const d = img.data;
-      const nrm = document.createElement("canvas");
-      nrm.width = cv.width;
-      nrm.height = cv.height;
-      const nctx = nrm.getContext("2d");
-      const nimg = nctx.createImageData(nrm.width, nrm.height);
-      const nd = nimg.data;
-      for (let py = 0; py < cv.height; py++) {
-        for (let px = 0; px < cv.width; px++) {
-          const tx = Math.min(w - 1, px / TEX | 0);
-          const ty = Math.min(h - 1, py / TEX | 0);
-          const t = ty * w + tx;
-          const kind = terrain[t];
-          let [r, gch, b] = GROUND[kind] ?? GROUND[PLAINS];
-          const rich = richness[t] ?? 1;
-          const warm = Math.min(1, Math.max(0, (rich - 1) / 2));
-          if (kind !== OCEAN) {
-            r = r * (0.9 + 0.28 * warm);
-            gch = gch * (0.95 + 0.16 * warm);
-            b = b * (0.92 + 0.04 * warm);
-          }
-          const grain = (hash2(px, py, 7) - 0.5) * (kind === OCEAN ? 5 : 16);
-          r += grain;
-          gch += grain;
-          b += grain;
-          if (kind === OCEAN) {
-            let nearLand = 9;
-            for (let dy = -3; dy <= 3; dy++) {
-              for (let dx = -3; dx <= 3; dx++) {
-                const xx = tx + dx;
-                const yy = ty + dy;
-                if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-                if (terrain[yy * w + xx] !== OCEAN) nearLand = Math.min(nearLand, Math.hypot(dx, dy));
-              }
-            }
-            const dep = Math.min(1, nearLand / 4);
-            r = 20 + 26 * (1 - dep) - 6 * dep;
-            gch = 46 + 44 * (1 - dep) - 12 * dep;
-            b = 62 + 46 * (1 - dep) - 6 * dep;
-            if (nearLand <= 0.6) {
-              const foam = 1 - nearLand / 0.6;
-              r += 90 * foam;
-              gch += 96 * foam;
-              b += 88 * foam;
-            }
-          }
-          const i4 = (py * cv.width + px) * 4;
-          d[i4] = Math.min(255, Math.max(0, r));
-          d[i4 + 1] = Math.min(255, Math.max(0, gch));
-          d[i4 + 2] = Math.min(255, Math.max(0, b));
-          d[i4 + 3] = 255;
-          const hL = heights[ty * w + Math.max(0, tx - 1)] ?? 0;
-          const hR = heights[ty * w + Math.min(w - 1, tx + 1)] ?? 0;
-          const hU = heights[Math.max(0, ty - 1) * w + tx] ?? 0;
-          const hD = heights[Math.min(h - 1, ty + 1) * w + tx] ?? 0;
-          const strength = kind === OCEAN ? 1.5 : 9;
-          let nx = (hL - hR) * strength;
-          let ny = (hU - hD) * strength;
-          const nz = 1;
-          const len = Math.hypot(nx, ny, nz);
-          nx /= len;
-          ny /= len;
-          nd[i4] = (nx * 0.5 + 0.5) * 255;
-          nd[i4 + 1] = (ny * 0.5 + 0.5) * 255;
-          nd[i4 + 2] = (nz / len * 0.5 + 0.5) * 255;
-          nd[i4 + 3] = 255;
+    buildWorld() {
+      const { w, h } = this.g.world;
+      this.heights = this.buildHeights();
+      const H = this.heights;
+      const at = (x, y) => {
+        const cx = Math.max(0, Math.min(w - 1, x));
+        const cy = Math.max(0, Math.min(h - 1, y));
+        return H[cy * w + cx];
+      };
+      const corner = (x, y) => (at(x - 1, y - 1) + at(x, y - 1) + at(x - 1, y) + at(x, y)) * 0.25;
+      const cells = w * h;
+      const pos = new Float32Array(cells * 6 * 3);
+      const col = new Float32Array(cells * 6 * 3);
+      const normal = new Float32Array(cells * 6 * 3);
+      const terrain = this.g.world.terrain;
+      const c = new Color();
+      let p = 0;
+      const pushTri = (x0, z0, x1, z1, x2, z2) => {
+        const y0 = corner(x0, z0);
+        const y1 = corner(x1, z1);
+        const y2 = corner(x2, z2);
+        const ux = x1 - x0;
+        const uy = y1 - y0;
+        const uz = z1 - z0;
+        const vx = x2 - x0;
+        const vy = y2 - y0;
+        const vz = z2 - z0;
+        let nx = uy * vz - uz * vy;
+        let ny = uz * vx - ux * vz;
+        let nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        const xs = [x0, x1, x2];
+        const ys = [y0, y1, y2];
+        const zs = [z0, z1, z2];
+        for (let i = 0; i < 3; i++) {
+          pos[p] = xs[i];
+          pos[p + 1] = ys[i];
+          pos[p + 2] = zs[i];
+          normal[p] = nx;
+          normal[p + 1] = ny;
+          normal[p + 2] = nz;
+          col[p] = c.r;
+          col[p + 1] = c.g;
+          col[p + 2] = c.b;
+          p += 3;
+        }
+      };
+      for (let t = 0; t < cells; t++) {
+        const x = t % w;
+        const z = t / w | 0;
+        const kind = terrain[t];
+        const family = BIOME[kind] ?? BIOME[PLAINS];
+        const pick = family[hash2(x, z, 7) * family.length | 0];
+        c.setHex(pick);
+        const jitter = 0.93 + hash2(x, z, 13) * 0.15;
+        c.multiplyScalar(jitter);
+        if (hash2(x, z, 3) < 0.5) {
+          pushTri(x, z, x + 1, z, x + 1, z + 1);
+          pushTri(x, z, x + 1, z + 1, x, z + 1);
+        } else {
+          pushTri(x, z, x + 1, z, x, z + 1);
+          pushTri(x + 1, z, x + 1, z + 1, x, z + 1);
         }
       }
-      ctx.putImageData(img, 0, 0);
-      nctx.putImageData(nimg, 0, 0);
-      const map = new CanvasTexture(cv);
-      map.colorSpace = SRGBColorSpace;
-      map.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
-      map.magFilter = LinearFilter;
-      const normal = new CanvasTexture(nrm);
-      normal.magFilter = LinearFilter;
-      const geo = new PlaneGeometry(w, h, 1, 1);
+      const geo = new BufferGeometry();
+      geo.setAttribute("position", new BufferAttribute(pos, 3));
+      geo.setAttribute("normal", new BufferAttribute(normal, 3));
+      geo.setAttribute("color", new BufferAttribute(col, 3));
+      geo.computeBoundingSphere();
       const mat = new MeshStandardMaterial({
-        map,
-        normalMap: normal,
-        normalScale: new Vector2(1.1, 1.1),
-        roughness: 0.94,
-        metalness: 0.02
+        vertexColors: true,
+        flatShading: true,
+        roughness: 0.92,
+        metalness: 0
       });
-      const mesh = new Mesh(geo, mat);
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.position.set(w / 2, 0, h / 2);
-      mesh.receiveShadow = true;
-      this.scene.add(mesh);
-      this.ground = mesh;
-      this.ownCv = document.createElement("canvas");
-      this.ownCv.width = w * 4;
-      this.ownCv.height = h * 4;
-      this.ownTex = new CanvasTexture(this.ownCv);
-      this.ownTex.magFilter = LinearFilter;
-      const tgeo = new PlaneGeometry(w, h, 1, 1);
-      const tmat = new MeshBasicMaterial({
-        map: this.ownTex,
+      this.terrain = new Mesh(geo, mat);
+      this.terrain.receiveShadow = true;
+      this.scene.add(this.terrain);
+      this.buildTerritory();
+      this.buildTrees();
+      this.buildRocks();
+      this.buildSoldiers();
+    }
+    /** Ownership as a data texture draped over the same relief. */
+    buildTerritory() {
+      const { w, h } = this.g.world;
+      const data = new Uint8Array(w * h * 4);
+      const tex = new DataTexture(data, w, h, RGBAFormat);
+      tex.magFilter = LinearFilter;
+      tex.minFilter = LinearFilter;
+      tex.needsUpdate = true;
+      this.territoryTex = tex;
+      const H = this.heights;
+      const pos = [];
+      const uv = [];
+      const idx2 = [];
+      const at = (x, y) => {
+        const cx = Math.max(0, Math.min(w - 1, x));
+        const cy = Math.max(0, Math.min(h - 1, y));
+        return H[cy * w + cx];
+      };
+      for (let y = 0; y <= h; y++) {
+        for (let x = 0; x <= w; x++) {
+          pos.push(x, at(x, y) + 0.045, y);
+          uv.push(x / w, 1 - y / h);
+        }
+      }
+      const stride = w + 1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const a = y * stride + x;
+          idx2.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
+        }
+      }
+      const geo = new BufferGeometry();
+      geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx2);
+      geo.computeVertexNormals();
+      const mat = new MeshBasicMaterial({
+        map: tex,
         transparent: true,
         opacity: 0.62,
-        depthWrite: false
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -2
       });
-      const tmesh = new Mesh(tgeo, tmat);
-      tmesh.rotation.x = -Math.PI / 2;
-      tmesh.position.set(w / 2, 0.06, h / 2);
-      this.scene.add(tmesh);
-      this.territory = tmesh;
+      this.territory = new Mesh(geo, mat);
+      this.territory.renderOrder = 2;
+      this.scene.add(this.territory);
+      this.ownerKey = "";
     }
     paintTerritory() {
       const { w, h } = this.g.world;
-      const cv = this.ownCv;
-      if (!cv) return;
-      const ctx = cv.getContext("2d");
-      const SC = 4;
-      ctx.clearRect(0, 0, cv.width, cv.height);
-      const cols = PALETTE.map(rgb);
+      const tex = this.territoryTex;
+      if (!tex) return;
+      const data = tex.image.data;
+      const colours = PALETTE.map((hex) => new Color(hex));
+      let changed = false;
       for (let t = 0; t < w * h; t++) {
         const owner = this.g.ownerAt(t);
-        if (owner < 0) continue;
-        if (this.g.world.terrain[t] === OCEAN && !this.g.passable(t)) continue;
+        const o = t * 4;
+        if (owner < 0) {
+          if (data[o + 3] !== 0) {
+            data[o + 3] = 0;
+            changed = true;
+          }
+          continue;
+        }
+        const col = colours[owner % colours.length];
         const x = t % w;
         const y = t / w | 0;
-        const [r, gch, b] = cols[owner % cols.length];
-        ctx.fillStyle = `rgba(${r},${gch},${b},0.72)`;
-        ctx.fillRect(x * SC, y * SC, SC, SC);
+        let edge = false;
+        if (x > 0 && this.g.ownerAt(t - 1) !== owner) edge = true;
+        else if (x < w - 1 && this.g.ownerAt(t + 1) !== owner) edge = true;
+        else if (y > 0 && this.g.ownerAt(t - w) !== owner) edge = true;
+        else if (y < h - 1 && this.g.ownerAt(t + w) !== owner) edge = true;
+        const k = edge ? 0.45 : 1;
+        data[o] = Math.round(col.r * 255 * k);
+        data[o + 1] = Math.round(col.g * 255 * k);
+        data[o + 2] = Math.round(col.b * 255 * k);
+        data[o + 3] = edge ? 235 : 150;
+        changed = true;
       }
-      for (let t = 0; t < w * h; t++) {
-        const owner = this.g.ownerAt(t);
-        if (owner < 0) continue;
-        const x = t % w;
-        const y = t / w | 0;
-        const edge = x > 0 && this.g.ownerAt(t - 1) !== owner || x < w - 1 && this.g.ownerAt(t + 1) !== owner || y > 0 && this.g.ownerAt(t - w) !== owner || y < h - 1 && this.g.ownerAt(t + w) !== owner;
-        if (!edge) continue;
-        ctx.strokeStyle = "rgba(18,12,6,0.75)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x * SC + 0.5, y * SC + 0.5, SC - 1, SC - 1);
-      }
-      this.ownTex.needsUpdate = true;
-      this.ownPainted = this.g.dirty.size;
+      if (changed) tex.needsUpdate = true;
     }
+    /** Conifers: chunky, flat-shaded, hashed in place so they never move. */
     buildTrees() {
       const { w, h, terrain } = this.g.world;
+      const H = this.heights;
       const spots = [];
       for (let t = 0; t < w * h; t++) {
         if (terrain[t] !== FOREST) continue;
         const x = t % w;
-        const y = t / w | 0;
-        if (hash2(x, y, 31) < 0.55) spots.push(t);
+        const z = t / w | 0;
+        if (hash2(x, z, 31) > 0.62) continue;
+        const n = 1 + (hash2(x, z, 37) * 2 | 0);
+        for (let i = 0; i < n; i++) {
+          const jx = x + 0.15 + hash2(x, z, 41 + i) * 0.7;
+          const jz = z + 0.15 + hash2(x, z, 47 + i) * 0.7;
+          spots.push({
+            x: jx,
+            z: jz,
+            y: H[t],
+            s: 0.55 + hash2(x, z, 53 + i) * 0.6,
+            r: hash2(x, z, 59 + i) * 6.283,
+            c: TREE_GREENS[hash2(x, z, 61 + i) * TREE_GREENS.length | 0]
+          });
+        }
       }
-      const geo = new ConeGeometry(0.34, 0.95, 6);
-      geo.translate(0, 0.48, 0);
-      const mat = new MeshStandardMaterial({ color: 2901542, roughness: 0.9, flatShading: true });
+      const geo = new ConeGeometry(0.3, 1, 5, 1);
+      geo.translate(0, 0.5, 0);
+      const mat = new MeshStandardMaterial({
+        flatShading: true,
+        roughness: 0.85,
+        vertexColors: false
+      });
       const mesh = new InstancedMesh(geo, mat, spots.length);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       const m = new Matrix4();
       const q = new Quaternion();
-      const s = new Vector3();
-      const pos = new Vector3();
-      for (let i = 0; i < spots.length; i++) {
-        const t = spots[i];
-        const x = t % w;
-        const y = t / w | 0;
-        const jx = (hash2(x, y, 41) - 0.5) * 0.7;
-        const jy = (hash2(x, y, 43) - 0.5) * 0.7;
-        const sc = 0.7 + hash2(x, y, 47) * 0.75;
-        pos.set(x + 0.5 + jx, 0, y + 0.5 + jy);
-        s.set(sc, sc, sc);
-        q.setFromAxisAngle(new Vector3(0, 1, 0), hash2(x, y, 53) * 6.283);
-        m.compose(pos, q, s);
+      const col = new Color();
+      spots.forEach((s, i) => {
+        q.setFromAxisAngle(new Vector3(0, 1, 0), s.r);
+        m.compose(
+          new Vector3(s.x, s.y, s.z),
+          q,
+          new Vector3(s.s, s.s * (0.9 + i % 5 * 0.06), s.s)
+        );
         mesh.setMatrixAt(i, m);
-      }
-      this.scene.add(mesh);
+        mesh.setColorAt(i, col.setHex(s.c));
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       this.trees = mesh;
-      const rocks = [];
+      this.scene.add(mesh);
+    }
+    /** Rock spurs on the high ground. */
+    buildRocks() {
+      const { w, h, terrain } = this.g.world;
+      const H = this.heights;
+      const spots = [];
       for (let t = 0; t < w * h; t++) {
         if (terrain[t] !== MOUNTAIN) continue;
-        if (hash2(t % w, t / w | 0, 61) < 0.25) rocks.push(t);
+        const x = t % w;
+        const z = t / w | 0;
+        if (hash2(x, z, 71) > 0.45) continue;
+        spots.push({
+          x: x + hash2(x, z, 73),
+          z: z + hash2(x, z, 79),
+          y: H[t],
+          s: 0.5 + hash2(x, z, 83) * 0.8,
+          r: hash2(x, z, 89) * 6.283
+        });
       }
-      if (rocks.length) {
-        const rg = new ConeGeometry(0.5, 1.5, 5);
-        rg.translate(0, 0.7, 0);
-        const rm = new MeshStandardMaterial({ color: 9143673, roughness: 0.85, flatShading: true });
-        const rmesh = new InstancedMesh(rg, rm, rocks.length);
-        rmesh.castShadow = true;
-        rmesh.receiveShadow = true;
-        for (let i = 0; i < rocks.length; i++) {
-          const t = rocks[i];
-          const x = t % w;
-          const y = t / w | 0;
-          pos.set(x + 0.5, 0, y + 0.5);
-          const sc = 0.6 + hash2(x, y, 67) * 0.7;
-          s.set(sc, sc, sc);
-          q.setFromAxisAngle(new Vector3(0, 1, 0), hash2(x, y, 71) * 6.283);
-          m.compose(pos, q, s);
-          rmesh.setMatrixAt(i, m);
-        }
-        this.scene.add(rmesh);
-      }
-    }
-    /* ------------------------------------------------------------------ */
-    /* Structures, soldiers, carts                                        */
-    /* ------------------------------------------------------------------ */
-    structureGeometry(kind) {
-      switch (kind) {
-        case "castle":
-          return [
-            { geo: new BoxGeometry(1.1, 0.8, 1.1), color: 10131340, y: 0.4 },
-            { geo: new BoxGeometry(1.4, 0.22, 1.4), color: 8881274, y: 0.11 }
-          ];
-        case "tower":
-          return [
-            { geo: new CylinderGeometry(0.3, 0.34, 1.2, 8), color: 10723219, y: 0.6 },
-            { geo: new ConeGeometry(0.42, 0.35, 8), color: 5915952, y: 1.32 }
-          ];
-        case "farm":
-          return [
-            { geo: new BoxGeometry(0.9, 0.12, 0.7), color: 11837532, y: 0.06 },
-            { geo: new BoxGeometry(0.9, 0.1, 0.16), color: 9403460, y: 0.13 }
-          ];
-        case "lumber":
-          return [
-            { geo: new BoxGeometry(0.8, 0.5, 0.7), color: 8020290, y: 0.25 },
-            { geo: new ConeGeometry(0.6, 0.4, 4), color: 4864552, y: 0.7 }
-          ];
-        case "mine":
-          return [
-            { geo: new BoxGeometry(0.7, 0.45, 0.7), color: 7038560, y: 0.22 },
-            { geo: new BoxGeometry(0.12, 0.9, 0.12), color: 5063224, y: 0.55 }
-          ];
-        case "market":
-          return [
-            { geo: new BoxGeometry(0.85, 0.32, 0.85), color: 11569746, y: 0.16 },
-            { geo: new ConeGeometry(0.6, 0.3, 4), color: 9191219, y: 0.48 }
-          ];
-        case "barn":
-          return [
-            { geo: new BoxGeometry(0.8, 0.45, 0.6), color: 9398853, y: 0.22 },
-            { geo: new ConeGeometry(0.62, 0.34, 4), color: 7163699, y: 0.6 }
-          ];
-        case "bridge":
-          return [{ geo: new BoxGeometry(1, 0.1, 1), color: 7296568, y: 0.05 }];
-        case "camp":
-          return [{ geo: new ConeGeometry(0.4, 0.55, 6), color: 7166536, y: 0.27 }];
-        case "siege":
-          return [
-            { geo: new BoxGeometry(0.55, 0.3, 0.4), color: 6968640, y: 0.25 },
-            { geo: new BoxGeometry(0.2, 0.5, 0.2), color: 5785140, y: 0.5 }
-          ];
-        default:
-          return [{ geo: new BoxGeometry(0.6, 0.4, 0.6), color: 9078136, y: 0.2 }];
-      }
-    }
-    refreshStructures() {
-      const byKind = /* @__PURE__ */ new Map();
-      for (const st of this.g.structs.values()) {
-        const list = byKind.get(st.kind) ?? [];
-        list.push({ tile: st.tile, owner: st.owner, level: st.level });
-        byKind.set(st.kind, list);
-      }
-      const { w } = this.g.world;
-      for (const [kind, list] of byKind) {
-        const parts = this.structureGeometry(kind);
-        const counts = list.length;
-        let mesh = this.structs.get(kind);
-        const existing = mesh;
-        if (!existing || existing.count !== counts * parts.length) {
-          if (existing) {
-            this.scene.remove(existing);
-            existing.geometry.dispose();
-          }
-          const group = new InstancedMesh(parts[0].geo, new MeshStandardMaterial({ color: parts[0].color, roughness: 0.82, flatShading: true }), counts);
-          group.castShadow = true;
-          group.receiveShadow = true;
-          this.scene.add(group);
-          mesh = group;
-          this.structs.set(kind, group);
-        }
-        if (!mesh) continue;
-        const m = new Matrix4();
-        const q = new Quaternion();
-        const s = new Vector3(1, 1, 1);
-        const pos = new Vector3();
-        for (let i = 0; i < list.length; i++) {
-          const it = list[i];
-          const x = it.tile % w;
-          const y = it.tile / w | 0;
-          const grow = 1 + Math.min(3, it.level - 1) * 0.16;
-          pos.set(x + 0.5, parts[0].y, y + 0.5);
-          s.set(grow, grow, grow);
-          m.compose(pos, q, s);
-          mesh.setMatrixAt(i, m);
-        }
-        mesh.instanceMatrix.needsUpdate = true;
-      }
-    }
-    refreshUnits() {
-      const { w } = this.g.world;
-      const armies = this.g.armies;
-      const menPerHost = 6;
-      const total = armies.length * menPerHost;
-      if (!this.soldiers || this.soldiers.count !== total) {
-        if (this.soldiers) {
-          this.scene.remove(this.soldiers);
-          this.soldiers.geometry.dispose();
-        }
-        const geo = new BoxGeometry(0.17, 0.42, 0.17);
-        geo.translate(0, 0.21, 0);
-        const mat = new MeshStandardMaterial({ roughness: 0.75 });
-        const mesh = new InstancedMesh(geo, mat, Math.max(1, total));
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        this.scene.add(mesh);
-        this.soldiers = mesh;
-      }
-      const sold = this.soldiers;
-      if (!sold) return;
+      const geo = new IcosahedronGeometry(0.42, 0);
+      const mat = new MeshStandardMaterial({
+        color: 10328722,
+        flatShading: true,
+        roughness: 0.95
+      });
+      const mesh = new InstancedMesh(geo, mat, spots.length);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
       const m = new Matrix4();
       const q = new Quaternion();
-      const s = new Vector3(1, 1, 1);
-      const pos = new Vector3();
-      const col = new Color();
-      let i = 0;
-      for (const a of armies) {
-        const x = a.tile % w + 0.5;
-        const y = (a.tile / w | 0) + 0.5;
-        const c = PALETTE[a.owner % PALETTE.length];
-        col.set(c);
-        for (let k = 0; k < menPerHost; k++) {
-          const rx = (k % 3 - 1) * 0.22;
-          const ry = ((k / 3 | 0) - 0.5) * 0.26;
-          pos.set(x + rx, 0, y + ry);
-          const sc = 0.9 + 0.2 * (k * 7 % 3);
-          s.set(1, sc, 1);
-          m.compose(pos, q, s);
-          sold.setMatrixAt(i, m);
-          sold.setColorAt(i, col);
-          i++;
-        }
-      }
-      sold.count = i;
-      sold.instanceMatrix.needsUpdate = true;
-      if (sold.instanceColor) sold.instanceColor.needsUpdate = true;
+      spots.forEach((s, i) => {
+        q.setFromAxisAngle(new Vector3(0.3, 1, 0.2).normalize(), s.r);
+        m.compose(
+          new Vector3(s.x, s.y + s.s * 0.28, s.z),
+          q,
+          new Vector3(s.s, s.s * 1.25, s.s)
+        );
+        mesh.setMatrixAt(i, m);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      this.rocks = mesh;
+      this.scene.add(mesh);
     }
-    /* ------------------------------------------------------------------ */
-    /* Frame                                                              */
-    /* ------------------------------------------------------------------ */
-    draw(cam2, hover2, buildKind2, dpr2) {
-      const { w, h } = this.g.world;
-      if (!this.built) {
-        this.paintGround();
-        this.buildTrees();
-        this.built = true;
-        this.ownPainted = -1;
+    buildSoldiers() {
+      const bodyGeo = new BoxGeometry(0.2, 0.44, 0.2);
+      bodyGeo.translate(0, 0.22, 0);
+      const bodyMat = new MeshStandardMaterial({
+        flatShading: true,
+        roughness: 0.7
+      });
+      this.soldiers = new InstancedMesh(bodyGeo, bodyMat, 6e3);
+      this.soldiers.castShadow = true;
+      this.soldiers.count = 0;
+      this.soldiers.instanceMatrix.setUsage(DynamicDrawUsage);
+      this.scene.add(this.soldiers);
+      const flagGeo = new PlaneGeometry(0.34, 0.22);
+      const flagMat = new MeshStandardMaterial({
+        flatShading: true,
+        side: DoubleSide,
+        roughness: 0.8
+      });
+      this.banners = new InstancedMesh(flagGeo, flagMat, 600);
+      this.banners.count = 0;
+      this.banners.instanceMatrix.setUsage(DynamicDrawUsage);
+      this.scene.add(this.banners);
+    }
+    /* ---------------------------------------------------------------- */
+    /* Buildings                                                        */
+    /* ---------------------------------------------------------------- */
+    buildStructure(kind, owner) {
+      const group = new Group();
+      const stone = new MeshStandardMaterial({ color: STONE, flatShading: true, roughness: 0.9 });
+      const darkStone = new MeshStandardMaterial({ color: STONE_DARK, flatShading: true, roughness: 0.95 });
+      const roofColour = owner % 2 === 0 ? ROOF_RED : ROOF_BLUE;
+      const roof = new MeshStandardMaterial({ color: roofColour, flatShading: true, roughness: 0.75 });
+      const box = (w, h, d, mat, x = 0, y = 0, z = 0) => {
+        const m = new Mesh(new BoxGeometry(w, h, d), mat);
+        m.position.set(x, y + h / 2, z);
+        m.castShadow = true;
+        m.receiveShadow = true;
+        group.add(m);
+        return m;
+      };
+      const cone = (r, h, mat, x = 0, y = 0, z = 0, seg = 6) => {
+        const m = new Mesh(new ConeGeometry(r, h, seg), mat);
+        m.position.set(x, y + h / 2, z);
+        m.castShadow = true;
+        group.add(m);
+        return m;
+      };
+      if (kind === "castle") {
+        box(1.5, 0.55, 1.5, stone);
+        box(0.62, 1.05, 0.62, stone, 0, 0.55, 0);
+        cone(0.5, 0.62, roof, 0, 1.6, 0, 4);
+        for (const [dx, dz] of [[-0.62, -0.62], [0.62, -0.62], [-0.62, 0.62], [0.62, 0.62]]) {
+          const t = new Mesh(new CylinderGeometry(0.2, 0.24, 1, 7), stone);
+          t.position.set(dx, 0.5, dz);
+          t.castShadow = true;
+          group.add(t);
+          cone(0.3, 0.34, roof, dx, 1, dz, 7);
+        }
+      } else if (kind === "tower") {
+        const t = new Mesh(new CylinderGeometry(0.33, 0.38, 1.25, 7), stone);
+        t.position.y = 0.62;
+        t.castShadow = true;
+        group.add(t);
+        cone(0.46, 0.5, roof, 0, 1.25, 0, 7);
+      } else if (kind === "farm") {
+        box(1.4, 0.06, 1.4, darkStone, 0, 0, 0);
+        for (let i = 0; i < 4; i++) {
+          box(1.2, 0.1, 0.16, new MeshStandardMaterial({ color: 13217389, flatShading: true }), 0, 0.02, -0.5 + i * 0.33);
+        }
+      } else if (kind === "lumber") {
+        box(0.8, 0.45, 0.8, new MeshStandardMaterial({ color: 10121800, flatShading: true }));
+        box(0.9, 0.2, 0.9, roof, 0, 0.45, 0);
+      } else if (kind === "mine") {
+        box(0.9, 0.3, 0.9, darkStone);
+        box(0.16, 0.8, 0.16, new MeshStandardMaterial({ color: 7163955, flatShading: true }), -0.22, 0.3, 0);
+        box(0.16, 0.8, 0.16, new MeshStandardMaterial({ color: 7163955, flatShading: true }), 0.22, 0.3, 0);
+        box(0.62, 0.12, 0.12, darkStone, 0, 1.1, 0);
+      } else if (kind === "market") {
+        box(1.2, 0.08, 1.2, darkStone);
+        for (let i = 0; i < 3; i++) {
+          box(0.42, 0.3, 0.42, stone, -0.35 + i * 0.35, 0.08, 0.2);
+          cone(0.32, 0.26, roof, -0.35 + i * 0.35, 0.38, 0.2, 4);
+        }
+      } else if (kind === "barn") {
+        box(0.9, 0.45, 0.7, new MeshStandardMaterial({ color: 11028794, flatShading: true }));
+        box(1, 0.16, 0.8, roof, 0, 0.45, 0);
+      } else if (kind === "camp") {
+        cone(0.5, 0.72, new MeshStandardMaterial({ color: 9402970, flatShading: true }), 0, 0.02, 0, 5);
+        box(0.7, 0.05, 0.7, darkStone, 0, 0, 0);
+      } else if (kind === "bridge") {
+        box(1.1, 0.12, 0.5, new MeshStandardMaterial({ color: 9071173, flatShading: true }), 0, 0.02, 0);
+      } else {
+        box(0.75, 0.5, 0.75, stone);
+        cone(0.5, 0.36, roof, 0, 0.5, 0, 4);
       }
-      if (this.ownPainted !== this.g.dirty.size || this.ownPainted === -1) this.paintTerritory();
-      this.refreshStructures();
-      this.refreshUnits();
+      return group;
+    }
+    syncStructures() {
+      const live = /* @__PURE__ */ new Set();
+      for (const st of this.g.structs.values()) {
+        live.add(st.tile);
+        let obj = this.buildings.get(st.tile);
+        if (!obj) {
+          obj = this.buildStructure(st.kind, st.owner);
+          this.buildings.set(st.tile, obj);
+          this.scene.add(obj);
+        }
+        const x = st.tile % this.g.world.w;
+        const z = st.tile / this.g.world.w | 0;
+        const y = this.heights ? this.heights[st.tile] : 0;
+        obj.position.set(x + 0.5, y, z + 0.5);
+        const boost = st.kind === "castle" ? 1.25 : 1;
+        obj.scale.setScalar(boost);
+      }
+      for (const [tile, obj] of this.buildings) {
+        if (live.has(tile)) continue;
+        this.scene.remove(obj);
+        this.buildings.delete(tile);
+      }
+    }
+    /* ---------------------------------------------------------------- */
+    /* Frame                                                            */
+    /* ---------------------------------------------------------------- */
+    repaintAll() {
+      this.paintTerritory();
+    }
+    reset() {
+      this.repaintAll();
+    }
+    setSelection(home) {
+      const a = home === null ? null : this.g.armies.find((x2) => x2.home === home);
+      if (!a) {
+        this.selectRing.visible = false;
+        return;
+      }
+      const x = a.tile % this.g.world.w;
+      const z = a.tile / this.g.world.w | 0;
+      this.selectRing.visible = true;
+      this.selectRing.position.set(x + 0.5, (this.heights?.[a.tile] ?? 0) + 0.08, z + 0.5);
+      this.selectRing.scale.setScalar(1.35);
+    }
+    /** Screen point to tile, through the real camera, so a tilted view still hits. */
+    tileAtScreen(px, py) {
+      const rect = this.canvas.getBoundingClientRect();
+      const ndc = new Vector2(
+        (px - rect.left) / rect.width * 2 - 1,
+        -((py - rect.top) / rect.height * 2 - 1)
+      );
+      this.ray.setFromCamera(ndc, this.cam3);
+      const hits = this.terrain ? this.ray.intersectObject(this.terrain, false) : [];
+      let point = hits.length ? hits[0].point : null;
+      if (!point) {
+        const p = new Vector3();
+        if (this.ray.ray.intersectPlane(this.groundPlane, p)) point = p;
+      }
+      if (!point) return -1;
+      const x = Math.floor(point.x);
+      const y = Math.floor(point.z);
+      return this.g.tileAt(x, y);
+    }
+    draw(cam2, hover2, buildKind2, dpr2) {
       const vw = this.canvas.clientWidth || window.innerWidth;
       const vh = this.canvas.clientHeight || window.innerHeight;
-      this.renderer.setPixelRatio(Math.min(2, dpr2));
-      this.renderer.setSize(vw, vh, false);
-      const scale = cam2.scale;
-      const x0 = (0 - cam2.x) / scale;
-      const y0 = (0 - cam2.y) / scale;
-      const x1 = (vw - cam2.x) / scale;
-      const y1 = (vh - cam2.y) / scale;
-      const viewW = Math.max(1, x1 - x0);
-      const viewH = Math.max(1, y1 - y0);
-      const cxv = (x0 + x1) / 2;
-      const cyv = (y0 + y1) / 2;
-      this.cam3.left = -viewW / 2;
-      this.cam3.right = viewW / 2;
-      this.cam3.top = viewH / 2;
-      this.cam3.bottom = -viewH / 2;
-      this.cam3.near = 0.1;
-      this.cam3.far = 420;
-      this.cam3.position.set(cxv, 200, cyv);
-      this.cam3.up.set(0, 0, -1);
-      this.cam3.lookAt(cxv, 0, cyv);
-      this.cam3.updateProjectionMatrix();
-      const cx = (x0 + x1) / 2;
-      const cy = (y0 + y1) / 2;
-      this.sun.position.set(cx - 55, 95, cy - 65);
-      this.sun.target.position.set(cx, 0, cy);
-      this.sun.target.updateMatrixWorld();
-      this.hoverRing.visible = hover2 >= 0;
-      if (hover2 >= 0) {
-        this.hoverRing.position.set(hover2 % w + 0.5, 0.09, (hover2 / w | 0) + 0.5);
-        const mat = this.hoverRing.material;
-        if (buildKind2) mat.color.set(9361312);
-        else mat.color.set(16180920);
+      const key = `${vw}x${vh}x${dpr2}`;
+      if (key !== this.resizeKey) {
+        this.resizeKey = key;
+        this.renderer.setPixelRatio(dpr2);
+        this.renderer.setSize(vw, vh, false);
       }
+      const centreX = (vw / 2 - cam2.x) / cam2.scale;
+      const centreZ = (vh / 2 - cam2.y) / cam2.scale;
+      const halfW = vw / 2 / cam2.scale;
+      const halfH = vh / 2 / cam2.scale * Math.cos(TILT);
+      this.cam3.left = -halfW;
+      this.cam3.right = halfW;
+      this.cam3.top = halfH;
+      this.cam3.bottom = -halfH;
+      this.cam3.position.set(
+        centreX,
+        Math.cos(TILT) * CAM_DIST,
+        centreZ + Math.sin(TILT) * CAM_DIST
+      );
+      this.cam3.up.set(0, 1, 0);
+      this.cam3.lookAt(centreX, 0, centreZ);
+      this.cam3.updateProjectionMatrix();
+      this.sun.position.set(centreX - 70, 130, centreZ - 60);
+      this.sun.target.position.set(centreX, 0, centreZ);
+      this.sun.target.updateMatrixWorld();
+      const ownerKey = `${this.g.armies.length}:${this.g.structs.size}:${this.g.time | 0}`;
+      if (ownerKey !== this.ownerKey) {
+        this.ownerKey = ownerKey;
+        this.paintTerritory();
+      }
+      this.syncStructures();
+      this.syncArmies(hover2, buildKind2);
       this.renderer.render(this.scene, this.cam3);
+    }
+    syncArmies(hover2, buildKind2) {
+      const w = this.g.world.w;
+      const soldiers = this.soldiers;
+      const banners = this.banners;
+      const col = new Color();
+      const m = new Matrix4();
+      const q = new Quaternion();
+      const scale = new Vector3(1, 1, 1);
+      let si = 0;
+      let bi = 0;
+      for (const a of this.g.armies) {
+        const x = a.tile % w;
+        const z = a.tile / w | 0;
+        const y = (this.heights?.[a.tile] ?? 0) + 0.02;
+        const colour = PALETTE[a.owner % PALETTE.length];
+        const strength = Math.max(0.35, Math.min(1, a.troops / 400));
+        const rows = 2;
+        const cols = 3;
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            if (si >= 6e3) break;
+            const ox = (c - (cols - 1) / 2) * 0.24;
+            const oz = (r - (rows - 1) / 2) * 0.24;
+            q.setFromAxisAngle(new Vector3(0, 1, 0), a.owner * 0.7);
+            m.compose(
+              new Vector3(x + 0.5 + ox, y, z + 0.5 + oz),
+              q,
+              scale.set(1, 0.8 + strength * 0.4, 1)
+            );
+            soldiers.setMatrixAt(si, m);
+            soldiers.setColorAt(si, col.set(colour));
+            si++;
+          }
+        }
+        if (bi < 600) {
+          q.setFromAxisAngle(new Vector3(0, 1, 0), 0);
+          m.compose(
+            new Vector3(x + 0.5, y + 0.92, z + 0.5),
+            q,
+            scale.set(1, 1, 1)
+          );
+          banners.setMatrixAt(bi, m);
+          banners.setColorAt(bi, col.set(colour));
+          bi++;
+        }
+      }
+      soldiers.count = si;
+      banners.count = bi;
+      soldiers.instanceMatrix.needsUpdate = true;
+      banners.instanceMatrix.needsUpdate = true;
+      if (soldiers.instanceColor) soldiers.instanceColor.needsUpdate = true;
+      if (banners.instanceColor) banners.instanceColor.needsUpdate = true;
+      if (hover2 >= 0) {
+        const x = hover2 % w;
+        const z = hover2 / w | 0;
+        this.hoverRing.visible = true;
+        this.hoverRing.position.set(x + 0.5, (this.heights?.[hover2] ?? 0) + 0.07, z + 0.5);
+        this.hoverRing.material.color.setHex(buildKind2 ? 16766073 : 16777215);
+      } else {
+        this.hoverRing.visible = false;
+      }
     }
   };
 
@@ -23513,7 +24010,7 @@
   var canvas = document.getElementById("map");
   var game = new Game(seed);
   var FLAT = new URLSearchParams(location.search).has("flat");
-  var renderer = FLAT ? new Renderer(canvas, game) : new View3D(canvas, game);
+  var renderer = FLAT ? new Renderer(canvas, game) : new Diorama(canvas, game);
   var el = (id) => document.getElementById(id);
   var statGrain = el("stat-grain");
   var statTimber = el("stat-timber");
@@ -23567,6 +24064,8 @@
     cam.y = mh <= vh ? (vh - mh) / 2 : Math.min(0, Math.max(vh - mh, cam.y));
   }
   function screenToTile(px, py) {
+    const hit = renderer.tileAtScreen?.(px, py);
+    if (typeof hit === "number") return hit;
     const x = Math.floor((px - cam.x) / cam.scale);
     const y = Math.floor((py - cam.y) / cam.scale);
     return game.tileAt(x, y);
