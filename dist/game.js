@@ -23271,6 +23271,18 @@
       this.terrain = new Mesh(geo, mat);
       this.terrain.receiveShadow = true;
       this.scene.add(this.terrain);
+      const apron = new Mesh(
+        new PlaneGeometry(w * 4, h * 4),
+        new MeshStandardMaterial({
+          color: 2850470,
+          flatShading: true,
+          roughness: 0.94,
+          metalness: 0
+        })
+      );
+      apron.rotation.x = -Math.PI / 2;
+      apron.position.set(w / 2, -0.62, h / 2);
+      this.scene.add(apron);
       this.buildTerritory();
       this.buildTrees();
       this.buildRocks();
