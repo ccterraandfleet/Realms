@@ -204,6 +204,114 @@
     }
     return { seed: seed2, w, h, terrain, richness, road, citySites: sites, cityEdges: edges };
   }
+  var PRESET_CODES = {
+    water: 0,
+    dirt: 1,
+    grass: 2,
+    canopy: 3,
+    rock: 4,
+    shadow: 5
+  };
+  function loadPresetWorld(raw) {
+    const w = raw.n;
+    const h = raw.n;
+    const terrain = new Uint8Array(w * h);
+    const richness = new Float32Array(w * h);
+    const road = new Uint8Array(w * h);
+    const presetClass = new Uint8Array(w * h);
+    const codeOf = (name) => PRESET_CODES[name] ?? 2;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const t = y * w + x;
+        const code = codeOf(raw.classes[y][x]);
+        presetClass[t] = code;
+        if (code === 0) {
+          terrain[t] = OCEAN;
+          richness[t] = 0;
+        } else if (code === 1) {
+          terrain[t] = SAND;
+          richness[t] = 1.1;
+        } else if (code === 3) {
+          terrain[t] = FOREST;
+          richness[t] = 1.6;
+        } else if (code === 4) {
+          terrain[t] = MOUNTAIN;
+          richness[t] = 0.5;
+        } else {
+          terrain[t] = PLAINS;
+          richness[t] = 1.35;
+        }
+        if (code === 5) richness[t] = 1;
+      }
+    }
+    const sites = [];
+    const candidates = [];
+    for (let t = 0; t < w * h; t++) {
+      const code = presetClass[t];
+      if (code === 0 || code === 4) continue;
+      const x = t % w;
+      const y = t / w | 0;
+      if (x < 5 || y < 5 || x > w - 6 || y > h - 6) continue;
+      candidates.push({ t, score: richness[t] + hash(x, y, 991) * 0.5 });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    for (const c of candidates) {
+      if (sites.length >= 14) break;
+      const x = c.t % w;
+      const y = c.t / w | 0;
+      if (sites.some((s) => Math.hypot(s.tile % w - x, (s.tile / w | 0) - y) < 30)) continue;
+      sites.push({ id: sites.length, tile: c.t, name: NAMES[sites.length % NAMES.length], capital: sites.length < 6 });
+    }
+    const edges = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const site of sites) {
+      const near = sites.filter((o) => o.id !== site.id).map((o) => ({
+        id: o.id,
+        d: Math.hypot(o.tile % w - site.tile % w, (o.tile / w | 0) - (site.tile / w | 0))
+      })).sort((a, b) => a.d - b.d).slice(0, 2);
+      for (const n of near) {
+        const a = Math.min(site.id, n.id);
+        const b = Math.max(site.id, n.id);
+        const key = `${a}-${b}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push([a, b]);
+        const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile);
+        if (path) for (const t of path) road[t] = 1;
+      }
+    }
+    for (const site of sites) {
+      if (!sites.length) break;
+      if (findPath(terrain, w, h, site.tile, sites[0].tile, 6e4)) continue;
+      const ax = site.tile % w;
+      const ay = site.tile / w | 0;
+      const bx = sites[0].tile % w;
+      const by = sites[0].tile / w | 0;
+      const steps = Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+      for (let i = 0; i <= steps; i++) {
+        const x = Math.round(ax + (bx - ax) * i / steps);
+        const y = Math.round(ay + (by - ay) * i / steps);
+        const t = y * w + x;
+        if (terrain[t] === OCEAN) {
+          terrain[t] = SAND;
+          presetClass[t] = 1;
+          road[t] = 1;
+        }
+      }
+    }
+    return {
+      seed: 0,
+      w,
+      h,
+      terrain,
+      richness,
+      road,
+      citySites: sites,
+      cityEdges: edges,
+      presetClass,
+      presetPalette: raw.palette
+    };
+  }
   function findPath(terrain, w, h, from, to, maxNodes = 24e3) {
     if (from === to) return [from];
     const open = [from];
@@ -263,11 +371,11 @@
   var CONVOY_RATIONS = 400;
   var HOST_MAX_MEN = [0, 240, 420, 700, 1100];
   var Game = class _Game {
-    constructor(world2, resumed) {
+    constructor(world, resumed) {
       this.ownerTimer = 0;
       this.aiTimer = 0;
       this.convoyTimer = 0;
-      this.world = world2;
+      this.world = world;
       this.state = resumed ?? this.freshState();
     }
     freshState() {
@@ -307,12 +415,12 @@
         log: []
       };
       for (const p of players) {
-        const home2 = cities.find((c) => c.owner === p.id);
-        if (!home2) continue;
+        const home = cities.find((c) => c.owner === p.id);
+        if (!home) continue;
         state.hosts.push({
           id: state.nextHostId++,
           owner: p.id,
-          tile: home2.tile,
+          tile: home.tile,
           men: 180,
           supply: 1,
           morale: 1,
@@ -322,7 +430,7 @@
           routed: false,
           rally: 0
         });
-        home2.pop -= 180;
+        home.pop -= 180;
       }
       return state;
     }
@@ -469,20 +577,20 @@
         if (h.path.length && !h.routed) {
           const next = h.path[0];
           const onRoad = this.world.road[h.tile] === 1 && this.world.road[next] === 1;
-          const speed2 = onRoad ? 2.6 : 1.4;
+          const speed = onRoad ? 2.6 : 1.4;
           if (h.speedAcc === void 0) h.speedAcc = 0;
-          h.speedAcc += dt * speed2;
+          h.speedAcc += dt * speed;
           if (h.speedAcc >= 1) {
             h.speedAcc -= 1;
             h.tile = h.path.shift();
           }
         }
-        const home2 = this.state.cities.find(
+        const home = this.state.cities.find(
           (c) => c.owner === h.owner && this.tileDistance(c.tile, h.tile) <= 4 && c.stock > 20
         );
-        if (home2) {
+        if (home) {
           const draw = h.men * 0.02 * dt;
-          home2.stock = Math.max(0, home2.stock - draw);
+          home.stock = Math.max(0, home.stock - draw);
           h.supply = Math.min(1, h.supply + 0.5 * dt);
         } else {
           h.supply = Math.max(0, h.supply - 0.055 * dt);
@@ -689,11 +797,11 @@
     save() {
       return JSON.stringify(this.state);
     }
-    static load(world2, raw) {
+    static load(world, raw) {
       try {
         const parsed = JSON.parse(raw);
         parsed.territory = Int16Array.from(parsed.territory);
-        return new _Game(world2, parsed);
+        return new _Game(world, parsed);
       } catch {
         return null;
       }
@@ -7899,13 +8007,13 @@
       let height = 2 * top;
       let width = this.aspect * height;
       let left = -0.5 * width;
-      const view2 = this.view;
+      const view = this.view;
       if (this.view !== null && this.view.enabled) {
-        const fullWidth = view2.fullWidth, fullHeight = view2.fullHeight;
-        left += view2.offsetX * width / fullWidth;
-        top -= view2.offsetY * height / fullHeight;
-        width *= view2.width / fullWidth;
-        height *= view2.height / fullHeight;
+        const fullWidth = view.fullWidth, fullHeight = view.fullHeight;
+        left += view.offsetX * width / fullWidth;
+        top -= view.offsetY * height / fullHeight;
+        width *= view.width / fullWidth;
+        height *= view.height / fullHeight;
       }
       const skew = this.filmOffset;
       if (skew !== 0) left += near * skew / this.getFilmWidth();
@@ -8344,8 +8452,8 @@
     let isAnimating = false;
     let animationLoop = null;
     let requestId = null;
-    function onAnimationFrame(time, frame2) {
-      animationLoop(time, frame2);
+    function onAnimationFrame(time, frame) {
+      animationLoop(time, frame);
       requestId = context.requestAnimationFrame(onAnimationFrame);
     }
     return {
@@ -11213,30 +11321,30 @@
   function WebGLObjects(gl, geometries, attributes, info) {
     let updateMap = /* @__PURE__ */ new WeakMap();
     function update(object) {
-      const frame2 = info.render.frame;
+      const frame = info.render.frame;
       const geometry = object.geometry;
       const buffergeometry = geometries.get(object, geometry);
-      if (updateMap.get(buffergeometry) !== frame2) {
+      if (updateMap.get(buffergeometry) !== frame) {
         geometries.update(buffergeometry);
-        updateMap.set(buffergeometry, frame2);
+        updateMap.set(buffergeometry, frame);
       }
       if (object.isInstancedMesh) {
         if (object.hasEventListener("dispose", onInstancedMeshDispose) === false) {
           object.addEventListener("dispose", onInstancedMeshDispose);
         }
-        if (updateMap.get(object) !== frame2) {
+        if (updateMap.get(object) !== frame) {
           attributes.update(object.instanceMatrix, gl.ARRAY_BUFFER);
           if (object.instanceColor !== null) {
             attributes.update(object.instanceColor, gl.ARRAY_BUFFER);
           }
-          updateMap.set(object, frame2);
+          updateMap.set(object, frame);
         }
       }
       if (object.isSkinnedMesh) {
         const skeleton = object.skeleton;
-        if (updateMap.get(skeleton) !== frame2) {
+        if (updateMap.get(skeleton) !== frame) {
           skeleton.update();
-          updateMap.set(skeleton, frame2);
+          updateMap.set(skeleton, frame);
         }
       }
       return buffergeometry;
@@ -15739,9 +15847,9 @@
       return isWebGL2 && renderTarget.samples > 0 && extensions.has("WEBGL_multisampled_render_to_texture") === true && renderTargetProperties.__useRenderToTexture !== false;
     }
     function updateVideoTexture(texture) {
-      const frame2 = info.render.frame;
-      if (_videoTextures.get(texture) !== frame2) {
-        _videoTextures.set(texture, frame2);
+      const frame = info.render.frame;
+      if (_videoTextures.get(texture) !== frame) {
+        _videoTextures.set(texture, frame);
         texture.update();
       }
     }
@@ -16025,18 +16133,18 @@
       }
       return this;
     }
-    update(inputSource, frame2, referenceSpace) {
+    update(inputSource, frame, referenceSpace) {
       let inputPose = null;
       let gripPose = null;
       let handPose = null;
       const targetRay = this._targetRay;
       const grip = this._grip;
       const hand = this._hand;
-      if (inputSource && frame2.session.visibilityState !== "visible-blurred") {
+      if (inputSource && frame.session.visibilityState !== "visible-blurred") {
         if (hand && inputSource.hand) {
           handPose = true;
           for (const inputjoint of inputSource.hand.values()) {
-            const jointPose = frame2.getJointPose(inputjoint, referenceSpace);
+            const jointPose = frame.getJointPose(inputjoint, referenceSpace);
             const joint = this._getHandJoint(hand, inputjoint);
             if (jointPose !== null) {
               joint.matrix.fromArray(jointPose.transform.matrix);
@@ -16068,7 +16176,7 @@
           }
         } else {
           if (grip !== null && inputSource.gripSpace) {
-            gripPose = frame2.getPose(inputSource.gripSpace, referenceSpace);
+            gripPose = frame.getPose(inputSource.gripSpace, referenceSpace);
             if (gripPose !== null) {
               grip.matrix.fromArray(gripPose.transform.matrix);
               grip.matrix.decompose(grip.position, grip.rotation, grip.scale);
@@ -16089,7 +16197,7 @@
           }
         }
         if (targetRay !== null) {
-          inputPose = frame2.getPose(inputSource.targetRaySpace, referenceSpace);
+          inputPose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
           if (inputPose === null && gripPose !== null) {
             inputPose = gripPose;
           }
@@ -16488,9 +16596,9 @@
         }
       };
       let onAnimationFrameCallback = null;
-      function onAnimationFrame(time, frame2) {
-        pose = frame2.getViewerPose(customReferenceSpace || referenceSpace);
-        xrFrame = frame2;
+      function onAnimationFrame(time, frame) {
+        pose = frame.getViewerPose(customReferenceSpace || referenceSpace);
+        xrFrame = frame;
         if (pose !== null) {
           const views = pose.views;
           if (glBaseLayer !== null) {
@@ -16503,12 +16611,12 @@
             cameraXRNeedsUpdate = true;
           }
           for (let i = 0; i < views.length; i++) {
-            const view2 = views[i];
+            const view = views[i];
             let viewport = null;
             if (glBaseLayer !== null) {
-              viewport = glBaseLayer.getViewport(view2);
+              viewport = glBaseLayer.getViewport(view);
             } else {
-              const glSubImage = glBinding.getViewSubImage(glProjLayer, view2);
+              const glSubImage = glBinding.getViewSubImage(glProjLayer, view);
               viewport = glSubImage.viewport;
               if (i === 0) {
                 renderer.setRenderTargetTextures(
@@ -16526,9 +16634,9 @@
               camera.viewport = new Vector4();
               cameras[i] = camera;
             }
-            camera.matrix.fromArray(view2.transform.matrix);
+            camera.matrix.fromArray(view.transform.matrix);
             camera.matrix.decompose(camera.position, camera.quaternion, camera.scale);
-            camera.projectionMatrix.fromArray(view2.projectionMatrix);
+            camera.projectionMatrix.fromArray(view.projectionMatrix);
             camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
             camera.viewport.set(viewport.x, viewport.y, viewport.width, viewport.height);
             if (i === 0) {
@@ -16544,12 +16652,12 @@
           const inputSource = controllerInputSources[i];
           const controller = controllers[i];
           if (inputSource !== null && controller !== void 0) {
-            controller.update(inputSource, frame2, customReferenceSpace || referenceSpace);
+            controller.update(inputSource, frame, customReferenceSpace || referenceSpace);
           }
         }
-        if (onAnimationFrameCallback) onAnimationFrameCallback(time, frame2);
-        if (frame2.detectedPlanes) {
-          scope.dispatchEvent({ type: "planesdetected", data: frame2 });
+        if (onAnimationFrameCallback) onAnimationFrameCallback(time, frame);
+        if (frame.detectedPlanes) {
+          scope.dispatchEvent({ type: "planesdetected", data: frame });
         }
         xrFrame = null;
       }
@@ -16878,10 +16986,10 @@
       }
       const webglProgram = program.program;
       state.updateUBOMapping(uniformsGroup, webglProgram);
-      const frame2 = info.render.frame;
-      if (updateList[uniformsGroup.id] !== frame2) {
+      const frame = info.render.frame;
+      if (updateList[uniformsGroup.id] !== frame) {
         updateBufferData(uniformsGroup);
-        updateList[uniformsGroup.id] = frame2;
+        updateList[uniformsGroup.id] = frame;
       }
     }
     function createBuffer(uniformsGroup) {
@@ -19599,6 +19707,24 @@
   var VectorKeyframeTrack = class extends KeyframeTrack {
   };
   VectorKeyframeTrack.prototype.ValueTypeName = "vector";
+  var Cache = {
+    enabled: false,
+    files: {},
+    add: function(key, file) {
+      if (this.enabled === false) return;
+      this.files[key] = file;
+    },
+    get: function(key) {
+      if (this.enabled === false) return;
+      return this.files[key];
+    },
+    remove: function(key) {
+      delete this.files[key];
+    },
+    clear: function() {
+      this.files = {};
+    }
+  };
   var LoadingManager = class {
     constructor(onLoad, onProgress, onError) {
       const scope = this;
@@ -19713,6 +19839,69 @@
     }
   };
   Loader.DEFAULT_MATERIAL_NAME = "__DEFAULT";
+  var ImageLoader = class extends Loader {
+    constructor(manager) {
+      super(manager);
+    }
+    load(url, onLoad, onProgress, onError) {
+      if (this.path !== void 0) url = this.path + url;
+      url = this.manager.resolveURL(url);
+      const scope = this;
+      const cached = Cache.get(url);
+      if (cached !== void 0) {
+        scope.manager.itemStart(url);
+        setTimeout(function() {
+          if (onLoad) onLoad(cached);
+          scope.manager.itemEnd(url);
+        }, 0);
+        return cached;
+      }
+      const image = createElementNS("img");
+      function onImageLoad() {
+        removeEventListeners();
+        Cache.add(url, this);
+        if (onLoad) onLoad(this);
+        scope.manager.itemEnd(url);
+      }
+      function onImageError(event) {
+        removeEventListeners();
+        if (onError) onError(event);
+        scope.manager.itemError(url);
+        scope.manager.itemEnd(url);
+      }
+      function removeEventListeners() {
+        image.removeEventListener("load", onImageLoad, false);
+        image.removeEventListener("error", onImageError, false);
+      }
+      image.addEventListener("load", onImageLoad, false);
+      image.addEventListener("error", onImageError, false);
+      if (url.slice(0, 5) !== "data:") {
+        if (this.crossOrigin !== void 0) image.crossOrigin = this.crossOrigin;
+      }
+      scope.manager.itemStart(url);
+      image.src = url;
+      return image;
+    }
+  };
+  var TextureLoader = class extends Loader {
+    constructor(manager) {
+      super(manager);
+    }
+    load(url, onLoad, onProgress, onError) {
+      const texture = new Texture();
+      const loader = new ImageLoader(this.manager);
+      loader.setCrossOrigin(this.crossOrigin);
+      loader.setPath(this.path);
+      loader.load(url, function(image) {
+        texture.image = image;
+        texture.needsUpdate = true;
+        if (onLoad !== void 0) {
+          onLoad(texture);
+        }
+      }, onProgress, onError);
+      return texture;
+    }
+  };
   var Light = class extends Object3D {
     constructor(color, intensity = 1) {
       super();
@@ -20327,7 +20516,7 @@
   }
 
   // src/view/poly.ts
-  var TILT = 0.5;
+  var TILT = 0.1;
   var CAM_DIST = 300;
   var CHUNK = 3;
   var BIOME = {
@@ -20362,8 +20551,8 @@
     return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
   }
   var PolyView = class {
-    constructor(canvas2, game2) {
-      this.game = game2;
+    constructor(canvas2, game) {
+      this.game = game;
       this.scene = new Scene();
       this.terrain = null;
       this.drape = null;
@@ -20387,7 +20576,7 @@
       this.renderer.shadowMap.type = PCFSoftShadowMap;
       this.renderer.outputColorSpace = SRGBColorSpace;
       this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.16;
+      this.renderer.toneMappingExposure = 1.34;
       this.scene.background = new Color(1319724);
       this.scene.fog = new Fog(11058372, 320, 700);
       this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1200);
@@ -20432,8 +20621,8 @@
     /* build                                                              */
     /* ------------------------------------------------------------------ */
     build() {
-      const world2 = this.game.world;
-      const { w, h, terrain } = world2;
+      const world = this.game.world;
+      const { w, h, terrain } = world;
       this.cw = Math.ceil(w / CHUNK);
       this.ch = Math.ceil(h / CHUNK);
       const fine = new Float32Array(w * h);
@@ -20465,6 +20654,30 @@
             }
           }
           soft[y * w + x] = sum / n;
+        }
+      }
+      if (world.presetClass) {
+        const PRESET_HEIGHT = [-0.5, 0.12, 0.28, 0.5, 1.7, 0.3];
+        for (let t = 0; t < w * h; t++) {
+          const code = world.presetClass[t];
+          const jitter = (valueNoise(t % w, t / w | 0, 11, 5) - 0.5) * (code === 0 ? 0.03 : 0.22);
+          fine[t] = PRESET_HEIGHT[code] + jitter;
+        }
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            let sum = 0;
+            let n = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                sum += fine[ny * w + nx];
+                n++;
+              }
+            }
+            soft[y * w + x] = sum / n;
+          }
         }
       }
       const cw = this.cw;
@@ -20502,8 +20715,27 @@
       const pos = new Float32Array(cells * 18);
       const col = new Float32Array(cells * 18);
       const nor = new Float32Array(cells * 18);
+      const uv = new Float32Array(cells * 12);
       const c = new Color();
       let p = 0;
+      let q = 0;
+      const presetClass = world.presetClass;
+      let presetHex = null;
+      if (presetClass && world.presetPalette) {
+        const mix = (hex, k) => {
+          const v = parseInt(hex.slice(1), 16);
+          const r = Math.round(Math.min(255, (v >> 16 & 255) * k));
+          const g2 = Math.round(Math.min(255, (v >> 8 & 255) * k));
+          const b2 = Math.round(Math.min(255, (v & 255) * k));
+          return r << 16 | g2 << 8 | b2;
+        };
+        const order = ["water", "dirt", "grass", "canopy", "rock", "shadow"];
+        presetHex = {};
+        order.forEach((name, i) => {
+          const base2 = world.presetPalette[name] ?? "#8d9733";
+          presetHex[i] = [mix(base2, 0.82), mix(base2, 0.92), mix(base2, 1), mix(base2, 1.1)];
+        });
+      }
       const corner = (cx, cy) => this.corners[Math.max(0, Math.min(ch, cy)) * (cw + 1) + Math.max(0, Math.min(cw, cx))];
       const tri = (ax, az, bx, bz, cx, cz) => {
         const x0 = ax * CHUNK;
@@ -20535,6 +20767,9 @@
           col[p] = c.r;
           col[p + 1] = c.g;
           col[p + 2] = c.b;
+          uv[q] = xs[i] / w;
+          uv[q + 1] = 1 - zs[i] / h;
+          q += 2;
           p += 3;
         }
       };
@@ -20549,7 +20784,7 @@
               const t = ty * w + tx;
               const k = terrain[t];
               counts.set(k, (counts.get(k) ?? 0) + 1);
-              if (world2.road[t]) roadCells++;
+              if (world.road[t]) roadCells++;
             }
           }
           let kind = PLAINS;
@@ -20558,7 +20793,27 @@
             best = n;
             kind = k;
           }
-          if (roadCells >= 4 && kind !== OCEAN) {
+          if (presetHex) {
+            const pc = /* @__PURE__ */ new Map();
+            for (let dz = 0; dz < CHUNK; dz++) {
+              for (let dx = 0; dx < CHUNK; dx++) {
+                const tx = Math.min(w - 1, x * CHUNK + dx);
+                const ty = Math.min(h - 1, z * CHUNK + dz);
+                const code2 = presetClass[ty * w + tx];
+                pc.set(code2, (pc.get(code2) ?? 0) + 1);
+              }
+            }
+            let code = 2;
+            let count = -1;
+            for (const [k, n] of pc) if (n > count) {
+              count = n;
+              code = k;
+            }
+            const hexes = presetHex[code] ?? presetHex[2];
+            c.setHex(hexes[hash2(x, z, 7) * hexes.length | 0]);
+            if (roadCells >= 3 && code !== 0) c.setHex(presetHex[1][0]);
+            c.multiplyScalar(0.97 + hash2(x, z, 13) * 0.07);
+          } else if (roadCells >= 4 && kind !== OCEAN) {
             c.setHex(ROAD_TONES[hash2(x, z, 31) * ROAD_TONES.length | 0]);
           } else {
             const fam = BIOME[kind] ?? BIOME[PLAINS];
@@ -20578,11 +20833,17 @@
       geo.setAttribute("position", new BufferAttribute(pos, 3));
       geo.setAttribute("normal", new BufferAttribute(nor, 3));
       geo.setAttribute("color", new BufferAttribute(col, 3));
+      geo.setAttribute("uv", new BufferAttribute(uv, 2));
       geo.computeBoundingSphere();
-      this.terrain = new Mesh(
-        geo,
-        new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92 })
-      );
+      const groundMat = this.game.world.presetClass ? new MeshStandardMaterial({ flatShading: true, roughness: 0.95 }) : new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92 });
+      this.terrain = new Mesh(geo, groundMat);
+      if (this.game.world.presetClass) {
+        const tex = new TextureLoader().load("preset/ground.png");
+        tex.colorSpace = SRGBColorSpace;
+        tex.anisotropy = 4;
+        groundMat.map = tex;
+        groundMat.needsUpdate = true;
+      }
       this.terrain.receiveShadow = true;
       this.scene.add(this.terrain);
       const apron = new Mesh(
@@ -20641,27 +20902,31 @@
       this.scene.add(this.drape);
     }
     buildScatter() {
-      const world2 = this.game.world;
-      const { w, h, terrain } = world2;
+      const world = this.game.world;
+      const { w, h, terrain } = world;
       const treeSpots = [];
       const rockSpots = [];
       for (let t = 0; t < w * h; t++) {
         const x = t % w;
         const z = t / w | 0;
-        if (terrain[t] === FOREST) {
-          if (hash2(x, z, 31) > 0.55) continue;
-          const n = 1 + (hash2(x, z, 37) * 2 | 0);
+        const cl = world.presetClass?.[t];
+        const isCanopy = cl !== void 0 ? cl === 3 : terrain[t] === FOREST;
+        const isRock = cl !== void 0 ? cl === 4 : terrain[t] === MOUNTAIN;
+        if (isCanopy) {
+          const density = cl === void 0 ? 0.55 : 0.94;
+          if (hash2(x, z, 31) > density) continue;
+          const n = cl === void 0 ? 1 + (hash2(x, z, 37) * 2 | 0) : 2 + (hash2(x, z, 37) * 2 | 0);
           for (let i = 0; i < n; i++) {
             treeSpots.push({
               x: x + 0.15 + hash2(x, z, 41 + i) * 0.7,
               z: z + 0.15 + hash2(x, z, 47 + i) * 0.7,
               y: this.heights[t],
-              s: 1.15 + hash2(x, z, 53 + i) * 0.95,
+              s: cl === void 0 ? 1.15 + hash2(x, z, 53 + i) * 0.95 : 0.95 + hash2(x, z, 53 + i) * 0.75,
               r: hash2(x, z, 59 + i) * 6.283,
               c: TREE_GREENS[hash2(x, z, 61 + i) * TREE_GREENS.length | 0]
             });
           }
-        } else if (terrain[t] === MOUNTAIN && hash2(x, z, 71) < 0.45) {
+        } else if (isRock && hash2(x, z, 71) < 0.45) {
           rockSpots.push({
             x: x + hash2(x, z, 73),
             z: z + hash2(x, z, 79),
@@ -20671,10 +20936,11 @@
           });
         }
       }
-      const cone = new ConeGeometry(0.42, 1, 6, 1);
-      cone.translate(0, 0.5, 0);
+      const crown = new IcosahedronGeometry(0.46, 0);
+      crown.scale(1, 0.82, 1);
+      crown.translate(0, 0.42, 0);
       this.trees = new InstancedMesh(
-        cone,
+        crown,
         new MeshStandardMaterial({ flatShading: true, roughness: 0.85 }),
         treeSpots.length
       );
@@ -20798,12 +21064,12 @@
     paintDrape() {
       const tex = this.drapeTex;
       if (!tex) return;
-      const world2 = this.game.world;
+      const world = this.game.world;
       const data = tex.image.data;
       const terr = this.game.state.territory;
       const colours = this.game.state.players.map((p) => new Color(p.colour));
       const neutral = new Color(9276821);
-      for (let t = 0; t < world2.w * world2.h; t++) {
+      for (let t = 0; t < world.w * world.h; t++) {
         const owner = terr[t];
         const o = t * 4;
         if (owner === -2) {
@@ -20818,7 +21084,7 @@
       }
       tex.needsUpdate = true;
     }
-    draw(cam2, hover2, selected2, dpr) {
+    draw(cam, hover, selected, dpr) {
       const vw = this.canvas.clientWidth || window.innerWidth;
       const vh = this.canvas.clientHeight || window.innerHeight;
       const key = `${vw}x${vh}x${dpr}`;
@@ -20827,10 +21093,10 @@
         this.renderer.setPixelRatio(dpr);
         this.renderer.setSize(vw, vh, false);
       }
-      const cx = (vw / 2 - cam2.x) / cam2.scale;
-      const cz = (vh / 2 - cam2.y) / cam2.scale;
-      const halfW = vw / 2 / cam2.scale;
-      const halfH = vh / 2 / cam2.scale * Math.cos(TILT);
+      const cx = (vw / 2 - cam.x) / cam.scale;
+      const cz = (vh / 2 - cam.y) / cam.scale;
+      const halfW = vw / 2 / cam.scale;
+      const halfH = vh / 2 / cam.scale * Math.cos(TILT);
       this.cam.left = -halfW;
       this.cam.right = halfW;
       this.cam.top = halfH;
@@ -20848,7 +21114,7 @@
         this.paintDrape();
       }
       this.syncKeeps();
-      this.syncCrowd(hover2, selected2);
+      this.syncCrowd(hover, selected);
       this.renderer.render(this.scene, this.cam);
     }
     syncKeeps() {
@@ -20871,7 +21137,7 @@
         this.keeps.delete(id);
       }
     }
-    syncCrowd(hover2, selected2) {
+    syncCrowd(hover, selected) {
       const w = this.game.world.w;
       const m = new Matrix4();
       const q = new Quaternion();
@@ -20914,15 +21180,15 @@
       this.carts.count = ci;
       this.carts.instanceMatrix.needsUpdate = true;
       if (this.carts.instanceColor) this.carts.instanceColor.needsUpdate = true;
-      if (hover2 >= 0) {
-        const x = hover2 % w;
-        const z = Math.floor(hover2 / w);
+      if (hover >= 0) {
+        const x = hover % w;
+        const z = Math.floor(hover / w);
         this.hoverRing.visible = true;
-        this.hoverRing.position.set(x + 0.5, this.heights[hover2] + 0.07, z + 0.5);
+        this.hoverRing.position.set(x + 0.5, this.heights[hover] + 0.07, z + 0.5);
       } else {
         this.hoverRing.visible = false;
       }
-      const selTile = selected2.host !== null ? this.game.hostById(selected2.host)?.tile ?? null : selected2.city !== null ? this.game.cityById(selected2.city)?.tile ?? null : null;
+      const selTile = selected.host !== null ? this.game.hostById(selected.host)?.tile ?? null : selected.city !== null ? this.game.cityById(selected.city)?.tile ?? null : null;
       if (selTile !== null) {
         this.selectRing.visible = true;
         this.selectRing.position.set(
@@ -20952,9 +21218,9 @@
       if (!point) return -1;
       const x = Math.floor(point.x);
       const y = Math.floor(point.z);
-      const world2 = this.game.world;
-      if (x < 0 || y < 0 || x >= world2.w || y >= world2.h) return -1;
-      return y * world2.w + x;
+      const world = this.game.world;
+      if (x < 0 || y < 0 || x >= world.w || y >= world.h) return -1;
+      return y * world.w + x;
     }
   };
 
@@ -20963,139 +21229,152 @@
   var canvas = document.getElementById("map");
   var params = new URLSearchParams(location.search);
   var seed = Number(params.get("seed") ?? localStorage.getItem("realms.poly.seed") ?? 7) || 7;
-  var world = generateWorld(seed);
-  var resumedRaw = params.get("fresh") ? null : localStorage.getItem(SAVE_KEY);
-  var game = (resumedRaw ? Game.load(world, resumedRaw) : null) ?? new Game(world);
-  if (params.get("fresh")) localStorage.removeItem(SAVE_KEY);
-  var view = new PolyView(canvas, game);
-  window.__realms = { game, view, cam: null };
-  var cam = { x: 0, y: 0, scale: 7 };
-  window.__realms.cam = cam;
-  var selected = { host: null, city: null };
-  var hover = -1;
-  var speed = 1;
-  function centreOn(tile, scale = cam.scale) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cx = tile % world.w + 0.5;
-    const cz = Math.floor(tile / world.w) + 0.5;
-    cam.scale = scale;
-    cam.x = vw / 2 - cx * scale;
-    cam.y = vh / 2 - cz * scale;
-    clampCam();
-  }
-  function clampCam() {
-    const mw = world.w * cam.scale;
-    const mh = world.h * cam.scale;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    cam.x = mw <= vw ? (vw - mw) / 2 : Math.min(60, Math.max(vw - mw - 60, cam.x));
-    cam.y = mh <= vh ? (vh - mh) / 2 : Math.min(60, Math.max(vh - mh - 60, cam.y));
-  }
-  var home = game.citiesOf(0)[0] ?? game.state.cities[0];
-  if (home) centreOn(home.tile, 7);
-  var dragging = false;
-  var dragX = 0;
-  var dragY = 0;
-  var moved = 0;
-  canvas.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    moved = 0;
-    dragX = e.clientX;
-    dragY = e.clientY;
-    canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    hover = view.tileAtScreen(e.clientX, e.clientY);
-    if (!dragging) return;
-    const dx = e.clientX - dragX;
-    const dy = e.clientY - dragY;
-    moved += Math.abs(dx) + Math.abs(dy);
-    cam.x += dx;
-    cam.y += dy;
-    dragX = e.clientX;
-    dragY = e.clientY;
-    clampCam();
-  });
-  canvas.addEventListener("pointerup", (e) => {
-    dragging = false;
-    if (moved > 6) return;
-    const tile = view.tileAtScreen(e.clientX, e.clientY);
-    if (tile < 0) return;
-    if (e.button === 2) {
-      orderMarch(tile);
-      return;
-    }
-    selectTile(tile);
-  });
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  canvas.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const before = view.tileAtScreen(e.clientX, e.clientY);
-      const factor = Math.pow(1.0016, -e.deltaY);
-      cam.scale = Math.max(2.2, Math.min(22, cam.scale * factor));
-      const after = view.tileAtScreen(e.clientX, e.clientY);
-      if (before >= 0 && after >= 0 && before !== after) {
-        const bx = before % world.w;
-        const bz = Math.floor(before / world.w);
-        const ax = after % world.w;
-        const az = Math.floor(after / world.w);
-        cam.x += (ax - bx) * cam.scale;
-        cam.y += (az - bz) * cam.scale;
+  async function loadWorld() {
+    if (params.get("seed")) return generateWorld(seed);
+    try {
+      const res = await fetch("preset/reference_map.json");
+      if (res.ok) {
+        const raw = await res.json();
+        return loadPresetWorld(raw);
       }
+    } catch {
+    }
+    return generateWorld(seed);
+  }
+  async function boot() {
+    const world = await loadWorld();
+    const resumedRaw = params.get("fresh") ? null : localStorage.getItem(SAVE_KEY);
+    const game = (resumedRaw ? Game.load(world, resumedRaw) : null) ?? new Game(world);
+    if (params.get("fresh")) localStorage.removeItem(SAVE_KEY);
+    const view = new PolyView(canvas, game);
+    window.__realms = { game, view, cam: null };
+    const cam = { x: 0, y: 0, scale: 7 };
+    window.__realms.cam = cam;
+    const selected = { host: null, city: null };
+    let hover = -1;
+    let speed = 1;
+    function centreOn(tile, scale = cam.scale) {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const cx = tile % world.w + 0.5;
+      const cz = Math.floor(tile / world.w) + 0.5;
+      cam.scale = scale;
+      cam.x = vw / 2 - cx * scale;
+      cam.y = vh / 2 - cz * scale;
       clampCam();
-    },
-    { passive: false }
-  );
-  window.addEventListener("resize", clampCam);
-  function selectTile(tile) {
-    const host = game.state.hosts.find((h) => h.tile === tile);
-    if (host) {
-      selected.host = host.id;
-      selected.city = null;
-      return;
     }
-    const city = game.cityAt(tile);
-    if (city) {
-      selected.city = city.id;
+    function clampCam() {
+      const mw = world.w * cam.scale;
+      const mh = world.h * cam.scale;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      cam.x = mw <= vw ? (vw - mw) / 2 : Math.min(60, Math.max(vw - mw - 60, cam.x));
+      cam.y = mh <= vh ? (vh - mh) / 2 : Math.min(60, Math.max(vh - mh - 60, cam.y));
+    }
+    const home = game.citiesOf(0)[0] ?? game.state.cities[0];
+    if (home) centreOn(home.tile, 7);
+    let dragging = false;
+    let dragX = 0;
+    let dragY = 0;
+    let moved = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      moved = 0;
+      dragX = e.clientX;
+      dragY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener("pointermove", (e) => {
+      hover = view.tileAtScreen(e.clientX, e.clientY);
+      if (!dragging) return;
+      const dx = e.clientX - dragX;
+      const dy = e.clientY - dragY;
+      moved += Math.abs(dx) + Math.abs(dy);
+      cam.x += dx;
+      cam.y += dy;
+      dragX = e.clientX;
+      dragY = e.clientY;
+      clampCam();
+    });
+    canvas.addEventListener("pointerup", (e) => {
+      dragging = false;
+      if (moved > 6) return;
+      const tile = view.tileAtScreen(e.clientX, e.clientY);
+      if (tile < 0) return;
+      if (e.button === 2) {
+        orderMarch(tile);
+        return;
+      }
+      selectTile(tile);
+    });
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        const before = view.tileAtScreen(e.clientX, e.clientY);
+        const factor = Math.pow(1.0016, -e.deltaY);
+        cam.scale = Math.max(2.2, Math.min(22, cam.scale * factor));
+        const after = view.tileAtScreen(e.clientX, e.clientY);
+        if (before >= 0 && after >= 0 && before !== after) {
+          const bx = before % world.w;
+          const bz = Math.floor(before / world.w);
+          const ax = after % world.w;
+          const az = Math.floor(after / world.w);
+          cam.x += (ax - bx) * cam.scale;
+          cam.y += (az - bz) * cam.scale;
+        }
+        clampCam();
+      },
+      { passive: false }
+    );
+    window.addEventListener("resize", clampCam);
+    function selectTile(tile) {
+      const host = game.state.hosts.find((h) => h.tile === tile);
+      if (host) {
+        selected.host = host.id;
+        selected.city = null;
+        return;
+      }
+      const city = game.cityAt(tile);
+      if (city) {
+        selected.city = city.id;
+        selected.host = null;
+        return;
+      }
       selected.host = null;
-      return;
+      selected.city = null;
     }
-    selected.host = null;
-    selected.city = null;
-  }
-  function orderMarch(tile) {
-    if (selected.host === null) return;
-    const nearest = game.state.cities.slice().sort((a, b) => game.tileDistance(a.tile, tile) - game.tileDistance(b.tile, tile))[0];
-    if (!nearest) return;
-    const msg = game.march(selected.host, nearest.id);
-    flash(msg);
-  }
-  var el = (id) => document.getElementById(id);
-  var statsEl = el("stats");
-  var logEl = el("log");
-  var panelEl = el("panel");
-  var flashEl = el("flash");
-  var flashTimer = 0;
-  function flash(text) {
-    flashEl.textContent = text;
-    flashEl.classList.add("show");
-    flashTimer = 2.2;
-  }
-  function seasonName() {
-    const s = game.season();
-    if (s > 0.75) return "Winter";
-    if (s > 0.5) return "Harvest";
-    if (s > 0.25) return "Summer";
-    return "Spring";
-  }
-  function renderHud() {
-    const st = game.stats(0);
-    const cities = game.state.cities.length;
-    const mine = st.cities;
-    statsEl.innerHTML = `
+    function orderMarch(tile) {
+      if (selected.host === null) return;
+      const nearest = game.state.cities.slice().sort((a, b) => game.tileDistance(a.tile, tile) - game.tileDistance(b.tile, tile))[0];
+      if (!nearest) return;
+      const msg = game.march(selected.host, nearest.id);
+      flash(msg);
+    }
+    const el = (id) => document.getElementById(id);
+    const statsEl = el("stats");
+    const logEl = el("log");
+    const panelEl = el("panel");
+    const flashEl = el("flash");
+    let flashTimer = 0;
+    function flash(text) {
+      flashEl.textContent = text;
+      flashEl.classList.add("show");
+      flashTimer = 2.2;
+    }
+    function seasonName() {
+      const s = game.season();
+      if (s > 0.75) return "Winter";
+      if (s > 0.5) return "Harvest";
+      if (s > 0.25) return "Summer";
+      return "Spring";
+    }
+    function renderHud() {
+      const st = game.stats(0);
+      const cities = game.state.cities.length;
+      const mine = st.cities;
+      statsEl.innerHTML = `
     <div class="stat"><span>Grain</span><b>${st.grain.toLocaleString()}</b></div>
     <div class="stat"><span>People</span><b>${st.pop.toLocaleString()}</b></div>
     <div class="stat"><span>Men</span><b>${st.men}</b></div>
@@ -21103,11 +21382,11 @@
     <div class="stat"><span>Season</span><b class="${game.isWinter() ? "cold" : ""}">${seasonName()}</b></div>
     <div class="stat"><span>Supply</span><b>${Math.round(st.supply * 100)}%</b></div>
   `;
-    if (selected.city !== null) {
-      const c = game.cityById(selected.city);
-      if (!c) return;
-      const owner = c.owner >= 0 ? game.state.players[c.owner].name : "unclaimed";
-      panelEl.innerHTML = `
+      if (selected.city !== null) {
+        const c = game.cityById(selected.city);
+        if (!c) return;
+        const owner = c.owner >= 0 ? game.state.players[c.owner].name : "unclaimed";
+        panelEl.innerHTML = `
       <h2>${c.name}</h2>
       <p class="sub">${owner}${c.owner === 0 ? " \xB7 yours" : ""}</p>
       <dl>
@@ -21118,12 +21397,12 @@
       </dl>
       ${c.owner === 0 ? `<button id="muster">Muster men</button>` : ""}
     `;
-      el("muster")?.addEventListener("click", () => flash(game.muster(c.id)));
-    } else if (selected.host !== null) {
-      const h = game.hostById(selected.host);
-      if (!h) return;
-      const owner = game.state.players[h.owner]?.name ?? "unknown";
-      panelEl.innerHTML = `
+        el("muster")?.addEventListener("click", () => flash(game.muster(c.id)));
+      } else if (selected.host !== null) {
+        const h = game.hostById(selected.host);
+        if (!h) return;
+        const owner = game.state.players[h.owner]?.name ?? "unknown";
+        panelEl.innerHTML = `
       <h2>Host of ${h.men} men</h2>
       <p class="sub">${owner}${h.owner === 0 ? " \xB7 yours" : ""}</p>
       <dl>
@@ -21133,62 +21412,64 @@
       </dl>
       <p class="hint">Right-click a city to march on it.</p>
     `;
-    } else {
-      panelEl.innerHTML = `<h2>Nothing selected</h2><p class="hint">Click a keep to muster, or a host to give orders. Drag to pan, scroll to zoom.</p>`;
-    }
-    logEl.innerHTML = game.state.log.slice(0, 7).map((l) => `<div>${l}</div>`).join("");
-  }
-  el("speed").addEventListener("click", () => {
-    speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
-    el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
-  });
-  el("homebtn").addEventListener("click", () => {
-    const c = game.citiesOf(0)[0] ?? game.state.cities[0];
-    if (c) centreOn(c.tile, 8);
-  });
-  el("fresh").addEventListener("click", () => {
-    const next = Math.floor(Math.random() * 9e3) + 100;
-    localStorage.setItem("realms.poly.seed", String(next));
-    localStorage.removeItem(SAVE_KEY);
-    location.href = `?seed=${next}&fresh=1`;
-  });
-  var last = performance.now();
-  var saveTimer = 0;
-  var hudTimer = 0;
-  function frame(now) {
-    const dt = Math.min(0.25, (now - last) / 1e3);
-    last = now;
-    if (speed > 0) {
-      const scaled = dt * speed;
-      let left = scaled;
-      while (left > 0) {
-        const step = Math.min(0.1, left);
-        game.tick(step);
-        left -= step;
+      } else {
+        panelEl.innerHTML = `<h2>Nothing selected</h2><p class="hint">Click a keep to muster, or a host to give orders. Drag to pan, scroll to zoom.</p>`;
       }
+      logEl.innerHTML = game.state.log.slice(0, 7).map((l) => `<div>${l}</div>`).join("");
     }
-    view.draw(cam, hover, selected, Math.min(2, window.devicePixelRatio || 1));
-    hudTimer -= dt;
-    if (hudTimer <= 0) {
-      hudTimer = 0.2;
-      renderHud();
-    }
-    if (flashTimer > 0) {
-      flashTimer -= dt;
-      if (flashTimer <= 0) flashEl.classList.remove("show");
-    }
-    saveTimer -= dt;
-    if (saveTimer <= 0) {
-      saveTimer = 6;
-      try {
-        localStorage.setItem(SAVE_KEY, game.save());
-      } catch {
+    el("speed").addEventListener("click", () => {
+      speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
+      el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
+    });
+    el("homebtn").addEventListener("click", () => {
+      const c = game.citiesOf(0)[0] ?? game.state.cities[0];
+      if (c) centreOn(c.tile, 8);
+    });
+    el("fresh").addEventListener("click", () => {
+      const next = Math.floor(Math.random() * 9e3) + 100;
+      localStorage.setItem("realms.poly.seed", String(next));
+      localStorage.removeItem(SAVE_KEY);
+      location.href = `?seed=${next}&fresh=1`;
+    });
+    let last = performance.now();
+    let saveTimer = 0;
+    let hudTimer = 0;
+    function frame(now) {
+      const dt = Math.min(0.25, (now - last) / 1e3);
+      last = now;
+      if (speed > 0) {
+        const scaled = dt * speed;
+        let left = scaled;
+        while (left > 0) {
+          const step = Math.min(0.1, left);
+          game.tick(step);
+          left -= step;
+        }
       }
+      view.draw(cam, hover, selected, Math.min(2, window.devicePixelRatio || 1));
+      hudTimer -= dt;
+      if (hudTimer <= 0) {
+        hudTimer = 0.2;
+        renderHud();
+      }
+      if (flashTimer > 0) {
+        flashTimer -= dt;
+        if (flashTimer <= 0) flashEl.classList.remove("show");
+      }
+      saveTimer -= dt;
+      if (saveTimer <= 0) {
+        saveTimer = 6;
+        try {
+          localStorage.setItem(SAVE_KEY, game.save());
+        } catch {
+        }
+      }
+      requestAnimationFrame(frame);
     }
+    renderHud();
     requestAnimationFrame(frame);
   }
-  renderHud();
-  requestAnimationFrame(frame);
+  boot();
 })();
 /*! Bundled license information:
 
