@@ -219,6 +219,20 @@
     const richness = new Float32Array(w * h);
     const road = new Uint8Array(w * h);
     const presetClass = new Uint8Array(w * h);
+    const presetElev = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        presetElev[y * w + x] = raw.elev?.[y]?.[x] ?? (raw.classes[y][x] === "water" ? 0 : 0.3);
+      }
+    }
+    const slope = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const gx = (presetElev[y * w + Math.min(w - 1, x + 1)] ?? 0) - (presetElev[y * w + Math.max(0, x - 1)] ?? 0);
+        const gy = (presetElev[Math.min(h - 1, y + 1) * w + x] ?? 0) - (presetElev[Math.max(0, y - 1) * w + x] ?? 0);
+        slope[y * w + x] = Math.abs(gx) + Math.abs(gy);
+      }
+    }
     const codeOf = (name) => PRESET_CODES[name] ?? 2;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -252,7 +266,20 @@
       const x = t % w;
       const y = t / w | 0;
       if (x < 5 || y < 5 || x > w - 6 || y > h - 6) continue;
-      candidates.push({ t, score: richness[t] + hash(x, y, 991) * 0.5 });
+      if (slope[t] > 0.42) continue;
+      let coast = 0;
+      for (let dy = -4; dy <= 4 && !coast; dy++) {
+        for (let dx = -4; dx <= 4; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (terrain[ny * w + nx] === OCEAN) {
+            coast = 1;
+            break;
+          }
+        }
+      }
+      candidates.push({ t, score: richness[t] + coast * 0.6 - slope[t] * 2.5 + hash(x, y, 991) * 0.4 });
     }
     candidates.sort((a, b) => b.score - a.score);
     for (const c of candidates) {
@@ -276,7 +303,7 @@
         if (seen.has(key)) continue;
         seen.add(key);
         edges.push([a, b]);
-        const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile);
+        const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile, 6e4, presetElev);
         if (path) for (const t of path) road[t] = 1;
       }
     }
@@ -309,10 +336,11 @@
       citySites: sites,
       cityEdges: edges,
       presetClass,
+      presetElev,
       presetPalette: raw.palette
     };
   }
-  function findPath(terrain, w, h, from, to, maxNodes = 24e3) {
+  function findPath(terrain, w, h, from, to, maxNodes = 24e3, elev) {
     if (from === to) return [from];
     const open = [from];
     const cost = /* @__PURE__ */ new Map([[from, 0]]);
@@ -353,7 +381,8 @@
         if (seen.has(n)) continue;
         const kind = terrain[n];
         if (kind === OCEAN) continue;
-        const step = kind === MOUNTAIN ? 9 : kind === FOREST ? 2.2 : 1;
+        let step = kind === MOUNTAIN ? 9 : kind === FOREST ? 2.2 : 1;
+        if (elev) step *= 1 + Math.abs(elev[n] - elev[cur]) * 9;
         const nc = (cost.get(cur) ?? 0) + step;
         if (nc < (cost.get(n) ?? Infinity)) {
           cost.set(n, nc);
@@ -20519,6 +20548,7 @@
   var TILT = 0.1;
   var CAM_DIST = 300;
   var CHUNK = 3;
+  var RELIEF = 6.2;
   var BIOME = {
     [OCEAN]: [2399424, 2067632, 2861260, 1736609],
     [SAND]: [13217904, 12559461, 13942144],
@@ -20553,6 +20583,8 @@
   var PolyView = class {
     constructor(canvas2, game) {
       this.game = game;
+      /** Facet size in tiles: 1 for a sculpted preset world, CHUNK otherwise. */
+      this.chunk = CHUNK;
       this.scene = new Scene();
       this.terrain = null;
       this.drape = null;
@@ -20576,7 +20608,7 @@
       this.renderer.shadowMap.type = PCFSoftShadowMap;
       this.renderer.outputColorSpace = SRGBColorSpace;
       this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.34;
+      this.renderer.toneMappingExposure = 1.46;
       this.scene.background = new Color(1319724);
       this.scene.fog = new Fog(11058372, 320, 700);
       this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1200);
@@ -20623,8 +20655,9 @@
     build() {
       const world = this.game.world;
       const { w, h, terrain } = world;
-      this.cw = Math.ceil(w / CHUNK);
-      this.ch = Math.ceil(h / CHUNK);
+      this.chunk = world.presetClass ? 1 : CHUNK;
+      this.cw = Math.ceil(w / this.chunk);
+      this.ch = Math.ceil(h / this.chunk);
       const fine = new Float32Array(w * h);
       const base = {
         [OCEAN]: -0.5,
@@ -20657,11 +20690,11 @@
         }
       }
       if (world.presetClass) {
-        const PRESET_HEIGHT = [-0.5, 0.12, 0.28, 0.5, 1.7, 0.3];
+        const elev = world.presetElev;
         for (let t = 0; t < w * h; t++) {
           const code = world.presetClass[t];
-          const jitter = (valueNoise(t % w, t / w | 0, 11, 5) - 0.5) * (code === 0 ? 0.03 : 0.22);
-          fine[t] = PRESET_HEIGHT[code] + jitter;
+          const e = elev ? elev[t] : code === 0 ? 0 : 0.3;
+          fine[t] = code === 0 ? 0 : e * RELIEF;
         }
         for (let y = 0; y < h; y++) {
           for (let x = 0; x < w; x++) {
@@ -20690,16 +20723,16 @@
       };
       for (let cy = 0; cy <= ch; cy++) {
         for (let cx = 0; cx <= cw; cx++) {
-          const tx = cx * CHUNK;
-          const ty = cy * CHUNK;
+          const tx = cx * this.chunk;
+          const ty = cy * this.chunk;
           this.corners[cy * (cw + 1) + cx] = (at(tx - 1, ty - 1) + at(tx, ty - 1) + at(tx - 1, ty) + at(tx, ty)) * 0.25;
         }
       }
       this.heights = new Float32Array(w * h);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const fx = x / CHUNK;
-          const fz = y / CHUNK;
+          const fx = x / this.chunk;
+          const fz = y / this.chunk;
           const x0 = Math.max(0, Math.min(cw - 1, Math.floor(fx)));
           const z0 = Math.max(0, Math.min(ch - 1, Math.floor(fz)));
           const tx = Math.min(1, Math.max(0, fx - x0));
@@ -20738,12 +20771,12 @@
       }
       const corner = (cx, cy) => this.corners[Math.max(0, Math.min(ch, cy)) * (cw + 1) + Math.max(0, Math.min(cw, cx))];
       const tri = (ax, az, bx, bz, cx, cz) => {
-        const x0 = ax * CHUNK;
-        const z0 = az * CHUNK;
-        const x1 = bx * CHUNK;
-        const z1 = bz * CHUNK;
-        const x2 = cx * CHUNK;
-        const z2 = cz * CHUNK;
+        const x0 = ax * this.chunk;
+        const z0 = az * this.chunk;
+        const x1 = bx * this.chunk;
+        const z1 = bz * this.chunk;
+        const x2 = cx * this.chunk;
+        const z2 = cz * this.chunk;
         const y0 = corner(ax, az);
         const y1 = corner(bx, bz);
         const y2 = corner(cx, cz);
@@ -20777,10 +20810,10 @@
         for (let x = 0; x < cw; x++) {
           const counts = /* @__PURE__ */ new Map();
           let roadCells = 0;
-          for (let dz = 0; dz < CHUNK; dz++) {
-            for (let dx = 0; dx < CHUNK; dx++) {
-              const tx = Math.min(w - 1, x * CHUNK + dx);
-              const ty = Math.min(h - 1, z * CHUNK + dz);
+          for (let dz = 0; dz < this.chunk; dz++) {
+            for (let dx = 0; dx < this.chunk; dx++) {
+              const tx = Math.min(w - 1, x * this.chunk + dx);
+              const ty = Math.min(h - 1, z * this.chunk + dz);
               const t = ty * w + tx;
               const k = terrain[t];
               counts.set(k, (counts.get(k) ?? 0) + 1);
@@ -20795,10 +20828,10 @@
           }
           if (presetHex) {
             const pc = /* @__PURE__ */ new Map();
-            for (let dz = 0; dz < CHUNK; dz++) {
-              for (let dx = 0; dx < CHUNK; dx++) {
-                const tx = Math.min(w - 1, x * CHUNK + dx);
-                const ty = Math.min(h - 1, z * CHUNK + dz);
+            for (let dz = 0; dz < this.chunk; dz++) {
+              for (let dx = 0; dx < this.chunk; dx++) {
+                const tx = Math.min(w - 1, x * this.chunk + dx);
+                const ty = Math.min(h - 1, z * this.chunk + dz);
                 const code2 = presetClass[ty * w + tx];
                 pc.set(code2, (pc.get(code2) ?? 0) + 1);
               }
@@ -20851,7 +20884,7 @@
         new MeshStandardMaterial({ color: 2850470, flatShading: true, roughness: 0.94 })
       );
       apron.rotation.x = -Math.PI / 2;
-      apron.position.set(w / 2, -0.6, h / 2);
+      apron.position.set(w / 2, -0.35, h / 2);
       this.scene.add(apron);
       this.buildDrape();
       this.buildScatter();
