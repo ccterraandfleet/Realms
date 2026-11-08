@@ -5,853 +5,452 @@
 
   // src/sim/world.ts
   var OCEAN = 0;
-  var PLAINS = 1;
-  var FOREST = 2;
-  var MOUNTAIN = 3;
-  var SAND = 4;
-  function hash(x, y, seed2) {
-    let h = x * 374761393 + y * 668265263 + seed2 * 2246822519;
+  var SAND = 1;
+  var PLAINS = 2;
+  var FOREST = 3;
+  var HILLS = 4;
+  var MOUNTAIN = 5;
+  function hash2(x, y, seed2) {
+    let h = x * 374761393 + y * 668265263 + seed2 * 2147483647;
     h = (h ^ h >>> 13) * 1274126177;
     return ((h ^ h >>> 16) >>> 0) / 4294967296;
   }
-  function noise(x, y, scale, seed2) {
-    const gx = x / scale;
-    const gy = y / scale;
-    const x0 = Math.floor(gx);
-    const y0 = Math.floor(gy);
-    const tx = gx - x0;
-    const ty = gy - y0;
-    const sx = tx * tx * (3 - 2 * tx);
-    const sy = ty * ty * (3 - 2 * ty);
-    const a = hash(x0, y0, seed2);
-    const b = hash(x0 + 1, y0, seed2);
-    const c = hash(x0, y0 + 1, seed2);
-    const d = hash(x0 + 1, y0 + 1, seed2);
-    return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+  function smooth(t) {
+    return t * t * (3 - 2 * t);
   }
-  var NAMES = [
-    "Eldwold",
-    "Wynbeck",
-    "Fengarth",
-    "Marrow",
-    "Hollowmere",
-    "Grayfen",
-    "Rook's Rest",
-    "Thornby",
-    "Ashcombe",
-    "Duncairn",
-    "Brackwater",
-    "Saltgate",
-    "Oakhurst",
-    "Wyrmwood",
-    "Ferrow",
-    "Bellholt",
-    "Cragmoor",
-    "Wilding",
-    "Dunmar",
-    "Sablewick"
+  function valueNoise(x, y, seed2) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const tx = smooth(x - xi);
+    const ty = smooth(y - yi);
+    const a = hash2(xi, yi, seed2);
+    const b = hash2(xi + 1, yi, seed2);
+    const c = hash2(xi, yi + 1, seed2);
+    const d = hash2(xi + 1, yi + 1, seed2);
+    return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+  }
+  function fbm(x, y, seed2, octaves = 5) {
+    let sum = 0;
+    let amp = 1;
+    let norm = 0;
+    let freq = 1;
+    for (let i = 0; i < octaves; i++) {
+      sum += valueNoise(x * freq, y * freq, seed2 + i * 71) * amp;
+      norm += amp;
+      amp *= 0.5;
+      freq *= 2.03;
+    }
+    return sum / norm;
+  }
+  var NAMES_A = [
+    "Ash",
+    "Stone",
+    "Raven",
+    "Hollow",
+    "Grey",
+    "Iron",
+    "Thorn",
+    "Frost",
+    "Elm",
+    "Salt",
+    "Winter",
+    "Bright",
+    "Dun",
+    "Marl",
+    "Oak",
+    "Red",
+    "Wolf",
+    "Crow",
+    "Brack",
+    "Harrow"
   ];
-  function carveRivers(terrain, w, h, seed2, richness) {
-    const sources = [];
-    for (let t = 0; t < w * h; t++) {
-      if (terrain[t] !== MOUNTAIN && terrain[t] !== FOREST) continue;
-      const x = t % w;
-      const y = t / w | 0;
-      if (x < 10 || y < 10 || x > w - 11 || y > h - 11) continue;
-      if (noise(x, y, 31, seed2 + 303) > 0.45) sources.push(t);
-    }
-    sources.sort((a, b) => (noise(a % w, a / w | 0, 31, seed2 + 303) - noise(b % w, b / w | 0, 31, seed2 + 303)) * -1);
-    const chosen = [];
-    for (const s of sources) {
-      if (chosen.length >= 4) break;
-      const sx = s % w;
-      const sy = s / w | 0;
-      if (chosen.some((c) => Math.hypot(c % w - sx, (c / w | 0) - sy) < 28)) continue;
-      chosen.push(s);
-    }
-    for (const start of chosen) {
-      let x = start % w;
-      let y = start / w | 0;
-      let dirX = 0;
-      let dirY = 0;
-      let steps = 0;
-      while (steps++ < w + h) {
-        const wobble = (noise(x, y, 7, seed2 + 71) - 0.5) * 2.2;
-        dirX = dirX * 0.72 + (x - w / 2) / w * 1.4 + wobble;
-        dirY = dirY * 0.72 + (y - h / 2) / h * 1.4 + wobble * 0.6;
-        const len = Math.hypot(dirX, dirY) || 1;
-        x += Math.round(dirX / len * 1.4);
-        y += Math.round(dirY / len * 1.4);
-        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) break;
-        const t = y * w + x;
-        if (terrain[t] === OCEAN) break;
-        terrain[t] = OCEAN;
-        richness[t] = 0;
-        const across = Math.abs(dirX) > Math.abs(dirY) ? [0, 1] : [1, 0];
-        for (const d of [[0, 0], [across[0], across[1]]]) {
-          const nx = x + d[0];
-          const ny = y + d[1];
-          if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
-          const t2 = ny * w + nx;
-          if (terrain[t2] === OCEAN) continue;
-          terrain[t2] = OCEAN;
-          richness[t2] = 0;
-        }
+  var NAMES_B = [
+    "hold",
+    "keep",
+    "watch",
+    "fell",
+    "stead",
+    "bury",
+    "ford",
+    "gate",
+    "march",
+    "wick",
+    "reach",
+    "cairn",
+    "haven",
+    "crest",
+    "moor"
+  ];
+  function generateWorld(seed2 = 7, w = 512, h = 512, targetCastles = 620) {
+    const n = w * h;
+    const elev = new Float32Array(n);
+    const terrain = new Uint8Array(n);
+    const owner = new Int16Array(n).fill(-1);
+    const marks = new Uint8Array(n);
+    const coast = new Uint8Array(n).fill(255);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const nx = x / w;
+        const ny = y / h;
+        const continent = fbm(nx * 3.1 + 11.3, ny * 3.1 + 4.7, seed2, 4);
+        const detail = fbm(nx * 13 + 2.1, ny * 13 + 9.3, seed2 + 5, 5);
+        const ridge = Math.pow(fbm(nx * 6.4 + 7.7, ny * 6.4 + 1.1, seed2 + 9, 4), 2.1);
+        const edge = Math.min(1, Math.min(nx, 1 - nx, ny, 1 - ny) * 6.5);
+        let e = continent * 0.62 + detail * 0.26 + ridge * 0.34;
+        e = (e - 0.34) * 1.85;
+        e = e * edge - (1 - edge) * 0.55;
+        elev[y * w + x] = e;
       }
     }
-  }
-  function generateWorld(seed2, w = 260, h = 180, seaLevel = 0.18) {
-    const terrain = new Uint8Array(w * h);
-    const richness = new Float32Array(w * h);
-    const road = new Uint8Array(w * h);
-    const cx = w / 2;
-    const cy = h / 2;
+    const sorted = Float32Array.from(elev).sort();
+    const seaLevel = sorted[Math.floor(n * 0.26)];
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const t = y * w + x;
-        const base = noise(x, y, 46, seed2) * 0.55 + noise(x, y, 21, seed2) * 0.3 + noise(x, y, 9, seed2) * 0.15;
-        const dx = (x - cx) / (w * 0.42);
-        const dy = (y - cy) / (h * 0.42);
-        const falloff = 1 - Math.min(1.35, Math.sqrt(dx * dx + dy * dy));
-        const land = base * 0.55 + falloff * 0.75;
-        if (land < seaLevel) {
+        const e = elev[t];
+        const depth = e - seaLevel;
+        if (depth < 0) {
           terrain[t] = OCEAN;
-          richness[t] = 0;
           continue;
         }
-        const moist = noise(x, y, 27, seed2 + 91);
-        const elev = noise(x, y, 17, seed2 + 17) * 0.7 + noise(x, y, 6, seed2 + 41) * 0.3;
-        if (elev > 0.62 && land > 0.45) terrain[t] = MOUNTAIN;
-        else if (land < seaLevel + 0.05) terrain[t] = SAND;
-        else if (moist > 0.52) terrain[t] = FOREST;
+        const moisture = fbm(x / w * 9 + 31.7, y / h * 9 + 17.2, seed2 + 101, 4);
+        const slope = slopeAt(elev, w, h, x, y);
+        if (depth < 0.045) terrain[t] = SAND;
+        else if (e > seaLevel + 0.62 || slope > 0.16) terrain[t] = MOUNTAIN;
+        else if (e > seaLevel + 0.4 || slope > 0.095) terrain[t] = HILLS;
+        else if (moisture > 0.52) terrain[t] = FOREST;
         else terrain[t] = PLAINS;
-        const centrePull = 1 - Math.min(1, Math.sqrt(
-          Math.pow((x - cx) / (w * 0.3), 2) + Math.pow((y - cy) / (h * 0.3), 2)
-        ));
-        richness[t] = (0.8 + noise(x, y, 13, seed2 + 7) * 0.9) * (0.85 + centrePull * 1.6) * (terrain[t] === MOUNTAIN ? 0.45 : 1);
       }
     }
-    carveRivers(terrain, w, h, seed2, richness);
-    const sites = [];
-    const wantSites = 18;
-    const minGap = 20;
-    const candidates = [];
-    for (let t = 0; t < w * h; t++) {
-      if (terrain[t] === OCEAN || terrain[t] === MOUNTAIN) continue;
-      const x = t % w;
-      const y = t / w | 0;
-      if (x < 6 || y < 6 || x > w - 7 || y > h - 7) continue;
-      candidates.push({ t, score: richness[t] + hash(x, y, seed2 + 5) * 0.35 });
-    }
-    candidates.sort((a, b) => b.score - a.score);
-    for (const c of candidates) {
-      if (sites.length >= wantSites) break;
-      const x = c.t % w;
-      const y = c.t / w | 0;
-      let ok = true;
-      for (const s of sites) {
-        const sx = s.tile % w;
-        const sy = s.tile / w | 0;
-        if (Math.hypot(sx - x, sy - y) < minGap) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok) continue;
-      sites.push({
-        id: sites.length,
-        tile: c.t,
-        name: NAMES[sites.length % NAMES.length],
-        capital: sites.length < 7
-      });
-    }
-    const edges = [];
-    const seen = /* @__PURE__ */ new Set();
-    const addEdge = (a, b) => {
-      if (a === b) return;
-      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      edges.push([a, b]);
-    };
-    for (const s of sites) {
-      const sx = s.tile % w;
-      const sy = s.tile / w | 0;
-      const near = sites.filter((o) => o.id !== s.id).map((o) => ({
-        id: o.id,
-        d: Math.hypot(o.tile % w - sx, (o.tile / w | 0) - sy)
-      })).sort((a, b) => a.d - b.d).slice(0, 2);
-      for (const n of near) addEdge(s.id, n.id);
-    }
-    for (const [a, b] of edges) {
-      const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile);
-      if (!path) continue;
-      for (const t of path) road[t] = 1;
-    }
-    for (const site of sites) {
-      if (findPath(terrain, w, h, site.tile, sites[0].tile, 4e4)) continue;
-      const ax = site.tile % w;
-      const ay = site.tile / w | 0;
-      const bx = sites[0].tile % w;
-      const by = sites[0].tile / w | 0;
-      const steps = Math.max(Math.abs(ax - bx), Math.abs(ay - by));
-      for (let i = 0; i <= steps; i++) {
-        const x = Math.round(ax + (bx - ax) * i / steps);
-        const y = Math.round(ay + (by - ay) * i / steps);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
         const t = y * w + x;
         if (terrain[t] === OCEAN) {
-          terrain[t] = SAND;
-          road[t] = 1;
+          coast[t] = 0;
+          continue;
         }
+        let best = 255;
+        if (x > 0) best = Math.min(best, coast[t - 1] + 1);
+        if (y > 0) best = Math.min(best, coast[t - w] + 1);
+        coast[t] = best;
       }
     }
-    return { seed: seed2, w, h, terrain, richness, road, citySites: sites, cityEdges: edges };
-  }
-  var PRESET_CODES = {
-    water: 0,
-    dirt: 1,
-    grass: 2,
-    canopy: 3,
-    rock: 4,
-    shadow: 5
-  };
-  function loadPresetWorld(raw) {
-    const w = raw.n;
-    const h = raw.n;
-    const terrain = new Uint8Array(w * h);
-    const richness = new Float32Array(w * h);
-    const road = new Uint8Array(w * h);
-    const presetClass = new Uint8Array(w * h);
-    const presetElev = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        presetElev[y * w + x] = raw.elev?.[y]?.[x] ?? (raw.classes[y][x] === "water" ? 0 : 0.3);
-      }
-    }
-    const slope = new Float32Array(w * h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const gx = (presetElev[y * w + Math.min(w - 1, x + 1)] ?? 0) - (presetElev[y * w + Math.max(0, x - 1)] ?? 0);
-        const gy = (presetElev[Math.min(h - 1, y + 1) * w + x] ?? 0) - (presetElev[Math.max(0, y - 1) * w + x] ?? 0);
-        slope[y * w + x] = Math.abs(gx) + Math.abs(gy);
-      }
-    }
-    const codeOf = (name) => PRESET_CODES[name] ?? 2;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
+    for (let y = h - 1; y >= 0; y--) {
+      for (let x = w - 1; x >= 0; x--) {
         const t = y * w + x;
-        const code = codeOf(raw.classes[y][x]);
-        presetClass[t] = code;
-        if (code === 0) {
-          terrain[t] = OCEAN;
-          richness[t] = 0;
-        } else if (code === 1) {
-          terrain[t] = SAND;
-          richness[t] = 1.1;
-        } else if (code === 3) {
-          terrain[t] = FOREST;
-          richness[t] = 1.6;
-        } else if (code === 4) {
-          terrain[t] = MOUNTAIN;
-          richness[t] = 0.5;
-        } else {
-          terrain[t] = PLAINS;
-          richness[t] = 1.35;
-        }
-        if (code === 5) richness[t] = 1;
+        let best = coast[t];
+        if (x < w - 1) best = Math.min(best, coast[t + 1] + 1);
+        if (y < h - 1) best = Math.min(best, coast[t + w] + 1);
+        coast[t] = best;
       }
     }
-    const sites = [];
-    const candidates = [];
-    for (let t = 0; t < w * h; t++) {
-      const code = presetClass[t];
-      if (code === 0 || code === 4) continue;
+    const cell = Math.max(14, Math.round(Math.sqrt(w * h / targetCastles)));
+    const castles = [];
+    let id = 0;
+    for (let cy = cell; cy < h - cell; cy += cell) {
+      for (let cx = cell; cx < w - cell; cx += cell) {
+        const jx = Math.floor(cx + hash2(cx, cy, seed2 + 3) * cell * 0.8);
+        const jy = Math.floor(cy + hash2(cx, cy, seed2 + 7) * cell * 0.8);
+        const t = jy * w + jx;
+        if (terrain[t] === OCEAN || terrain[t] === MOUNTAIN || terrain[t] === SAND) continue;
+        if (coast[t] < 2) continue;
+        if (slopeAt(elev, w, h, jx, jy) > 0.16) continue;
+        const name = NAMES_A[id % NAMES_A.length] + NAMES_B[(id * 7 + 3) % NAMES_B.length];
+        castles.push({ id, tile: t, x: jx, y: jy, name, owner: -1, level: 1, plots: [] });
+        marks[t] |= 4;
+        id++;
+      }
+    }
+    const REACH = Math.round(cell * 0.92);
+    const queue = new Int32Array(n);
+    const dist = new Uint8Array(n).fill(255);
+    let qHead = 0;
+    let qTail = 0;
+    for (const c of castles) {
+      queue[qTail++] = c.tile;
+      dist[c.tile] = 0;
+      owner[c.tile] = c.id;
+    }
+    while (qHead < qTail) {
+      const t = queue[qHead++];
+      const d = dist[t];
+      if (d >= REACH) continue;
       const x = t % w;
-      const y = t / w | 0;
-      if (x < 5 || y < 5 || x > w - 6 || y > h - 6) continue;
-      if (slope[t] > 0.42) continue;
-      let coast = 0;
-      for (let dy = -4; dy <= 4 && !coast; dy++) {
-        for (let dx = -4; dx <= 4; dx++) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          if (terrain[ny * w + nx] === OCEAN) {
-            coast = 1;
-            break;
-          }
+      const y = (t - x) / w;
+      for (let k = 0; k < 4; k++) {
+        const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+        const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const nt = ny * w + nx;
+        if (terrain[nt] === OCEAN) continue;
+        if (dist[nt] <= d + 1) continue;
+        dist[nt] = d + 1;
+        owner[nt] = owner[t];
+        queue[qTail++] = nt;
+      }
+    }
+    const joined = /* @__PURE__ */ new Set();
+    for (const a of castles) {
+      let bestB = null;
+      let bestD = Infinity;
+      for (const b of castles) {
+        if (b.id === a.id) continue;
+        const d = (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          bestB = b;
         }
       }
-      candidates.push({ t, score: richness[t] + coast * 0.6 - slope[t] * 2.5 + hash(x, y, 991) * 0.4 });
+      if (!bestB) continue;
+      const key = a.id < bestB.id ? `${a.id}:${bestB.id}` : `${bestB.id}:${a.id}`;
+      if (joined.has(key)) continue;
+      joined.add(key);
+      drawRoad(a.x, a.y, bestB.x, bestB.y, marks, terrain, w, h);
     }
-    candidates.sort((a, b) => b.score - a.score);
-    for (const c of candidates) {
-      if (sites.length >= 14) break;
-      const x = c.t % w;
-      const y = c.t / w | 0;
-      if (sites.some((s) => Math.hypot(s.tile % w - x, (s.tile / w | 0) - y) < 30)) continue;
-      sites.push({ id: sites.length, tile: c.t, name: NAMES[sites.length % NAMES.length], capital: sites.length < 6 });
-    }
-    const edges = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const site of sites) {
-      const near = sites.filter((o) => o.id !== site.id).map((o) => ({
-        id: o.id,
-        d: Math.hypot(o.tile % w - site.tile % w, (o.tile / w | 0) - (site.tile / w | 0))
-      })).sort((a, b) => a.d - b.d).slice(0, 2);
-      for (const n of near) {
-        const a = Math.min(site.id, n.id);
-        const b = Math.max(site.id, n.id);
-        const key = `${a}-${b}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        edges.push([a, b]);
-        const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile, 6e4, presetElev);
-        if (path) for (const t of path) road[t] = 1;
+    const ring = [
+      [-5, -2],
+      [5, -2],
+      [-6, 2],
+      [6, 2],
+      [0, -6],
+      [0, 6],
+      [-3, 4],
+      [3, 4]
+    ];
+    const KINDS = ["farm", "lumber", "farm", "mine", "farm", "lumber", "market", "farm"];
+    for (const c of castles) {
+      let k = 0;
+      for (const [ox, oy] of ring) {
+        const px = c.x + ox;
+        const py = c.y + oy;
+        if (px < 1 || py < 1 || px >= w - 1 || py >= h - 1) continue;
+        const t = py * w + px;
+        if (terrain[t] === OCEAN || terrain[t] === MOUNTAIN) continue;
+        c.plots.push({ tile: t, kind: KINDS[k % 8], level: 0 });
+        marks[t] |= 2;
+        owner[t] = c.id;
+        k++;
       }
     }
-    for (const site of sites) {
-      if (!sites.length) break;
-      if (findPath(terrain, w, h, site.tile, sites[0].tile, 6e4)) continue;
-      const ax = site.tile % w;
-      const ay = site.tile / w | 0;
-      const bx = sites[0].tile % w;
-      const by = sites[0].tile / w | 0;
-      const steps = Math.max(Math.abs(ax - bx), Math.abs(ay - by));
-      for (let i = 0; i <= steps; i++) {
-        const x = Math.round(ax + (bx - ax) * i / steps);
-        const y = Math.round(ay + (by - ay) * i / steps);
-        const t = y * w + x;
-        if (terrain[t] === OCEAN) {
-          terrain[t] = SAND;
-          presetClass[t] = 1;
-          road[t] = 1;
-        }
-      }
-    }
-    return {
-      seed: 0,
-      w,
-      h,
-      terrain,
-      richness,
-      road,
-      citySites: sites,
-      cityEdges: edges,
-      presetClass,
-      presetElev,
-      presetPalette: raw.palette
-    };
+    return { w, h, seed: seed2, terrain, elev, owner, marks, castles, coast, seaLevel };
   }
-  function findPath(terrain, w, h, from, to, maxNodes = 24e3, elev) {
-    if (from === to) return [from];
-    const open = [from];
-    const cost = /* @__PURE__ */ new Map([[from, 0]]);
-    const came = /* @__PURE__ */ new Map();
-    const seen = /* @__PURE__ */ new Set();
-    const tx = to % w;
-    const tz = to / w | 0;
-    const heur = (t) => Math.abs(t % w - tx) + Math.abs((t / w | 0) - tz);
+  function slopeAt(elev, w, h, x, y) {
+    const at = (px, py) => elev[Math.max(0, Math.min(h - 1, py)) * w + Math.max(0, Math.min(w - 1, px))];
+    const dx = Math.abs(at(x + 1, y) - at(x - 1, y)) * 0.5;
+    const dy = Math.abs(at(x, y + 1) - at(x, y - 1)) * 0.5;
+    return Math.max(dx, dy);
+  }
+  function drawRoad(x0, y0, x1, y1, marks, terrain, w, h) {
+    let x = x0;
+    let y = y0;
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
     let guard = 0;
-    while (open.length && guard++ < maxNodes) {
-      let bestIdx = 0;
-      let bestF = Infinity;
-      for (let i = 0; i < open.length; i++) {
-        const f = (cost.get(open[i]) ?? Infinity) + heur(open[i]);
-        if (f < bestF) {
-          bestF = f;
-          bestIdx = i;
-        }
+    while (guard++ < 8e3) {
+      if (x >= 0 && y >= 0 && x < w && y < h) {
+        const t = y * w + x;
+        if (terrain[t] !== OCEAN) marks[t] |= 1;
       }
-      const cur = open.splice(bestIdx, 1)[0];
-      if (cur === to) {
-        const path = [cur];
-        let c = cur;
-        while (came.has(c)) {
-          c = came.get(c);
-          path.push(c);
-        }
-        return path.reverse();
+      if (x === x1 && y === y1) break;
+      const e2 = err * 2;
+      if (e2 > -dy) {
+        err -= dy;
+        x += sx;
       }
-      seen.add(cur);
-      const x = cur % w;
-      const z = cur / w | 0;
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const nx = x + dx;
-        const nz = z + dz;
-        if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
-        const n = nz * w + nx;
-        if (seen.has(n)) continue;
-        const kind = terrain[n];
-        if (kind === OCEAN) continue;
-        let step = kind === MOUNTAIN ? 9 : kind === FOREST ? 2.2 : 1;
-        if (elev) step *= 1 + Math.abs(elev[n] - elev[cur]) * 9;
-        const nc = (cost.get(cur) ?? 0) + step;
-        if (nc < (cost.get(n) ?? Infinity)) {
-          cost.set(n, nc);
-          came.set(n, cur);
-          if (!open.includes(n)) open.push(n);
-        }
+      if (e2 < dx) {
+        err += dx;
+        y += sy;
       }
     }
-    return null;
+    void h;
   }
 
   // src/sim/game.ts
-  var SEASON_SECONDS = 480;
-  var BARN_BASE = 6e3;
-  var CONVOY_RATIONS = 400;
-  var HOST_MAX_MEN = [0, 240, 420, 700, 1100];
-  var Game = class _Game {
-    constructor(world, resumed) {
-      __publicField(this, "state");
+  var MAX_PLOT_LEVEL = 5;
+  var MAX_CASTLE_LEVEL = 5;
+  var PLOT_RULES = {
+    farm: { yield: 6, resource: "grain", cost: 60, label: "Farm" },
+    lumber: { yield: 4, resource: "timber", cost: 70, label: "Woodcutter" },
+    mine: { yield: 3, resource: "iron", cost: 110, label: "Mine" },
+    market: { yield: 2, resource: "gold", cost: 140, label: "Market" }
+  };
+  var Game = class {
+    constructor(world2) {
       __publicField(this, "world");
-      __publicField(this, "ownerTimer", 0);
-      __publicField(this, "aiTimer", 0);
-      __publicField(this, "convoyTimer", 0);
-      this.world = world;
-      this.state = resumed ?? this.freshState();
+      __publicField(this, "time", 0);
+      __publicField(this, "realms", []);
+      __publicField(this, "castles");
+      __publicField(this, "purse", {});
+      __publicField(this, "log", []);
+      /** Set to the local player's realm id. */
+      __publicField(this, "me", 0);
+      this.world = world2;
+      this.castles = world2.castles;
+      this.seedRealms();
     }
-    freshState() {
-      const sites = this.world.citySites;
-      const players = [
-        { id: 0, name: "You", ai: false, grain: 500, colour: 14174779 },
-        { id: 1, name: "Lord Harrow", ai: true, grain: 700, colour: 3895256 },
-        { id: 2, name: "Lady Vess", ai: true, grain: 700, colour: 3514458 },
-        { id: 3, name: "The Grey", ai: true, grain: 700, colour: 9067208 },
-        { id: 4, name: "Warden Kade", ai: true, grain: 700, colour: 14195253 }
+    seedRealms() {
+      const palette = [
+        14176316,
+        4161240,
+        14199100,
+        8015832,
+        4174714,
+        14179230,
+        5226712,
+        13134382,
+        10147919,
+        9080730,
+        14701375,
+        3116906
       ];
-      const cities = sites.map((s, i) => ({
-        id: i,
-        tile: s.tile,
-        name: s.name,
-        owner: i < players.length ? i : -1,
-        pop: i < players.length ? 320 : 140,
-        beds: 400,
-        stock: i < players.length ? 1800 : 700,
-        barnCap: BARN_BASE,
-        morale: 1,
-        tier: i < players.length ? 2 : 1
-      }));
-      const territory = new Int16Array(this.world.w * this.world.h).fill(-2);
-      const state = {
-        seed: this.world.seed,
-        time: 0,
-        prestiges: 0,
-        winner: null,
-        players,
-        cities,
-        hosts: [],
-        convoys: [],
-        territory,
-        nextHostId: 1,
-        nextConvoyId: 1,
-        log: []
-      };
-      for (const p of players) {
-        const home = cities.find((c) => c.owner === p.id);
-        if (!home) continue;
-        state.hosts.push({
-          id: state.nextHostId++,
-          owner: p.id,
-          tile: home.tile,
-          men: 180,
-          supply: 1,
-          morale: 1,
-          path: [],
-          goal: null,
-          besieging: null,
-          routed: false,
-          rally: 0
-        });
-        home.pop -= 180;
+      const names = [
+        "Ashmark",
+        "Stormhall",
+        "Goldvale",
+        "Ravenmoor",
+        "Greenwatch",
+        "Rosefell",
+        "Tidehold",
+        "Emberkeep",
+        "Thornwold",
+        "Greycairn",
+        "Redmarch",
+        "Saltwood"
+      ];
+      for (let i = 0; i < names.length; i++) {
+        this.realms.push({ id: i, name: names[i], colour: palette[i], ai: i !== 0 });
+        this.purse[i] = { grain: 400, timber: 300, iron: 200, gold: 200 };
       }
-      return state;
-    }
-    /* ---------------------------------------------------------------- */
-    /* helpers                                                          */
-    /* ---------------------------------------------------------------- */
-    cityAt(tile) {
-      return this.state.cities.find((c) => c.tile === tile);
-    }
-    cityById(id) {
-      return id === null ? void 0 : this.state.cities.find((c) => c.id === id);
-    }
-    hostById(id) {
-      return this.state.hosts.find((h) => h.id === id);
-    }
-    ownerOf(tile) {
-      const v = this.state.territory[tile];
-      return v === -2 ? -2 : v;
-    }
-    season() {
-      return this.state.time % SEASON_SECONDS / SEASON_SECONDS;
-    }
-    isWinter() {
-      return this.season() > 0.75;
-    }
-    citiesOf(owner) {
-      return this.state.cities.filter((c) => c.owner === owner);
-    }
-    hostsOf(owner) {
-      return this.state.hosts.filter((h) => h.owner === owner);
-    }
-    /** Living owners, for the win check and for the AI's threat list. */
-    livingOwners() {
-      const set = /* @__PURE__ */ new Set();
-      for (const c of this.state.cities) if (c.owner >= 0) set.add(c.owner);
-      return [...set];
-    }
-    fieldPower(h) {
-      return h.men * (0.35 + 0.65 * h.supply) * (0.5 + 0.5 * h.morale);
-    }
-    log(line) {
-      this.state.log.unshift(`${Math.floor(this.state.time)}s  ${line}`);
-      if (this.state.log.length > 40) this.state.log.pop();
-    }
-    /* ---------------------------------------------------------------- */
-    /* orders the player (and the AI) can give                          */
-    /* ---------------------------------------------------------------- */
-    muster(cityId) {
-      const c = this.cityById(cityId);
-      if (!c) return "no such city";
-      const cap = HOST_MAX_MEN[c.tier];
-      const men = Math.min(120, Math.floor(c.pop - 40));
-      if (men < 20) return "not enough people";
-      const existing = this.state.hosts.find((h2) => h2.owner === c.owner && h2.tile === c.tile);
-      if (existing && existing.men + men <= cap) {
-        existing.men += men;
-        existing.supply = 1;
-        c.pop -= men;
-        return `+${men} men at ${c.name}`;
+      const step = Math.max(1, Math.floor(this.castles.length / names.length));
+      for (let i = 0; i < names.length; i++) {
+        const c = this.castles[i * step % this.castles.length];
+        if (c && c.owner < 0) this.claim(c, i);
       }
-      if (this.state.hosts.filter((h2) => h2.owner === c.owner).length > 6) return "too many hosts";
-      const h = {
-        id: this.state.nextHostId++,
-        owner: c.owner,
-        tile: c.tile,
-        men,
-        supply: 1,
-        morale: 1,
-        path: [],
-        goal: null,
-        besieging: null,
-        routed: false,
-        rally: 0
+    }
+    realmOf(id) {
+      return this.realms.find((r) => r.id === id);
+    }
+    castleAt(tile) {
+      return this.castles.find((c) => c.tile === tile);
+    }
+    castlesOf(owner) {
+      return this.castles.filter((c) => c.owner === owner);
+    }
+    castleById(id) {
+      return this.castles.find((c) => c.id === id);
+    }
+    /** Take a castle and everything its ground holds. */
+    claim(castle, owner) {
+      castle.owner = owner;
+      const w = this.world;
+      for (let t = 0; t < w.owner.length; t++) if (w.owner[t] === castle.id) w.owner[t] = owner;
+      this.log.unshift(`${this.realmOf(owner)?.name ?? "Someone"} takes ${castle.name}`);
+      this.log = this.log.slice(0, 40);
+    }
+    /** Per-second income for a realm: what its plots yield, minus nothing yet. */
+    income(owner) {
+      const out = { grain: 0, timber: 0, iron: 0, gold: 0 };
+      for (const c of this.castles) {
+        if (c.owner !== owner) continue;
+        out.grain += 2;
+        for (const p of c.plots) {
+          const rule = PLOT_RULES[p.kind];
+          if (p.level > 0) out[rule.resource] += rule.yield * p.level;
+        }
+      }
+      return out;
+    }
+    /** Cost to take a plot one level further, scaled by level. */
+    plotCost(plot) {
+      const rule = PLOT_RULES[plot.kind];
+      const mult = 1 + plot.level * 0.85;
+      return {
+        grain: Math.round(rule.cost * mult * 0.6),
+        timber: Math.round(rule.cost * mult * 0.5),
+        iron: Math.round(rule.cost * mult * 0.3),
+        gold: Math.round(rule.cost * mult * 0.2)
       };
-      this.state.hosts.push(h);
-      c.pop -= men;
-      return `muster ${men} at ${c.name}`;
     }
-    march(hostId, cityId) {
-      const h = this.hostById(hostId);
-      const c = this.cityById(cityId);
-      if (!h || !c) return "nothing to march";
-      if (h.routed || h.rally > 0) return "host is rallying";
-      const path = findPath(this.world.terrain, this.world.w, this.world.h, h.tile, c.tile);
-      if (!path) return "no road there";
-      h.path = path.slice(1);
-      h.goal = c.id;
-      h.besieging = null;
-      return `${h.men} men march on ${c.name}`;
+    canUpgrade(plot, castle, owner) {
+      if (plot.level >= MAX_PLOT_LEVEL) return "That plot is fully built.";
+      if (plot.level >= castle.level + 1) return `The castle must reach level ${plot.level + 1} first.`;
+      const cost = this.plotCost(plot);
+      const purse = this.purse[owner];
+      for (const k of ["grain", "timber", "iron", "gold"]) {
+        if (purse[k] < cost[k]) return `Not enough ${k}.`;
+      }
+      return null;
     }
-    /* ---------------------------------------------------------------- */
-    /* the tick                                                         */
-    /* ---------------------------------------------------------------- */
+    upgradePlot(plot, castle, owner) {
+      const why = this.canUpgrade(plot, castle, owner);
+      if (why) return why;
+      const cost = this.plotCost(plot);
+      const purse = this.purse[owner];
+      purse.grain -= cost.grain;
+      purse.timber -= cost.timber;
+      purse.iron -= cost.iron;
+      purse.gold -= cost.gold;
+      plot.level++;
+      return `${PLOT_RULES[plot.kind].label} in ${castle.name} is now level ${plot.level}.`;
+    }
+    castleCost(castle) {
+      const mult = 1 + castle.level * 1.4;
+      return {
+        grain: Math.round(320 * mult),
+        timber: Math.round(280 * mult),
+        iron: Math.round(180 * mult),
+        gold: Math.round(140 * mult)
+      };
+    }
+    upgradeCastle(castle, owner) {
+      if (castle.level >= MAX_CASTLE_LEVEL) return "That castle is as strong as it gets.";
+      const cost = this.castleCost(castle);
+      const purse = this.purse[owner];
+      for (const k of ["grain", "timber", "iron", "gold"]) {
+        if (purse[k] < cost[k]) return `Not enough ${k}.`;
+      }
+      purse.grain -= cost.grain;
+      purse.timber -= cost.timber;
+      purse.iron -= cost.iron;
+      purse.gold -= cost.gold;
+      castle.level++;
+      return `${castle.name} is now level ${castle.level}, so its plots can go to ${castle.level + 1}.`;
+    }
     tick(dt) {
-      const s = this.state;
-      if (s.winner !== null) return;
-      s.time += dt;
-      const winter = this.isWinter();
-      this.citiesTick(dt, winter);
-      this.hostsTick(dt);
-      this.convoysTick(dt);
-      this.territoryTick(dt);
-      this.aiTick(dt);
-      this.victoryTick();
-    }
-    citiesTick(dt, winter) {
-      const w = this.world.w;
-      for (const c of this.state.cities) {
-        const x = c.tile % w;
-        const y = c.tile / w | 0;
-        let richness = 0;
-        let n = 0;
-        for (let dy = -3; dy <= 3; dy++) {
-          for (let dx = -3; dx <= 3; dx++) {
-            const t = (y + dy) * w + (x + dx);
-            if (t < 0 || t >= this.world.w * this.world.h) continue;
-            if (this.world.terrain[t] === OCEAN) continue;
-            richness += this.world.richness[t];
-            n++;
-          }
-        }
-        const ground = n ? richness / n : 1;
-        const farmers = Math.min(c.pop, 400) / 400;
-        const yield_ = 22 * ground * (0.55 + 0.75 * farmers) * (winter ? 0.4 : 1);
-        c.stock = Math.min(c.barnCap, c.stock + yield_ * dt);
-        const eaten = c.pop * 0.012 * dt;
-        c.stock -= eaten;
-        const roomFor = Math.max(0, c.stock) / 8;
-        const cap = Math.min(c.beds, c.owner >= 0 ? roomFor + 40 : roomFor);
-        if (c.pop < cap) c.pop = Math.min(cap, c.pop + c.pop * 0.02 * dt + 0.4 * dt);
-        else if (c.pop > cap) c.pop = Math.max(cap, c.pop - c.pop * 0.03 * dt);
-        if (c.stock < 0) {
-          c.stock = 0;
-          c.morale = Math.max(0, c.morale - 0.02 * dt);
-        } else if (c.morale < 1) {
-          c.morale = Math.min(1, c.morale + 0.01 * dt);
-        }
+      this.time += dt;
+      for (const realm of this.realms) {
+        const inc = this.income(realm.id);
+        const purse = this.purse[realm.id];
+        purse.grain += inc.grain * dt;
+        purse.timber += inc.timber * dt;
+        purse.iron += inc.iron * dt;
+        purse.gold += inc.gold * dt;
       }
-    }
-    hostsTick(dt) {
-      const alive = [];
-      for (const h of this.state.hosts) {
-        if (h.rally > 0) h.rally = Math.max(0, h.rally - dt);
-        if (h.path.length && !h.routed) {
-          const next = h.path[0];
-          const onRoad = this.world.road[h.tile] === 1 && this.world.road[next] === 1;
-          const speed = onRoad ? 2.6 : 1.4;
-          if (h.speedAcc === void 0) h.speedAcc = 0;
-          h.speedAcc += dt * speed;
-          if (h.speedAcc >= 1) {
-            h.speedAcc -= 1;
-            h.tile = h.path.shift();
-          }
+      if (this.time % 4 < dt) {
+        for (const realm of this.realms) {
+          if (!realm.ai) continue;
+          const mine = this.castlesOf(realm.id);
+          if (!mine.length) continue;
+          const c = mine[Math.floor(Math.random() * mine.length)];
+          const buildable = c.plots.filter((p) => p.level < MAX_PLOT_LEVEL && p.level <= c.level);
+          if (buildable.length) this.upgradePlot(buildable[0], c, realm.id);
         }
-        const home = this.state.cities.find(
-          (c) => c.owner === h.owner && this.tileDistance(c.tile, h.tile) <= 4 && c.stock > 20
-        );
-        if (home) {
-          const draw = h.men * 0.02 * dt;
-          home.stock = Math.max(0, home.stock - draw);
-          h.supply = Math.min(1, h.supply + 0.5 * dt);
-        } else {
-          h.supply = Math.max(0, h.supply - 0.055 * dt);
-        }
-        if (h.supply > 0.4) h.morale = Math.min(1, h.morale + 0.035 * dt);
-        else h.morale = Math.max(0, h.morale - 0.045 * dt);
-        if (h.morale <= 1e-3) {
-          const enemyOwner = this.nearestEnemyOwner(h);
-          if (enemyOwner >= 0) {
-            h.owner = enemyOwner;
-            h.men = Math.round(h.men * 0.85);
-            h.morale = 0.25;
-            h.supply = 0.2;
-            h.path = [];
-            h.goal = null;
-            h.besieging = null;
-            this.log(`${h.men} starving men defect to ${this.state.players[enemyOwner]?.name ?? "the enemy"}`);
-          } else {
-            h.routed = true;
-            h.rally = 8;
-          }
-        }
-        const adj = this.state.cities.find(
-          (c) => c.owner !== h.owner && h.owner >= 0 && this.tileDistance(c.tile, h.tile) <= 1
-        );
-        if (adj) {
-          h.besieging = adj.id;
-          h.path = [];
-          adj.stock = Math.max(0, adj.stock - 14 * dt);
-          adj.morale = Math.max(
-            0,
-            adj.morale - (adj.stock > 0 ? 0.012 : 0.05) * dt
-          );
-          if (adj.morale <= 0) {
-            adj.owner = h.owner;
-            adj.morale = 0.5;
-            adj.pop = Math.round(adj.pop * 0.8);
-            h.besieging = null;
-            this.log(`${adj.name} falls to ${this.state.players[h.owner]?.name ?? "a lord"}`);
-          }
-        } else if (h.besieging !== null) {
-          h.besieging = null;
-        }
-        for (const o of this.state.hosts) {
-          if (o === h || o.owner === h.owner || o.owner < 0 || h.owner < 0) continue;
-          if (this.tileDistance(h.tile, o.tile) > 0) continue;
-          const mine = this.fieldPower(h);
-          const theirs = this.fieldPower(o);
-          const total = mine + theirs || 1;
-          const hLoss = Math.round(o.men * 0.02 * (theirs / total) * dt * 20);
-          const oLoss = Math.round(h.men * 0.02 * (mine / total) * dt * 20);
-          h.men = Math.max(0, h.men - hLoss);
-          o.men = Math.max(0, o.men - oLoss);
-          if (mine < theirs) h.morale = Math.max(0, h.morale - 0.09 * dt * 6);
-          else o.morale = Math.max(0, o.morale - 0.09 * dt * 6);
-        }
-        if (h.men <= 0) {
-          this.log(`a host is destroyed on the road`);
-          continue;
-        }
-        alive.push(h);
-      }
-      this.state.hosts = alive;
-    }
-    convoysTick(dt) {
-      this.convoyTimer -= dt;
-      if (this.convoyTimer <= 0) {
-        this.convoyTimer = 5;
-        for (const h of this.state.hosts) {
-          if (h.supply > 0.55) continue;
-          const from = this.state.cities.filter((c) => c.owner === h.owner && c.stock > 1200).sort((a, b) => this.tileDistance(a.tile, h.tile) - this.tileDistance(b.tile, h.tile))[0];
-          if (!from) continue;
-          if (this.state.convoys.some((c) => c.targetHost === h.id)) continue;
-          const path = findPath(this.world.terrain, this.world.w, this.world.h, from.tile, h.tile);
-          if (!path) continue;
-          from.stock -= CONVOY_RATIONS;
-          this.state.convoys.push({
-            id: this.state.nextConvoyId++,
-            owner: h.owner,
-            tile: from.tile,
-            path: path.slice(1),
-            rations: CONVOY_RATIONS,
-            men: 20,
-            targetHost: h.id
-          });
-        }
-      }
-      const keep = [];
-      for (const c of this.state.convoys) {
-        const raider = this.state.hosts.find(
-          (h) => h.owner !== c.owner && this.tileDistance(h.tile, c.tile) <= 1
-        );
-        if (raider) {
-          raider.supply = Math.min(1, raider.supply + 0.25);
-          this.log(`a convoy is taken on the road`);
-          continue;
-        }
-        if (c.path.length) {
-          c.acc = (c.acc ?? 0) + dt * 2.2;
-          while (c.acc >= 1 && c.path.length) {
-            c.acc -= 1;
-            c.tile = c.path.shift();
-          }
-        }
-        const host = this.hostById(c.targetHost);
-        if (!host || host.owner !== c.owner) continue;
-        if (this.tileDistance(host.tile, c.tile) === 0 && !c.path.length) {
-          host.supply = Math.min(1, host.supply + c.rations / (host.men * 2));
-          host.morale = Math.min(1, host.morale + 0.15);
-          continue;
-        }
-        keep.push(c);
-      }
-      this.state.convoys = keep;
-    }
-    /** Territory is derived, not painted: whoever's city is nearest holds it. */
-    territoryTick(dt) {
-      this.ownerTimer -= dt;
-      if (this.ownerTimer > 0) return;
-      this.ownerTimer = 0.75;
-      const { w, h, terrain } = this.world;
-      const t = this.state.territory;
-      for (let i = 0; i < w * h; i++) {
-        if (terrain[i] === OCEAN) {
-          t[i] = -2;
-          continue;
-        }
-        let best = -1;
-        let bestD = Infinity;
-        for (const c of this.state.cities) {
-          const d = this.tileDistance(c.tile, i);
-          if (d < bestD) {
-            bestD = d;
-            best = c.owner;
-          }
-        }
-        const reach = 16;
-        t[i] = bestD <= reach ? best : -1;
-      }
-    }
-    aiTick(dt) {
-      this.aiTimer -= dt;
-      if (this.aiTimer > 0) return;
-      this.aiTimer = 4;
-      for (const p of this.state.players) {
-        if (!p.ai) continue;
-        const mine = this.citiesOf(p.id);
-        if (!mine.length) continue;
-        const hosts = this.hostsOf(p.id);
-        const totalMen = hosts.reduce((n, h) => n + h.men, 0);
-        if (totalMen < 260 && mine.some((c) => c.pop > 160)) {
-          const city = mine.sort((a, b) => b.pop - a.pop)[0];
-          this.muster(city.id);
-          continue;
-        }
-        const target = this.state.cities.filter((c) => c.owner !== p.id).sort((a, b) => {
-          const ha = hosts[0];
-          if (!ha) return 0;
-          return this.tileDistance(ha.tile, a.tile) - this.tileDistance(ha.tile, b.tile);
-        })[0];
-        if (!target) continue;
-        for (const h of hosts) {
-          if (h.besieging !== null || h.path.length || h.routed) continue;
-          if (h.men < 120 || h.supply < 0.3) continue;
-          this.march(h.id, target.id);
-        }
-      }
-    }
-    victoryTick() {
-      const living = this.livingOwners();
-      if (living.length === 1 && this.state.winner === null) {
-        this.state.winner = living[0];
-        this.state.prestiges += 1;
-        this.log(`${this.state.players[living[0]]?.name ?? "someone"} holds every city`);
-      }
-    }
-    /* ---------------------------------------------------------------- */
-    /* distance on a tile grid, and the nearest hostile owner           */
-    /* ---------------------------------------------------------------- */
-    tileDistance(a, b) {
-      const w = this.world.w;
-      const ax = a % w;
-      const ay = a / w | 0;
-      const bx = b % w;
-      const by = b / w | 0;
-      return Math.max(Math.abs(ax - bx), Math.abs(ay - by)) <= 1 ? ax === bx && ay === by ? 0 : 1 : Math.hypot(ax - bx, ay - by);
-    }
-    nearestEnemyOwner(h) {
-      let best = -1;
-      let bestD = 60;
-      for (const c of this.state.cities) {
-        if (c.owner < 0 || c.owner === h.owner) continue;
-        const d = this.tileDistance(c.tile, h.tile);
-        if (d < bestD) {
-          bestD = d;
-          best = c.owner;
-        }
-      }
-      return best;
-    }
-    /* ---------------------------------------------------------------- */
-    /* persistence: one world that resumes                              */
-    /* ---------------------------------------------------------------- */
-    save() {
-      return JSON.stringify(this.state);
-    }
-    static load(world, raw) {
-      try {
-        const parsed = JSON.parse(raw);
-        parsed.territory = Int16Array.from(parsed.territory);
-        return new _Game(world, parsed);
-      } catch {
-        return null;
       }
     }
     stats(owner) {
-      const cities = this.citiesOf(owner);
-      const hosts = this.hostsOf(owner);
-      return {
-        cities: cities.length,
-        men: hosts.reduce((n, h) => n + h.men, 0),
-        grain: Math.round(cities.reduce((n, c) => n + c.stock, 0)),
-        pop: Math.round(cities.reduce((n, c) => n + c.pop, 0)),
-        supply: hosts.length ? hosts.reduce((n, h) => n + h.supply, 0) / hosts.length : 1,
-        morale: hosts.length ? hosts.reduce((n, h) => n + h.morale, 0) / hosts.length : 1,
-        tier: cities.length ? Math.max(...cities.map((c) => c.tier)) : 0
-      };
+      const mine = this.castlesOf(owner);
+      let plots = 0;
+      let levels = 0;
+      for (const c of mine) {
+        for (const p of c.plots) {
+          plots++;
+          levels += p.level;
+        }
+      }
+      return { castles: mine.length, plots, levels, income: this.income(owner), purse: this.purse[owner] };
     }
   };
 
@@ -1011,7 +610,6 @@
   var GreaterEqualCompare = 518;
   var AlwaysCompare = 519;
   var StaticDrawUsage = 35044;
-  var DynamicDrawUsage = 35048;
   var GLSL3 = "300 es";
   var _SRGBAFormat = 1035;
   var WebGLCoordinateSystem = 2e3;
@@ -8135,7 +7733,7 @@
         camera.updateMatrixWorld();
       }
     }
-    update(renderer, scene) {
+    update(renderer, scene2) {
       if (this.parent === null) this.updateMatrixWorld();
       const { renderTarget, activeMipmapLevel } = this;
       if (this.coordinateSystem !== renderer.coordinateSystem) {
@@ -8151,18 +7749,18 @@
       const generateMipmaps = renderTarget.texture.generateMipmaps;
       renderTarget.texture.generateMipmaps = false;
       renderer.setRenderTarget(renderTarget, 0, activeMipmapLevel);
-      renderer.render(scene, cameraPX);
+      renderer.render(scene2, cameraPX);
       renderer.setRenderTarget(renderTarget, 1, activeMipmapLevel);
-      renderer.render(scene, cameraNX);
+      renderer.render(scene2, cameraNX);
       renderer.setRenderTarget(renderTarget, 2, activeMipmapLevel);
-      renderer.render(scene, cameraPY);
+      renderer.render(scene2, cameraPY);
       renderer.setRenderTarget(renderTarget, 3, activeMipmapLevel);
-      renderer.render(scene, cameraNY);
+      renderer.render(scene2, cameraNY);
       renderer.setRenderTarget(renderTarget, 4, activeMipmapLevel);
-      renderer.render(scene, cameraPZ);
+      renderer.render(scene2, cameraPZ);
       renderTarget.texture.generateMipmaps = generateMipmaps;
       renderer.setRenderTarget(renderTarget, 5, activeMipmapLevel);
-      renderer.render(scene, cameraNZ);
+      renderer.render(scene2, cameraNZ);
       renderer.setRenderTarget(currentRenderTarget, currentActiveCubeFace, currentActiveMipmapLevel);
       renderer.xr.enabled = currentXrEnabled;
       renderTarget.texture.needsPMREMUpdate = true;
@@ -8486,8 +8084,8 @@
     let isAnimating = false;
     let animationLoop = null;
     let requestId = null;
-    function onAnimationFrame(time, frame) {
-      animationLoop(time, frame);
+    function onAnimationFrame(time, frame2) {
+      animationLoop(time, frame2);
       requestId = context.requestAnimationFrame(onAnimationFrame);
     }
     return {
@@ -9431,11 +9029,11 @@
     let currentBackground = null;
     let currentBackgroundVersion = 0;
     let currentTonemapping = null;
-    function render(renderList, scene) {
+    function render(renderList, scene2) {
       let forceClear = false;
-      let background = scene.isScene === true ? scene.background : null;
+      let background = scene2.isScene === true ? scene2.background : null;
       if (background && background.isTexture) {
-        const usePMREM = scene.backgroundBlurriness > 0;
+        const usePMREM = scene2.backgroundBlurriness > 0;
         background = (usePMREM ? cubeuvmaps : cubemaps).get(background);
       }
       if (background === null) {
@@ -9470,7 +9068,7 @@
           );
           boxMesh.geometry.deleteAttribute("normal");
           boxMesh.geometry.deleteAttribute("uv");
-          boxMesh.onBeforeRender = function(renderer2, scene2, camera) {
+          boxMesh.onBeforeRender = function(renderer2, scene3, camera) {
             this.matrixWorld.copyPosition(camera.matrixWorld);
           };
           Object.defineProperty(boxMesh.material, "envMap", {
@@ -9482,8 +9080,8 @@
         }
         boxMesh.material.uniforms.envMap.value = background;
         boxMesh.material.uniforms.flipEnvMap.value = background.isCubeTexture && background.isRenderTargetTexture === false ? -1 : 1;
-        boxMesh.material.uniforms.backgroundBlurriness.value = scene.backgroundBlurriness;
-        boxMesh.material.uniforms.backgroundIntensity.value = scene.backgroundIntensity;
+        boxMesh.material.uniforms.backgroundBlurriness.value = scene2.backgroundBlurriness;
+        boxMesh.material.uniforms.backgroundIntensity.value = scene2.backgroundIntensity;
         boxMesh.material.toneMapped = ColorManagement.getTransfer(background.colorSpace) !== SRGBTransfer;
         if (currentBackground !== background || currentBackgroundVersion !== background.version || currentTonemapping !== renderer.toneMapping) {
           boxMesh.material.needsUpdate = true;
@@ -9517,7 +9115,7 @@
           objects.update(planeMesh);
         }
         planeMesh.material.uniforms.t2D.value = background;
-        planeMesh.material.uniforms.backgroundIntensity.value = scene.backgroundIntensity;
+        planeMesh.material.uniforms.backgroundIntensity.value = scene2.backgroundIntensity;
         planeMesh.material.toneMapped = ColorManagement.getTransfer(background.colorSpace) !== SRGBTransfer;
         if (background.matrixAutoUpdate === true) {
           background.updateMatrix();
@@ -10279,14 +9877,14 @@
      * and far planes ensure the scene is rendered in its entirety (the cubeCamera
      * is placed at the origin).
      */
-    fromScene(scene, sigma = 0, near = 0.1, far = 100) {
+    fromScene(scene2, sigma = 0, near = 0.1, far = 100) {
       _oldTarget = this._renderer.getRenderTarget();
       _oldActiveCubeFace = this._renderer.getActiveCubeFace();
       _oldActiveMipmapLevel = this._renderer.getActiveMipmapLevel();
       this._setSize(256);
       const cubeUVRenderTarget = this._allocateTargets();
       cubeUVRenderTarget.depthBuffer = true;
-      this._sceneToCubeUV(scene, near, far, cubeUVRenderTarget);
+      this._sceneToCubeUV(scene2, near, far, cubeUVRenderTarget);
       if (sigma > 0) {
         this._blur(cubeUVRenderTarget, 0, 0, sigma);
       }
@@ -10400,7 +9998,7 @@
       const tmpMesh = new Mesh(this._lodPlanes[0], material);
       this._renderer.compile(tmpMesh, _flatCamera);
     }
-    _sceneToCubeUV(scene, near, far, cubeUVRenderTarget) {
+    _sceneToCubeUV(scene2, near, far, cubeUVRenderTarget) {
       const fov2 = 90;
       const aspect2 = 1;
       const cubeCamera = new PerspectiveCamera(fov2, aspect2, near, far);
@@ -10420,11 +10018,11 @@
       });
       const backgroundBox = new Mesh(new BoxGeometry(), backgroundMaterial);
       let useSolidColor = false;
-      const background = scene.background;
+      const background = scene2.background;
       if (background) {
         if (background.isColor) {
           backgroundMaterial.color.copy(background);
-          scene.background = null;
+          scene2.background = null;
           useSolidColor = true;
         }
       } else {
@@ -10449,13 +10047,13 @@
         if (useSolidColor) {
           renderer.render(backgroundBox, cubeCamera);
         }
-        renderer.render(scene, cubeCamera);
+        renderer.render(scene2, cubeCamera);
       }
       backgroundBox.geometry.dispose();
       backgroundBox.material.dispose();
       renderer.toneMapping = toneMapping;
       renderer.autoClear = originalAutoClear;
-      scene.background = background;
+      scene2.background = background;
     }
     _textureToCubeUV(texture, cubeUVRenderTarget) {
       const renderer = this._renderer;
@@ -11355,30 +10953,30 @@
   function WebGLObjects(gl, geometries, attributes, info) {
     let updateMap = /* @__PURE__ */ new WeakMap();
     function update(object) {
-      const frame = info.render.frame;
+      const frame2 = info.render.frame;
       const geometry = object.geometry;
       const buffergeometry = geometries.get(object, geometry);
-      if (updateMap.get(buffergeometry) !== frame) {
+      if (updateMap.get(buffergeometry) !== frame2) {
         geometries.update(buffergeometry);
-        updateMap.set(buffergeometry, frame);
+        updateMap.set(buffergeometry, frame2);
       }
       if (object.isInstancedMesh) {
         if (object.hasEventListener("dispose", onInstancedMeshDispose) === false) {
           object.addEventListener("dispose", onInstancedMeshDispose);
         }
-        if (updateMap.get(object) !== frame) {
+        if (updateMap.get(object) !== frame2) {
           attributes.update(object.instanceMatrix, gl.ARRAY_BUFFER);
           if (object.instanceColor !== null) {
             attributes.update(object.instanceColor, gl.ARRAY_BUFFER);
           }
-          updateMap.set(object, frame);
+          updateMap.set(object, frame2);
         }
       }
       if (object.isSkinnedMesh) {
         const skeleton = object.skeleton;
-        if (updateMap.get(skeleton) !== frame) {
+        if (updateMap.get(skeleton) !== frame2) {
           skeleton.update();
-          updateMap.set(skeleton, frame);
+          updateMap.set(skeleton, frame2);
         }
       }
       return buffergeometry;
@@ -12810,10 +12408,10 @@
       if (value === 0) return "uv";
       return `uv${value}`;
     }
-    function getParameters(material, lights, shadows, scene, object) {
-      const fog = scene.fog;
+    function getParameters(material, lights, shadows, scene2, object) {
+      const fog = scene2.fog;
       const geometry = object.geometry;
-      const environment = material.isMeshStandardMaterial ? scene.environment : null;
+      const environment = material.isMeshStandardMaterial ? scene2.environment : null;
       const envMap = (material.isMeshStandardMaterial ? cubeuvmaps : cubemaps).get(material.envMap || environment);
       const envMapCubeUVHeight = !!envMap && envMap.mapping === CubeUVReflectionMapping ? envMap.image.height : null;
       const shaderID = shaderIDs[material.type];
@@ -13376,12 +12974,12 @@
   }
   function WebGLRenderLists() {
     let lists = /* @__PURE__ */ new WeakMap();
-    function get(scene, renderCallDepth) {
-      const listArray = lists.get(scene);
+    function get(scene2, renderCallDepth) {
+      const listArray = lists.get(scene2);
       let list;
       if (listArray === void 0) {
         list = new WebGLRenderList();
-        lists.set(scene, [list]);
+        lists.set(scene2, [list]);
       } else {
         if (renderCallDepth >= listArray.length) {
           list = new WebGLRenderList();
@@ -13804,12 +13402,12 @@
   }
   function WebGLRenderStates(extensions, capabilities) {
     let renderStates = /* @__PURE__ */ new WeakMap();
-    function get(scene, renderCallDepth = 0) {
-      const renderStateArray = renderStates.get(scene);
+    function get(scene2, renderCallDepth = 0) {
+      const renderStateArray = renderStates.get(scene2);
       let renderState;
       if (renderStateArray === void 0) {
         renderState = new WebGLRenderState(extensions, capabilities);
-        renderStates.set(scene, [renderState]);
+        renderStates.set(scene2, [renderState]);
       } else {
         if (renderCallDepth >= renderStateArray.length) {
           renderState = new WebGLRenderState(extensions, capabilities);
@@ -13913,7 +13511,7 @@
     this.needsUpdate = false;
     this.type = PCFShadowMap;
     let _previousType = this.type;
-    this.render = function(lights, scene, camera) {
+    this.render = function(lights, scene2, camera) {
       if (scope.enabled === false) return;
       if (scope.autoUpdate === false && scope.needsUpdate === false) return;
       if (lights.length === 0) return;
@@ -13974,7 +13572,7 @@
           _state.viewport(_viewport);
           shadow.updateMatrices(light, vp);
           _frustum = shadow.getFrustum();
-          renderObject(scene, camera, shadow.camera, light, this.type);
+          renderObject(scene2, camera, shadow.camera, light, this.type);
         }
         if (shadow.isPointLightShadow !== true && this.type === VSMShadowMap) {
           VSMPass(shadow, camera);
@@ -15881,9 +15479,9 @@
       return isWebGL2 && renderTarget.samples > 0 && extensions.has("WEBGL_multisampled_render_to_texture") === true && renderTargetProperties.__useRenderToTexture !== false;
     }
     function updateVideoTexture(texture) {
-      const frame = info.render.frame;
-      if (_videoTextures.get(texture) !== frame) {
-        _videoTextures.set(texture, frame);
+      const frame2 = info.render.frame;
+      if (_videoTextures.get(texture) !== frame2) {
+        _videoTextures.set(texture, frame2);
         texture.update();
       }
     }
@@ -16167,18 +15765,18 @@
       }
       return this;
     }
-    update(inputSource, frame, referenceSpace) {
+    update(inputSource, frame2, referenceSpace) {
       let inputPose = null;
       let gripPose = null;
       let handPose = null;
       const targetRay = this._targetRay;
       const grip = this._grip;
       const hand = this._hand;
-      if (inputSource && frame.session.visibilityState !== "visible-blurred") {
+      if (inputSource && frame2.session.visibilityState !== "visible-blurred") {
         if (hand && inputSource.hand) {
           handPose = true;
           for (const inputjoint of inputSource.hand.values()) {
-            const jointPose = frame.getJointPose(inputjoint, referenceSpace);
+            const jointPose = frame2.getJointPose(inputjoint, referenceSpace);
             const joint = this._getHandJoint(hand, inputjoint);
             if (jointPose !== null) {
               joint.matrix.fromArray(jointPose.transform.matrix);
@@ -16210,7 +15808,7 @@
           }
         } else {
           if (grip !== null && inputSource.gripSpace) {
-            gripPose = frame.getPose(inputSource.gripSpace, referenceSpace);
+            gripPose = frame2.getPose(inputSource.gripSpace, referenceSpace);
             if (gripPose !== null) {
               grip.matrix.fromArray(gripPose.transform.matrix);
               grip.matrix.decompose(grip.position, grip.rotation, grip.scale);
@@ -16231,7 +15829,7 @@
           }
         }
         if (targetRay !== null) {
-          inputPose = frame.getPose(inputSource.targetRaySpace, referenceSpace);
+          inputPose = frame2.getPose(inputSource.targetRaySpace, referenceSpace);
           if (inputPose === null && gripPose !== null) {
             inputPose = gripPose;
           }
@@ -16630,9 +16228,9 @@
         }
       };
       let onAnimationFrameCallback = null;
-      function onAnimationFrame(time, frame) {
-        pose = frame.getViewerPose(customReferenceSpace || referenceSpace);
-        xrFrame = frame;
+      function onAnimationFrame(time, frame2) {
+        pose = frame2.getViewerPose(customReferenceSpace || referenceSpace);
+        xrFrame = frame2;
         if (pose !== null) {
           const views = pose.views;
           if (glBaseLayer !== null) {
@@ -16686,12 +16284,12 @@
           const inputSource = controllerInputSources[i];
           const controller = controllers[i];
           if (inputSource !== null && controller !== void 0) {
-            controller.update(inputSource, frame, customReferenceSpace || referenceSpace);
+            controller.update(inputSource, frame2, customReferenceSpace || referenceSpace);
           }
         }
-        if (onAnimationFrameCallback) onAnimationFrameCallback(time, frame);
-        if (frame.detectedPlanes) {
-          scope.dispatchEvent({ type: "planesdetected", data: frame });
+        if (onAnimationFrameCallback) onAnimationFrameCallback(time, frame2);
+        if (frame2.detectedPlanes) {
+          scope.dispatchEvent({ type: "planesdetected", data: frame2 });
         }
         xrFrame = null;
       }
@@ -17020,10 +16618,10 @@
       }
       const webglProgram = program.program;
       state.updateUBOMapping(uniformsGroup, webglProgram);
-      const frame = info.render.frame;
-      if (updateList[uniformsGroup.id] !== frame) {
+      const frame2 = info.render.frame;
+      if (updateList[uniformsGroup.id] !== frame2) {
         updateBufferData(uniformsGroup);
-        updateList[uniformsGroup.id] = frame;
+        updateList[uniformsGroup.id] = frame2;
       }
     }
     function createBuffer(uniformsGroup) {
@@ -17589,10 +17187,10 @@
           }
         }
       }
-      this.renderBufferDirect = function(camera, scene, geometry, material, object, group) {
-        if (scene === null) scene = _emptyScene;
+      this.renderBufferDirect = function(camera, scene2, geometry, material, object, group) {
+        if (scene2 === null) scene2 = _emptyScene;
         const frontFaceCW = object.isMesh && object.matrixWorld.determinant() < 0;
-        const program = setProgram(camera, scene, geometry, material, object);
+        const program = setProgram(camera, scene2, geometry, material, object);
         state.setMaterial(material, frontFaceCW);
         let index = geometry.index;
         let rangeFactor = 1;
@@ -17661,21 +17259,21 @@
           renderer.render(drawStart, drawCount);
         }
       };
-      function prepareMaterial(material, scene, object) {
+      function prepareMaterial(material, scene2, object) {
         if (material.transparent === true && material.side === DoubleSide && material.forceSinglePass === false) {
           material.side = BackSide;
           material.needsUpdate = true;
-          getProgram(material, scene, object);
+          getProgram(material, scene2, object);
           material.side = FrontSide;
           material.needsUpdate = true;
-          getProgram(material, scene, object);
+          getProgram(material, scene2, object);
           material.side = DoubleSide;
         } else {
-          getProgram(material, scene, object);
+          getProgram(material, scene2, object);
         }
       }
-      this.compile = function(scene, camera, targetScene = null) {
-        if (targetScene === null) targetScene = scene;
+      this.compile = function(scene2, camera, targetScene = null) {
+        if (targetScene === null) targetScene = scene2;
         currentRenderState = renderStates.get(targetScene);
         currentRenderState.init();
         renderStateStack.push(currentRenderState);
@@ -17687,8 +17285,8 @@
             }
           }
         });
-        if (scene !== targetScene) {
-          scene.traverseVisible(function(object) {
+        if (scene2 !== targetScene) {
+          scene2.traverseVisible(function(object) {
             if (object.isLight && object.layers.test(camera.layers)) {
               currentRenderState.pushLight(object);
               if (object.castShadow) {
@@ -17699,7 +17297,7 @@
         }
         currentRenderState.setupLights(_this._useLegacyLights);
         const materials2 = /* @__PURE__ */ new Set();
-        scene.traverse(function(object) {
+        scene2.traverse(function(object) {
           const material = object.material;
           if (material) {
             if (Array.isArray(material)) {
@@ -17718,8 +17316,8 @@
         currentRenderState = null;
         return materials2;
       };
-      this.compileAsync = function(scene, camera, targetScene = null) {
-        const materials2 = this.compile(scene, camera, targetScene);
+      this.compileAsync = function(scene2, camera, targetScene = null) {
+        const materials2 = this.compile(scene2, camera, targetScene);
         return new Promise((resolve) => {
           function checkMaterialsReady() {
             materials2.forEach(function(material) {
@@ -17730,7 +17328,7 @@
               }
             });
             if (materials2.size === 0) {
-              resolve(scene);
+              resolve(scene2);
               return;
             }
             setTimeout(checkMaterialsReady, 10);
@@ -17762,30 +17360,30 @@
       };
       xr.addEventListener("sessionstart", onXRSessionStart);
       xr.addEventListener("sessionend", onXRSessionEnd);
-      this.render = function(scene, camera) {
+      this.render = function(scene2, camera) {
         if (camera !== void 0 && camera.isCamera !== true) {
           console.error("THREE.WebGLRenderer.render: camera is not an instance of THREE.Camera.");
           return;
         }
         if (_isContextLost === true) return;
-        if (scene.matrixWorldAutoUpdate === true) scene.updateMatrixWorld();
+        if (scene2.matrixWorldAutoUpdate === true) scene2.updateMatrixWorld();
         if (camera.parent === null && camera.matrixWorldAutoUpdate === true) camera.updateMatrixWorld();
         if (xr.enabled === true && xr.isPresenting === true) {
           if (xr.cameraAutoUpdate === true) xr.updateCamera(camera);
           camera = xr.getCamera();
         }
-        if (scene.isScene === true) scene.onBeforeRender(_this, scene, camera, _currentRenderTarget);
-        currentRenderState = renderStates.get(scene, renderStateStack.length);
+        if (scene2.isScene === true) scene2.onBeforeRender(_this, scene2, camera, _currentRenderTarget);
+        currentRenderState = renderStates.get(scene2, renderStateStack.length);
         currentRenderState.init();
         renderStateStack.push(currentRenderState);
         _projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
         _frustum.setFromProjectionMatrix(_projScreenMatrix);
         _localClippingEnabled = this.localClippingEnabled;
         _clippingEnabled = clipping.init(this.clippingPlanes, _localClippingEnabled);
-        currentRenderList = renderLists.get(scene, renderListStack.length);
+        currentRenderList = renderLists.get(scene2, renderListStack.length);
         currentRenderList.init();
         renderListStack.push(currentRenderList);
-        projectObject(scene, camera, 0, _this.sortObjects);
+        projectObject(scene2, camera, 0, _this.sortObjects);
         currentRenderList.finish();
         if (_this.sortObjects === true) {
           currentRenderList.sort(_opaqueSort, _transparentSort);
@@ -17793,25 +17391,25 @@
         this.info.render.frame++;
         if (_clippingEnabled === true) clipping.beginShadows();
         const shadowsArray = currentRenderState.state.shadowsArray;
-        shadowMap.render(shadowsArray, scene, camera);
+        shadowMap.render(shadowsArray, scene2, camera);
         if (_clippingEnabled === true) clipping.endShadows();
         if (this.info.autoReset === true) this.info.reset();
-        background.render(currentRenderList, scene);
+        background.render(currentRenderList, scene2);
         currentRenderState.setupLights(_this._useLegacyLights);
         if (camera.isArrayCamera) {
           const cameras = camera.cameras;
           for (let i = 0, l = cameras.length; i < l; i++) {
             const camera2 = cameras[i];
-            renderScene(currentRenderList, scene, camera2, camera2.viewport);
+            renderScene(currentRenderList, scene2, camera2, camera2.viewport);
           }
         } else {
-          renderScene(currentRenderList, scene, camera);
+          renderScene(currentRenderList, scene2, camera);
         }
         if (_currentRenderTarget !== null) {
           textures.updateMultisampleRenderTarget(_currentRenderTarget);
           textures.updateRenderTargetMipmap(_currentRenderTarget);
         }
-        if (scene.isScene === true) scene.onAfterRender(_this, scene, camera);
+        if (scene2.isScene === true) scene2.onAfterRender(_this, scene2, camera);
         bindingStates.resetDefaultState();
         _currentMaterialId = -1;
         _currentCamera = null;
@@ -17886,24 +17484,24 @@
           projectObject(children[i], camera, groupOrder, sortObjects);
         }
       }
-      function renderScene(currentRenderList2, scene, camera, viewport) {
+      function renderScene(currentRenderList2, scene2, camera, viewport) {
         const opaqueObjects = currentRenderList2.opaque;
         const transmissiveObjects = currentRenderList2.transmissive;
         const transparentObjects = currentRenderList2.transparent;
         currentRenderState.setupLightsView(camera);
         if (_clippingEnabled === true) clipping.setGlobalState(_this.clippingPlanes, camera);
-        if (transmissiveObjects.length > 0) renderTransmissionPass(opaqueObjects, transmissiveObjects, scene, camera);
+        if (transmissiveObjects.length > 0) renderTransmissionPass(opaqueObjects, transmissiveObjects, scene2, camera);
         if (viewport) state.viewport(_currentViewport.copy(viewport));
-        if (opaqueObjects.length > 0) renderObjects(opaqueObjects, scene, camera);
-        if (transmissiveObjects.length > 0) renderObjects(transmissiveObjects, scene, camera);
-        if (transparentObjects.length > 0) renderObjects(transparentObjects, scene, camera);
+        if (opaqueObjects.length > 0) renderObjects(opaqueObjects, scene2, camera);
+        if (transmissiveObjects.length > 0) renderObjects(transmissiveObjects, scene2, camera);
+        if (transparentObjects.length > 0) renderObjects(transparentObjects, scene2, camera);
         state.buffers.depth.setTest(true);
         state.buffers.depth.setMask(true);
         state.buffers.color.setMask(true);
         state.setPolygonOffset(false);
       }
-      function renderTransmissionPass(opaqueObjects, transmissiveObjects, scene, camera) {
-        const overrideMaterial = scene.isScene === true ? scene.overrideMaterial : null;
+      function renderTransmissionPass(opaqueObjects, transmissiveObjects, scene2, camera) {
+        const overrideMaterial = scene2.isScene === true ? scene2.overrideMaterial : null;
         if (overrideMaterial !== null) {
           return;
         }
@@ -17930,7 +17528,7 @@
         _this.clear();
         const currentToneMapping = _this.toneMapping;
         _this.toneMapping = NoToneMapping;
-        renderObjects(opaqueObjects, scene, camera);
+        renderObjects(opaqueObjects, scene2, camera);
         textures.updateMultisampleRenderTarget(_transmissionRenderTarget);
         textures.updateRenderTargetMipmap(_transmissionRenderTarget);
         let renderTargetNeedsUpdate = false;
@@ -17944,7 +17542,7 @@
             const currentSide = material.side;
             material.side = BackSide;
             material.needsUpdate = true;
-            renderObject(object, scene, camera, geometry, material, group);
+            renderObject(object, scene2, camera, geometry, material, group);
             material.side = currentSide;
             material.needsUpdate = true;
             renderTargetNeedsUpdate = true;
@@ -17958,8 +17556,8 @@
         _this.setClearColor(_currentClearColor, _currentClearAlpha);
         _this.toneMapping = currentToneMapping;
       }
-      function renderObjects(renderList, scene, camera) {
-        const overrideMaterial = scene.isScene === true ? scene.overrideMaterial : null;
+      function renderObjects(renderList, scene2, camera) {
+        const overrideMaterial = scene2.isScene === true ? scene2.overrideMaterial : null;
         for (let i = 0, l = renderList.length; i < l; i++) {
           const renderItem = renderList[i];
           const object = renderItem.object;
@@ -17967,39 +17565,39 @@
           const material = overrideMaterial === null ? renderItem.material : overrideMaterial;
           const group = renderItem.group;
           if (object.layers.test(camera.layers)) {
-            renderObject(object, scene, camera, geometry, material, group);
+            renderObject(object, scene2, camera, geometry, material, group);
           }
         }
       }
-      function renderObject(object, scene, camera, geometry, material, group) {
-        object.onBeforeRender(_this, scene, camera, geometry, material, group);
+      function renderObject(object, scene2, camera, geometry, material, group) {
+        object.onBeforeRender(_this, scene2, camera, geometry, material, group);
         object.modelViewMatrix.multiplyMatrices(camera.matrixWorldInverse, object.matrixWorld);
         object.normalMatrix.getNormalMatrix(object.modelViewMatrix);
-        material.onBeforeRender(_this, scene, camera, geometry, object, group);
+        material.onBeforeRender(_this, scene2, camera, geometry, object, group);
         if (material.transparent === true && material.side === DoubleSide && material.forceSinglePass === false) {
           material.side = BackSide;
           material.needsUpdate = true;
-          _this.renderBufferDirect(camera, scene, geometry, material, object, group);
+          _this.renderBufferDirect(camera, scene2, geometry, material, object, group);
           material.side = FrontSide;
           material.needsUpdate = true;
-          _this.renderBufferDirect(camera, scene, geometry, material, object, group);
+          _this.renderBufferDirect(camera, scene2, geometry, material, object, group);
           material.side = DoubleSide;
         } else {
-          _this.renderBufferDirect(camera, scene, geometry, material, object, group);
+          _this.renderBufferDirect(camera, scene2, geometry, material, object, group);
         }
-        object.onAfterRender(_this, scene, camera, geometry, material, group);
+        object.onAfterRender(_this, scene2, camera, geometry, material, group);
       }
-      function getProgram(material, scene, object) {
-        if (scene.isScene !== true) scene = _emptyScene;
+      function getProgram(material, scene2, object) {
+        if (scene2.isScene !== true) scene2 = _emptyScene;
         const materialProperties = properties.get(material);
         const lights = currentRenderState.state.lights;
         const shadowsArray = currentRenderState.state.shadowsArray;
         const lightsStateVersion = lights.state.version;
-        const parameters2 = programCache.getParameters(material, lights.state, shadowsArray, scene, object);
+        const parameters2 = programCache.getParameters(material, lights.state, shadowsArray, scene2, object);
         const programCacheKey = programCache.getProgramCacheKey(parameters2);
         let programs = materialProperties.programs;
-        materialProperties.environment = material.isMeshStandardMaterial ? scene.environment : null;
-        materialProperties.fog = scene.fog;
+        materialProperties.environment = material.isMeshStandardMaterial ? scene2.environment : null;
+        materialProperties.fog = scene2.fog;
         materialProperties.envMap = (material.isMeshStandardMaterial ? cubeuvmaps : cubemaps).get(material.envMap || materialProperties.environment);
         if (programs === void 0) {
           material.addEventListener("dispose", onMaterialDispose);
@@ -18076,11 +17674,11 @@
         materialProperties.vertexTangents = parameters2.vertexTangents;
         materialProperties.toneMapping = parameters2.toneMapping;
       }
-      function setProgram(camera, scene, geometry, material, object) {
-        if (scene.isScene !== true) scene = _emptyScene;
+      function setProgram(camera, scene2, geometry, material, object) {
+        if (scene2.isScene !== true) scene2 = _emptyScene;
         textures.resetTextureUnits();
-        const fog = scene.fog;
-        const environment = material.isMeshStandardMaterial ? scene.environment : null;
+        const fog = scene2.fog;
+        const environment = material.isMeshStandardMaterial ? scene2.environment : null;
         const colorSpace = _currentRenderTarget === null ? _this.outputColorSpace : _currentRenderTarget.isXRRenderTarget === true ? _currentRenderTarget.texture.colorSpace : LinearSRGBColorSpace;
         const envMap = (material.isMeshStandardMaterial ? cubeuvmaps : cubemaps).get(material.envMap || environment);
         const vertexAlphas = material.vertexColors === true && !!geometry.attributes.color && geometry.attributes.color.itemSize === 4;
@@ -18153,7 +17751,7 @@
         }
         let program = materialProperties.currentProgram;
         if (needsProgramChange === true) {
-          program = getProgram(material, scene, object);
+          program = getProgram(material, scene2, object);
         }
         let refreshProgram = false;
         let refreshMaterial = false;
@@ -18588,16 +18186,6 @@
       if (this.backgroundBlurriness > 0) data.object.backgroundBlurriness = this.backgroundBlurriness;
       if (this.backgroundIntensity !== 1) data.object.backgroundIntensity = this.backgroundIntensity;
       return data;
-    }
-  };
-  var DataTexture = class extends Texture {
-    constructor(data = null, width = 1, height = 1, format, type, mapping, wrapS, wrapT, magFilter = NearestFilter, minFilter = NearestFilter, anisotropy, colorSpace) {
-      super(null, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, colorSpace);
-      this.isDataTexture = true;
-      this.image = { data, width, height };
-      this.generateMipmaps = false;
-      this.flipY = false;
-      this.unpackAlignment = 1;
     }
   };
   var InstancedBufferAttribute = class extends BufferAttribute {
@@ -19748,24 +19336,6 @@
   var VectorKeyframeTrack = class extends KeyframeTrack {
   };
   VectorKeyframeTrack.prototype.ValueTypeName = "vector";
-  var Cache = {
-    enabled: false,
-    files: {},
-    add: function(key, file) {
-      if (this.enabled === false) return;
-      this.files[key] = file;
-    },
-    get: function(key) {
-      if (this.enabled === false) return;
-      return this.files[key];
-    },
-    remove: function(key) {
-      delete this.files[key];
-    },
-    clear: function() {
-      this.files = {};
-    }
-  };
   var LoadingManager = class {
     constructor(onLoad, onProgress, onError) {
       const scope = this;
@@ -19880,69 +19450,6 @@
     }
   };
   Loader.DEFAULT_MATERIAL_NAME = "__DEFAULT";
-  var ImageLoader = class extends Loader {
-    constructor(manager) {
-      super(manager);
-    }
-    load(url, onLoad, onProgress, onError) {
-      if (this.path !== void 0) url = this.path + url;
-      url = this.manager.resolveURL(url);
-      const scope = this;
-      const cached = Cache.get(url);
-      if (cached !== void 0) {
-        scope.manager.itemStart(url);
-        setTimeout(function() {
-          if (onLoad) onLoad(cached);
-          scope.manager.itemEnd(url);
-        }, 0);
-        return cached;
-      }
-      const image = createElementNS("img");
-      function onImageLoad() {
-        removeEventListeners();
-        Cache.add(url, this);
-        if (onLoad) onLoad(this);
-        scope.manager.itemEnd(url);
-      }
-      function onImageError(event) {
-        removeEventListeners();
-        if (onError) onError(event);
-        scope.manager.itemError(url);
-        scope.manager.itemEnd(url);
-      }
-      function removeEventListeners() {
-        image.removeEventListener("load", onImageLoad, false);
-        image.removeEventListener("error", onImageError, false);
-      }
-      image.addEventListener("load", onImageLoad, false);
-      image.addEventListener("error", onImageError, false);
-      if (url.slice(0, 5) !== "data:") {
-        if (this.crossOrigin !== void 0) image.crossOrigin = this.crossOrigin;
-      }
-      scope.manager.itemStart(url);
-      image.src = url;
-      return image;
-    }
-  };
-  var TextureLoader = class extends Loader {
-    constructor(manager) {
-      super(manager);
-    }
-    load(url, onLoad, onProgress, onError) {
-      const texture = new Texture();
-      const loader = new ImageLoader(this.manager);
-      loader.setCrossOrigin(this.crossOrigin);
-      loader.setPath(this.path);
-      loader.load(url, function(image) {
-        texture.image = image;
-        texture.needsUpdate = true;
-        if (onLoad !== void 0) {
-          onLoad(texture);
-        }
-      }, onProgress, onError);
-      return texture;
-    }
-  };
   var Light = class extends Object3D {
     constructor(color, intensity = 1) {
       super();
@@ -20485,64 +19992,6 @@
     ]
   ];
   var _controlInterpolantsResultBuffer = new Float32Array(1);
-  var Raycaster = class {
-    constructor(origin, direction, near = 0, far = Infinity) {
-      this.ray = new Ray(origin, direction);
-      this.near = near;
-      this.far = far;
-      this.camera = null;
-      this.layers = new Layers();
-      this.params = {
-        Mesh: {},
-        Line: { threshold: 1 },
-        LOD: {},
-        Points: { threshold: 1 },
-        Sprite: {}
-      };
-    }
-    set(origin, direction) {
-      this.ray.set(origin, direction);
-    }
-    setFromCamera(coords, camera) {
-      if (camera.isPerspectiveCamera) {
-        this.ray.origin.setFromMatrixPosition(camera.matrixWorld);
-        this.ray.direction.set(coords.x, coords.y, 0.5).unproject(camera).sub(this.ray.origin).normalize();
-        this.camera = camera;
-      } else if (camera.isOrthographicCamera) {
-        this.ray.origin.set(coords.x, coords.y, (camera.near + camera.far) / (camera.near - camera.far)).unproject(camera);
-        this.ray.direction.set(0, 0, -1).transformDirection(camera.matrixWorld);
-        this.camera = camera;
-      } else {
-        console.error("THREE.Raycaster: Unsupported camera type: " + camera.type);
-      }
-    }
-    intersectObject(object, recursive = true, intersects = []) {
-      intersectObject(object, this, intersects, recursive);
-      intersects.sort(ascSort);
-      return intersects;
-    }
-    intersectObjects(objects, recursive = true, intersects = []) {
-      for (let i = 0, l = objects.length; i < l; i++) {
-        intersectObject(objects[i], this, intersects, recursive);
-      }
-      intersects.sort(ascSort);
-      return intersects;
-    }
-  };
-  function ascSort(a, b) {
-    return a.distance - b.distance;
-  }
-  function intersectObject(object, raycaster, intersects, recursive) {
-    if (object.layers.test(raycaster.layers)) {
-      object.raycast(raycaster, intersects);
-    }
-    if (recursive === true) {
-      const children = object.children;
-      for (let i = 0, l = children.length; i < l; i++) {
-        intersectObject(children[i], raycaster, intersects, true);
-      }
-    }
-  }
   if (typeof __THREE_DEVTOOLS__ !== "undefined") {
     __THREE_DEVTOOLS__.dispatchEvent(new CustomEvent("register", { detail: {
       revision: REVISION
@@ -20556,805 +20005,10 @@
     }
   }
 
-  // src/view/look.ts
-  var TILT = 0.22;
-  var CAM_DIST = 300;
-  var CHUNK = 3;
-  var RELIEF = 6.2;
-  var BIOME = {
-    [OCEAN]: [2399424, 2067632, 2861260, 1736609],
-    [SAND]: [13217904, 12559461, 13942144],
-    [PLAINS]: [9477168, 11053104, 8687652, 10266672],
-    [FOREST]: [3103266, 4025128, 1588248, 2377756],
-    [MOUNTAIN]: [8224632, 9079940, 7237738, 9869455]
-  };
-  var ROAD_TONES = [9401416, 8480576, 10256724];
-  var TREE_GREENS = [2839587, 3366954, 1983772, 3828270];
-  var STONE = 6052951;
-  var STONE_DARK = 4539711;
-  function hash2(x, y, seed2) {
-    let h = x * 374761393 + y * 668265263 + seed2 * 2246822519;
-    h = (h ^ h >>> 13) * 1274126177;
-    return ((h ^ h >>> 16) >>> 0) / 4294967296;
-  }
-  function valueNoise(x, y, scale, seed2) {
-    const gx = x / scale;
-    const gy = y / scale;
-    const x0 = Math.floor(gx);
-    const y0 = Math.floor(gy);
-    const tx = gx - x0;
-    const ty = gy - y0;
-    const sx = tx * tx * (3 - 2 * tx);
-    const sy = ty * ty * (3 - 2 * ty);
-    const a = hash2(x0, y0, seed2);
-    const b = hash2(x0 + 1, y0, seed2);
-    const c = hash2(x0, y0 + 1, seed2);
-    const d = hash2(x0 + 1, y0 + 1, seed2);
-    return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
-  }
-  var Look = class {
-    constructor(canvas2, game) {
-      this.game = game;
-      /** Facet size in tiles: 1 for a sculpted preset world, CHUNK otherwise. */
-      __publicField(this, "chunk", CHUNK);
-      __publicField(this, "renderer");
-      __publicField(this, "scene", new Scene());
-      __publicField(this, "cam");
-      __publicField(this, "sun");
-      __publicField(this, "canvas");
-      __publicField(this, "terrain", null);
-      __publicField(this, "drape", null);
-      __publicField(this, "drapeTex", null);
-      __publicField(this, "water", null);
-      __publicField(this, "waterUniforms", null);
-      __publicField(this, "trees", null);
-      __publicField(this, "rocks", null);
-      __publicField(this, "men", null);
-      __publicField(this, "banners", null);
-      __publicField(this, "carts", null);
-      __publicField(this, "hoverRing");
-      __publicField(this, "selectRing");
-      __publicField(this, "keeps", /* @__PURE__ */ new Map());
-      __publicField(this, "heights");
-      __publicField(this, "corners");
-      __publicField(this, "cw", 0);
-      __publicField(this, "ch", 0);
-      __publicField(this, "ray", new Raycaster());
-      __publicField(this, "plane", new Plane(new Vector3(0, 1, 0), 0));
-      __publicField(this, "ownerSig", "");
-      __publicField(this, "sizeKey", "");
-      this.canvas = canvas2;
-      this.renderer = new WebGLRenderer({ canvas: canvas2, antialias: true });
-      this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-      this.renderer.shadowMap.enabled = true;
-      this.renderer.shadowMap.type = PCFSoftShadowMap;
-      this.renderer.outputColorSpace = SRGBColorSpace;
-      this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.54;
-      this.scene.background = new Color(1319724);
-      this.scene.fog = new Fog(11058372, 320, 700);
-      this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1200);
-      this.cam.position.set(0, CAM_DIST, 0);
-      this.cam.lookAt(0, 0, 0);
-      const key = new DirectionalLight(16772808, 1.78);
-      key.position.set(-70, 130, -60);
-      key.castShadow = true;
-      key.shadow.mapSize.set(2048, 2048);
-      key.shadow.camera.left = -90;
-      key.shadow.camera.right = 90;
-      key.shadow.camera.top = 90;
-      key.shadow.camera.bottom = -90;
-      key.shadow.camera.near = 1;
-      key.shadow.camera.far = 520;
-      key.shadow.bias = -7e-4;
-      this.sun = key;
-      this.scene.add(key, key.target);
-      this.scene.add(new HemisphereLight(13032686, 6974024, 1.12));
-      const rim = new DirectionalLight(11062512, 0.3);
-      rim.position.set(80, 70, 90);
-      this.scene.add(rim);
-      this.hoverRing = this.ring(16777215, 0.9);
-      this.selectRing = this.ring(16766073, 0.95);
-      this.scene.add(this.hoverRing, this.selectRing);
-      this.heights = new Float32Array(0);
-      this.corners = new Float32Array(0);
-      this.build();
-    }
-    ring(color, opacity) {
-      const geo = new RingGeometry(0.55, 0.82, 26);
-      geo.rotateX(-Math.PI / 2);
-      const m = new Mesh(
-        geo,
-        new MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: DoubleSide })
-      );
-      m.visible = false;
-      m.renderOrder = 6;
-      return m;
-    }
-    /* ------------------------------------------------------------------ */
-    /* build                                                              */
-    /* ------------------------------------------------------------------ */
-    build() {
-      const world = this.game.world;
-      const { w, h, terrain } = world;
-      this.chunk = world.presetClass ? 1 : CHUNK;
-      this.cw = Math.ceil(w / this.chunk);
-      this.ch = Math.ceil(h / this.chunk);
-      const fine = new Float32Array(w * h);
-      const base = {
-        [OCEAN]: -0.5,
-        [SAND]: 0.12,
-        [PLAINS]: 0.34,
-        [FOREST]: 0.62,
-        [MOUNTAIN]: 2.3
-      };
-      for (let t = 0; t < w * h; t++) {
-        const x = t % w;
-        const y = t / w | 0;
-        const n = valueNoise(x, y, 26, 11) * 0.55 + valueNoise(x, y, 9, 23) * 0.3;
-        fine[t] = (base[terrain[t]] ?? 0.3) + (terrain[t] === OCEAN ? n * 0.1 : (n - 0.42) * 0.85);
-      }
-      const soft = new Float32Array(fine.length);
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          let sum = 0;
-          let n = 0;
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const nx = x + dx;
-              const ny = y + dy;
-              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-              sum += fine[ny * w + nx];
-              n++;
-            }
-          }
-          soft[y * w + x] = sum / n;
-        }
-      }
-      if (world.presetClass) {
-        const elev = world.presetElev;
-        for (let t = 0; t < w * h; t++) {
-          const code = world.presetClass[t];
-          const e = elev ? elev[t] : code === 0 ? 0 : 0.3;
-          fine[t] = code === 0 ? -0.9 : e * RELIEF;
-        }
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            let sum = 0;
-            let n = 0;
-            for (let dy = -1; dy <= 1; dy++) {
-              for (let dx = -1; dx <= 1; dx++) {
-                const nx = x + dx;
-                const ny = y + dy;
-                if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-                sum += fine[ny * w + nx];
-                n++;
-              }
-            }
-            soft[y * w + x] = sum / n;
-          }
-        }
-      }
-      const cw = this.cw;
-      const ch = this.ch;
-      this.corners = new Float32Array((cw + 1) * (ch + 1));
-      const at = (x, y) => {
-        const cx = Math.max(0, Math.min(w - 1, x));
-        const cy = Math.max(0, Math.min(h - 1, y));
-        return soft[cy * w + cx];
-      };
-      for (let cy = 0; cy <= ch; cy++) {
-        for (let cx = 0; cx <= cw; cx++) {
-          const tx = cx * this.chunk;
-          const ty = cy * this.chunk;
-          this.corners[cy * (cw + 1) + cx] = (at(tx - 1, ty - 1) + at(tx, ty - 1) + at(tx - 1, ty) + at(tx, ty)) * 0.25;
-        }
-      }
-      this.heights = new Float32Array(w * h);
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const fx = x / this.chunk;
-          const fz = y / this.chunk;
-          const x0 = Math.max(0, Math.min(cw - 1, Math.floor(fx)));
-          const z0 = Math.max(0, Math.min(ch - 1, Math.floor(fz)));
-          const tx = Math.min(1, Math.max(0, fx - x0));
-          const tz = Math.min(1, Math.max(0, fz - z0));
-          const i0 = z0 * (cw + 1) + x0;
-          const i1 = i0 + (cw + 1);
-          const a = this.corners[i0] * (1 - tx) + this.corners[i0 + 1] * tx;
-          const b = this.corners[i1] * (1 - tx) + this.corners[i1 + 1] * tx;
-          this.heights[y * w + x] = a * (1 - tz) + b * tz;
-        }
-      }
-      const cells = cw * ch;
-      const pos = new Float32Array(cells * 18);
-      const col = new Float32Array(cells * 18);
-      const nor = new Float32Array(cells * 18);
-      const uv = new Float32Array(cells * 12);
-      const c = new Color();
-      let p = 0;
-      let q = 0;
-      const presetClass = world.presetClass;
-      let presetHex = null;
-      if (presetClass && world.presetPalette) {
-        const mix = (hex, k) => {
-          const v = parseInt(hex.slice(1), 16);
-          const r = Math.round(Math.min(255, (v >> 16 & 255) * k));
-          const g2 = Math.round(Math.min(255, (v >> 8 & 255) * k));
-          const b2 = Math.round(Math.min(255, (v & 255) * k));
-          return r << 16 | g2 << 8 | b2;
-        };
-        const order = ["water", "dirt", "grass", "canopy", "rock", "shadow"];
-        presetHex = {};
-        order.forEach((name, i) => {
-          const base2 = world.presetPalette[name] ?? "#8d9733";
-          presetHex[i] = [mix(base2, 0.82), mix(base2, 0.92), mix(base2, 1), mix(base2, 1.1)];
-        });
-      }
-      const corner = (cx, cy) => this.corners[Math.max(0, Math.min(ch, cy)) * (cw + 1) + Math.max(0, Math.min(cw, cx))];
-      const tri = (ax, az, bx, bz, cx, cz) => {
-        const x0 = ax * this.chunk;
-        const z0 = az * this.chunk;
-        const x1 = bx * this.chunk;
-        const z1 = bz * this.chunk;
-        const x2 = cx * this.chunk;
-        const z2 = cz * this.chunk;
-        const y0 = corner(ax, az);
-        const y1 = corner(bx, bz);
-        const y2 = corner(cx, cz);
-        const ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
-        const vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
-        let nx = uy * vz - uz * vy;
-        let ny = uz * vx - ux * vz;
-        let nz = ux * vy - uy * vx;
-        const len = Math.hypot(nx, ny, nz) || 1;
-        nx /= len;
-        ny /= len;
-        nz /= len;
-        const xs = [x0, x1, x2], ys = [y0, y1, y2], zs = [z0, z1, z2];
-        for (let i = 0; i < 3; i++) {
-          pos[p] = xs[i];
-          pos[p + 1] = ys[i];
-          pos[p + 2] = zs[i];
-          nor[p] = nx;
-          nor[p + 1] = ny;
-          nor[p + 2] = nz;
-          col[p] = c.r;
-          col[p + 1] = c.g;
-          col[p + 2] = c.b;
-          uv[q] = xs[i] / w;
-          uv[q + 1] = 1 - zs[i] / h;
-          q += 2;
-          p += 3;
-        }
-      };
-      for (let z = 0; z < ch; z++) {
-        for (let x = 0; x < cw; x++) {
-          const counts = /* @__PURE__ */ new Map();
-          let roadCells = 0;
-          for (let dz = 0; dz < this.chunk; dz++) {
-            for (let dx = 0; dx < this.chunk; dx++) {
-              const tx = Math.min(w - 1, x * this.chunk + dx);
-              const ty = Math.min(h - 1, z * this.chunk + dz);
-              const t = ty * w + tx;
-              const k = terrain[t];
-              counts.set(k, (counts.get(k) ?? 0) + 1);
-              if (world.road[t]) roadCells++;
-            }
-          }
-          let kind = PLAINS;
-          let best = -1;
-          for (const [k, n] of counts) if (n > best) {
-            best = n;
-            kind = k;
-          }
-          if (presetHex) {
-            const pc = /* @__PURE__ */ new Map();
-            for (let dz = 0; dz < this.chunk; dz++) {
-              for (let dx = 0; dx < this.chunk; dx++) {
-                const tx = Math.min(w - 1, x * this.chunk + dx);
-                const ty = Math.min(h - 1, z * this.chunk + dz);
-                const code2 = presetClass[ty * w + tx];
-                pc.set(code2, (pc.get(code2) ?? 0) + 1);
-              }
-            }
-            let code = 2;
-            let count = -1;
-            for (const [k, n] of pc) if (n > count) {
-              count = n;
-              code = k;
-            }
-            const hexes = presetHex[code] ?? presetHex[2];
-            c.setHex(hexes[hash2(x, z, 7) * hexes.length | 0]);
-            if (roadCells >= 3 && code !== 0) c.setHex(presetHex[1][0]);
-            c.multiplyScalar(0.97 + hash2(x, z, 13) * 0.07);
-          } else if (roadCells >= 4 && kind !== OCEAN) {
-            c.setHex(ROAD_TONES[hash2(x, z, 31) * ROAD_TONES.length | 0]);
-          } else {
-            const fam = BIOME[kind] ?? BIOME[PLAINS];
-            c.setHex(fam[hash2(x, z, 7) * fam.length | 0]);
-          }
-          c.multiplyScalar(0.96 + hash2(x, z, 13) * 0.09);
-          if (hash2(x, z, 3) < 0.5) {
-            tri(x, z, x + 1, z + 1, x + 1, z);
-            tri(x, z, x, z + 1, x + 1, z + 1);
-          } else {
-            tri(x, z, x, z + 1, x + 1, z);
-            tri(x + 1, z, x, z + 1, x + 1, z + 1);
-          }
-        }
-      }
-      const geo = new BufferGeometry();
-      geo.setAttribute("position", new BufferAttribute(pos, 3));
-      geo.setAttribute("normal", new BufferAttribute(nor, 3));
-      geo.setAttribute("color", new BufferAttribute(col, 3));
-      geo.setAttribute("uv", new BufferAttribute(uv, 2));
-      geo.computeBoundingSphere();
-      const groundMat = this.game.world.presetClass ? new MeshStandardMaterial({ flatShading: true, roughness: 0.95 }) : new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92 });
-      this.terrain = new Mesh(geo, groundMat);
-      if (this.game.world.presetClass) {
-        const lo = new URLSearchParams(location.search).get("texlo");
-        const tex = new TextureLoader().load(lo ? "preset/ground.png" : "preset/ground_hd.jpg");
-        tex.colorSpace = SRGBColorSpace;
-        tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
-        tex.minFilter = LinearMipmapLinearFilter;
-        tex.magFilter = LinearFilter;
-        tex.generateMipmaps = true;
-        groundMat.map = tex;
-        groundMat.needsUpdate = true;
-      }
-      this.terrain.receiveShadow = true;
-      this.scene.add(this.terrain);
-      this.waterUniforms = {
-        uTime: { value: 0 },
-        uDeep: { value: new Color(2058892) },
-        uShallow: { value: new Color(5815510) },
-        uLight: { value: new Vector3(-0.6, 0.75, -0.3).normalize() },
-        uSun: { value: new Color(16773330) }
-      };
-      const waterMat = new ShaderMaterial({
-        uniforms: this.waterUniforms,
-        // Translucent: the picture's own sea colours still show through, but the
-        // surface moves over them.
-        transparent: true,
-        depthWrite: false,
-        blending: NormalBlending,
-        vertexShader: `
-        varying vec3 vWorld;
-        varying float vWave;
-        uniform float uTime;
-        void main() {
-          vec3 p = position;
-          // three swells at different scales so the surface never reads as a pattern
-          float a = sin(p.x * 0.31 + uTime * 0.9) * cos(p.y * 0.27 + uTime * 0.7);
-          float b = sin(p.x * 0.09 - uTime * 0.35 + p.y * 0.11) * 0.7;
-          float c = sin(p.y * 0.53 + uTime * 1.4) * 0.35;
-          vWave = a + b + c;
-          p.z += vWave * 0.42;
-          vec4 wp = modelMatrix * vec4(p, 1.0);
-          vWorld = wp.xyz;
-          gl_Position = projectionMatrix * viewMatrix * wp;
-        }
-      `,
-        fragmentShader: `
-        varying vec3 vWorld;
-        varying float vWave;
-        uniform vec3 uDeep;
-        uniform vec3 uShallow;
-        uniform vec3 uLight;
-        uniform vec3 uSun;
-        uniform float uTime;
-        void main() {
-          // cheap normal from the wave field's own gradient
-          float h  = vWave;
-          vec3 n = normalize(vec3(-cos(vWorld.x * 0.31 + uTime * 0.9) * 0.55, 1.0,
-                                  -cos(vWorld.z * 0.27 + uTime * 0.7) * 0.55));
-          float diff = max(dot(n, uLight), 0.0);
-          float spec = pow(max(dot(reflect(-uLight, n), vec3(0.0, 1.0, 0.0)), 0.0), 24.0);
-          vec3 col = mix(uDeep, uShallow, clamp(0.5 + h * 0.45, 0.0, 1.0));
-          col *= 0.72 + diff * 0.5;
-          col += uSun * spec * 0.5;
-          // Brighter crests are more opaque: the swell reads even when zoomed out.
-          float alpha = 0.42 + clamp(h, 0.0, 1.0) * 0.22 + spec * 0.5;
-          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.85));
-        }
-      `
-      });
-      const apron = new Mesh(new PlaneGeometry(w * 4, h * 4, 240, 240), waterMat);
-      apron.rotation.x = -Math.PI / 2;
-      apron.position.set(w / 2, 0.1, h / 2);
-      apron.receiveShadow = false;
-      this.scene.add(apron);
-      this.water = apron;
-      const skyCanvas = document.createElement("canvas");
-      skyCanvas.width = 4;
-      skyCanvas.height = 256;
-      const sctx = skyCanvas.getContext("2d");
-      const grad = sctx.createLinearGradient(0, 0, 0, 256);
-      grad.addColorStop(0, "#8fb6c9");
-      grad.addColorStop(0.55, "#c3d6d9");
-      grad.addColorStop(1, "#e3ddc8");
-      sctx.fillStyle = grad;
-      sctx.fillRect(0, 0, 4, 256);
-      const skyTex = new CanvasTexture(skyCanvas);
-      skyTex.colorSpace = SRGBColorSpace;
-      this.scene.background = skyTex;
-      this.buildDrape();
-      this.buildScatter();
-      this.buildCrowd();
-    }
-    buildDrape() {
-      const { w, h } = this.game.world;
-      const data = new Uint8Array(w * h * 4);
-      const tex = new DataTexture(data, w, h, RGBAFormat);
-      tex.magFilter = LinearFilter;
-      tex.minFilter = LinearFilter;
-      tex.needsUpdate = true;
-      this.drapeTex = tex;
-      const pos = [];
-      const uv = [];
-      const idx = [];
-      const at = (x, y) => this.heights[Math.max(0, Math.min(h - 1, y)) * w + Math.max(0, Math.min(w - 1, x))] + 0.02;
-      for (let y = 0; y <= h; y++) {
-        for (let x = 0; x <= w; x++) {
-          pos.push(x, at(x, y), y);
-          uv.push(x / w, 1 - y / h);
-        }
-      }
-      const stride = w + 1;
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const a = y * stride + x;
-          idx.push(a, a + 1, a + stride, a + 1, a + stride + 1, a + stride);
-        }
-      }
-      const geo = new BufferGeometry();
-      geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
-      geo.setAttribute("uv", new Float32BufferAttribute(uv, 2));
-      geo.setIndex(idx);
-      this.drape = new Mesh(
-        geo,
-        new MeshBasicMaterial({
-          map: tex,
-          transparent: true,
-          opacity: 0.6,
-          depthWrite: false,
-          side: DoubleSide,
-          polygonOffset: true,
-          polygonOffsetFactor: -2
-        })
-      );
-      this.drape.renderOrder = 2;
-      this.scene.add(this.drape);
-    }
-    buildScatter() {
-      const world = this.game.world;
-      const { w, h, terrain } = world;
-      const treeSpots = [];
-      const rockSpots = [];
-      for (let t = 0; t < w * h; t++) {
-        const x = t % w;
-        const z = t / w | 0;
-        const cl = world.presetClass?.[t];
-        const isCanopy = cl !== void 0 ? cl === 3 : terrain[t] === FOREST;
-        const isRock = cl !== void 0 ? cl === 4 : terrain[t] === MOUNTAIN;
-        if (isCanopy) {
-          const density = cl === void 0 ? 0.55 : 0.94;
-          if (hash2(x, z, 31) > density) continue;
-          const n = cl === void 0 ? 1 + (hash2(x, z, 37) * 2 | 0) : 2 + (hash2(x, z, 37) * 2 | 0);
-          for (let i = 0; i < n; i++) {
-            treeSpots.push({
-              x: x + 0.15 + hash2(x, z, 41 + i) * 0.7,
-              z: z + 0.15 + hash2(x, z, 47 + i) * 0.7,
-              y: this.heights[t],
-              s: cl === void 0 ? 1.15 + hash2(x, z, 53 + i) * 0.95 : 0.95 + hash2(x, z, 53 + i) * 0.75,
-              r: hash2(x, z, 59 + i) * 6.283,
-              c: TREE_GREENS[hash2(x, z, 61 + i) * TREE_GREENS.length | 0]
-            });
-          }
-        } else if (isRock && hash2(x, z, 71) < 0.45) {
-          rockSpots.push({
-            x: x + hash2(x, z, 73),
-            z: z + hash2(x, z, 79),
-            y: this.heights[t],
-            s: 0.5 + hash2(x, z, 83) * 0.8,
-            r: hash2(x, z, 89) * 6.283
-          });
-        }
-      }
-      const crown = new IcosahedronGeometry(0.46, 0);
-      crown.scale(1, 0.82, 1);
-      crown.translate(0, 0.42, 0);
-      this.trees = new InstancedMesh(
-        crown,
-        new MeshStandardMaterial({ flatShading: true, roughness: 0.85 }),
-        treeSpots.length
-      );
-      this.trees.castShadow = true;
-      this.trees.receiveShadow = true;
-      const m = new Matrix4();
-      const q = new Quaternion();
-      const col = new Color();
-      treeSpots.forEach((s, i) => {
-        q.setFromAxisAngle(new Vector3(0, 1, 0), s.r);
-        m.compose(new Vector3(s.x, s.y, s.z), q, new Vector3(s.s, s.s, s.s));
-        this.trees.setMatrixAt(i, m);
-        this.trees.setColorAt(i, col.setHex(s.c));
-      });
-      this.trees.instanceMatrix.needsUpdate = true;
-      if (this.trees.instanceColor) this.trees.instanceColor.needsUpdate = true;
-      this.scene.add(this.trees);
-      this.rocks = new InstancedMesh(
-        new IcosahedronGeometry(0.42, 0),
-        new MeshStandardMaterial({ color: 10328722, flatShading: true, roughness: 0.95 }),
-        rockSpots.length
-      );
-      this.rocks.castShadow = true;
-      this.rocks.receiveShadow = true;
-      rockSpots.forEach((s, i) => {
-        q.setFromAxisAngle(new Vector3(0.3, 1, 0.2).normalize(), s.r);
-        m.compose(
-          new Vector3(s.x, s.y + s.s * 0.28, s.z),
-          q,
-          new Vector3(s.s, s.s * 1.25, s.s)
-        );
-        this.rocks.setMatrixAt(i, m);
-      });
-      this.rocks.instanceMatrix.needsUpdate = true;
-      this.scene.add(this.rocks);
-    }
-    buildCrowd() {
-      const body = new BoxGeometry(0.24, 0.5, 0.24);
-      body.translate(0, 0.25, 0);
-      this.men = new InstancedMesh(
-        body,
-        new MeshStandardMaterial({ flatShading: true, roughness: 0.7 }),
-        4e3
-      );
-      this.men.count = 0;
-      this.men.castShadow = true;
-      this.men.instanceMatrix.setUsage(DynamicDrawUsage);
-      this.scene.add(this.men);
-      const flag = new PlaneGeometry(0.36, 0.24);
-      this.banners = new InstancedMesh(
-        flag,
-        new MeshStandardMaterial({ flatShading: true, side: DoubleSide, roughness: 0.8 }),
-        600
-      );
-      this.banners.count = 0;
-      this.banners.instanceMatrix.setUsage(DynamicDrawUsage);
-      this.scene.add(this.banners);
-      const cart = new BoxGeometry(0.34, 0.2, 0.24);
-      cart.translate(0, 0.16, 0);
-      this.carts = new InstancedMesh(
-        cart,
-        new MeshStandardMaterial({ flatShading: true, roughness: 0.8 }),
-        400
-      );
-      this.carts.count = 0;
-      this.carts.castShadow = true;
-      this.carts.instanceMatrix.setUsage(DynamicDrawUsage);
-      this.scene.add(this.carts);
-    }
-    /* ------------------------------------------------------------------ */
-    /* keeps                                                             */
-    /* ------------------------------------------------------------------ */
-    makeKeep(colour, tier, neutral) {
-      const g = new Group();
-      const stone = new MeshStandardMaterial({ color: STONE, flatShading: true, roughness: 0.9 });
-      const dark = new MeshStandardMaterial({ color: STONE_DARK, flatShading: true, roughness: 0.95 });
-      const roof = new MeshStandardMaterial({
-        color: neutral ? 7172216 : colour,
-        flatShading: true,
-        roughness: 0.75
-      });
-      const box = (w, hh, d, mat, x = 0, y = 0, z = 0) => {
-        const mesh = new Mesh(new BoxGeometry(w, hh, d), mat);
-        mesh.position.set(x, y + hh / 2, z);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        g.add(mesh);
-      };
-      const cone = (r, hh, mat, x = 0, y = 0, z = 0, seg = 6) => {
-        const mesh = new Mesh(new ConeGeometry(r, hh, seg), mat);
-        mesh.position.set(x, y + hh / 2, z);
-        mesh.castShadow = true;
-        g.add(mesh);
-      };
-      box(1.5, 0.5, 1.5, stone);
-      box(0.66, 1 + tier * 0.18, 0.66, stone, 0, 0.5, 0);
-      cone(0.5, 0.6, roof, 0, 1.5 + tier * 0.18, 0, 4);
-      const towers = tier >= 3 ? [[-0.62, -0.62], [0.62, -0.62], [-0.62, 0.62], [0.62, 0.62]] : [[-0.6, -0.6], [0.6, 0.6]];
-      for (const [dx, dz] of towers) {
-        const t = new Mesh(new CylinderGeometry(0.2, 0.24, 0.9, 7), stone);
-        t.position.set(dx, 0.45, dz);
-        t.castShadow = true;
-        g.add(t);
-        cone(0.3, 0.32, roof, dx, 0.9, dz, 7);
-      }
-      if (tier >= 2) {
-        box(0.5, 0.3, 0.4, dark, 0.75, 0, 0.6);
-        box(0.4, 0.28, 0.34, dark, -0.8, 0, -0.5);
-      }
-      return g;
-    }
-    /* ------------------------------------------------------------------ */
-    /* frame                                                             */
-    /* ------------------------------------------------------------------ */
-    repaint() {
-      this.paintDrape();
-    }
-    reset() {
-      this.paintDrape();
-    }
-    paintDrape() {
-      const tex = this.drapeTex;
-      if (!tex) return;
-      const world = this.game.world;
-      const data = tex.image.data;
-      const terr = this.game.state.territory;
-      const colours = this.game.state.players.map((p) => new Color(p.colour));
-      const neutral = new Color(9276821);
-      for (let t = 0; t < world.w * world.h; t++) {
-        const owner = terr[t];
-        const o = t * 4;
-        if (owner === -2) {
-          data[o + 3] = 0;
-          continue;
-        }
-        const c = owner < 0 ? neutral : colours[owner % colours.length];
-        data[o] = Math.round(c.r * 255);
-        data[o + 1] = Math.round(c.g * 255);
-        data[o + 2] = Math.round(c.b * 255);
-        data[o + 3] = owner < 0 ? 60 : 140;
-      }
-      tex.needsUpdate = true;
-    }
-    draw(cam, hover, selected, dpr) {
-      const vw = this.canvas.clientWidth || window.innerWidth;
-      const vh = this.canvas.clientHeight || window.innerHeight;
-      const key = `${vw}x${vh}x${dpr}`;
-      if (key !== this.sizeKey) {
-        this.sizeKey = key;
-        this.renderer.setPixelRatio(dpr);
-        this.renderer.setSize(vw, vh, false);
-      }
-      const cx = (vw / 2 - cam.x) / cam.scale;
-      const cz = (vh / 2 - cam.y) / cam.scale;
-      const halfW = vw / 2 / cam.scale;
-      const halfH = vh / 2 / cam.scale * Math.cos(TILT);
-      this.cam.left = -halfW;
-      this.cam.right = halfW;
-      this.cam.top = halfH;
-      this.cam.bottom = -halfH;
-      this.cam.position.set(cx, Math.cos(TILT) * CAM_DIST, cz + Math.sin(TILT) * CAM_DIST);
-      this.cam.up.set(0, 1, 0);
-      this.cam.lookAt(cx, 0, cz);
-      this.cam.updateProjectionMatrix();
-      this.sun.position.set(cx - 70, 130, cz - 60);
-      this.sun.target.position.set(cx, 0, cz);
-      this.sun.target.updateMatrixWorld();
-      const sig = `${this.game.state.cities.map((c) => c.owner).join("")}`;
-      if (sig !== this.ownerSig) {
-        this.ownerSig = sig;
-        this.paintDrape();
-      }
-      if (this.waterUniforms) this.waterUniforms.uTime.value = performance.now() / 1e3;
-      this.syncKeeps();
-      this.syncCrowd(hover, selected);
-      this.renderer.render(this.scene, this.cam);
-    }
-    syncKeeps() {
-      const w = this.game.world.w;
-      const live = /* @__PURE__ */ new Set();
-      for (const city of this.game.state.cities) {
-        live.add(city.id);
-        let obj = this.keeps.get(city.id);
-        const colour = this.game.state.players[city.owner]?.colour ?? 7172216;
-        if (!obj) {
-          obj = this.makeKeep(colour, city.tier, city.owner < 0);
-          this.keeps.set(city.id, obj);
-          this.scene.add(obj);
-        }
-        obj.position.set(city.tile % w + 0.5, this.heights[city.tile], Math.floor(city.tile / w) + 0.5);
-      }
-      for (const [id, obj] of this.keeps) {
-        if (live.has(id)) continue;
-        this.scene.remove(obj);
-        this.keeps.delete(id);
-      }
-    }
-    syncCrowd(hover, selected) {
-      const w = this.game.world.w;
-      const m = new Matrix4();
-      const q = new Quaternion();
-      const sc = new Vector3(1, 1, 1);
-      const col = new Color();
-      let si = 0;
-      let bi = 0;
-      const put = (inst, i, x, y, z, colour, scale = 1) => {
-        m.compose(new Vector3(x, y, z), q, sc.set(scale, scale, scale));
-        inst.setMatrixAt(i, m);
-        inst.setColorAt(i, col.setHex(colour));
-      };
-      for (const h of this.game.state.hosts) {
-        const x = h.tile % w;
-        const z = Math.floor(h.tile / w);
-        const y = this.heights[h.tile];
-        const colour = this.game.state.players[h.owner]?.colour ?? 10066329;
-        const blocks = Math.max(1, Math.min(6, Math.round(h.men / 40)));
-        for (let i = 0; i < blocks && si < 4e3; i++) {
-          const ox = (i % 3 - 1) * 0.26;
-          const oz = (Math.floor(i / 3) - 0.5) * 0.26;
-          put(this.men, si++, x + 0.5 + ox, y, z + 0.5 + oz, colour);
-        }
-        if (bi < 600) put(this.banners, bi++, x + 0.5, y + 1, z + 0.5, colour);
-      }
-      this.men.count = si;
-      this.banners.count = bi;
-      this.men.instanceMatrix.needsUpdate = true;
-      this.banners.instanceMatrix.needsUpdate = true;
-      if (this.men.instanceColor) this.men.instanceColor.needsUpdate = true;
-      if (this.banners.instanceColor) this.banners.instanceColor.needsUpdate = true;
-      let ci = 0;
-      for (const c of this.game.state.convoys) {
-        if (ci >= 400) break;
-        const x = c.tile % w;
-        const z = Math.floor(c.tile / w);
-        const colour = this.game.state.players[c.owner]?.colour ?? 10066329;
-        put(this.carts, ci++, x + 0.5, this.heights[c.tile] + 0.05, z + 0.5, colour, 1.2);
-      }
-      this.carts.count = ci;
-      this.carts.instanceMatrix.needsUpdate = true;
-      if (this.carts.instanceColor) this.carts.instanceColor.needsUpdate = true;
-      if (hover >= 0) {
-        const x = hover % w;
-        const z = Math.floor(hover / w);
-        this.hoverRing.visible = true;
-        this.hoverRing.position.set(x + 0.5, this.heights[hover] + 0.07, z + 0.5);
-      } else {
-        this.hoverRing.visible = false;
-      }
-      const selTile = selected.host !== null ? this.game.hostById(selected.host)?.tile ?? null : selected.city !== null ? this.game.cityById(selected.city)?.tile ?? null : null;
-      if (selTile !== null) {
-        this.selectRing.visible = true;
-        this.selectRing.position.set(
-          selTile % w + 0.5,
-          this.heights[selTile] + 0.09,
-          Math.floor(selTile / w) + 0.5
-        );
-        this.selectRing.scale.setScalar(1.3);
-      } else {
-        this.selectRing.visible = false;
-      }
-    }
-    /** Screen point to tile through the real tilted camera. */
-    tileAtScreen(px, py) {
-      const rect = this.canvas.getBoundingClientRect();
-      const ndc = new Vector2(
-        (px - rect.left) / rect.width * 2 - 1,
-        -((py - rect.top) / rect.height * 2 - 1)
-      );
-      this.ray.setFromCamera(ndc, this.cam);
-      const hits = this.terrain ? this.ray.intersectObject(this.terrain, false) : [];
-      let point = hits.length ? hits[0].point : null;
-      if (!point) {
-        const p = new Vector3();
-        if (this.ray.ray.intersectPlane(this.plane, p)) point = p;
-      }
-      if (!point) return -1;
-      const x = Math.floor(point.x);
-      const y = Math.floor(point.z);
-      const world = this.game.world;
-      if (x < 0 || y < 0 || x >= world.w || y >= world.h) return -1;
-      return y * world.w + x;
-    }
-  };
-
   // src/cam.ts
-  var CANT = 0.24;
-  var MIN_SCALE = 2.6;
-  var MAX_SCALE = 16;
+  var CANT = 0.3;
+  var MIN_SCALE = 1.7;
+  var MAX_SCALE = 24;
   var FIT_MARGIN = 1.045;
   var EASE = 7;
   var Camera2 = class {
@@ -21366,29 +20020,29 @@
       __publicField(this, "vx", 0);
       __publicField(this, "vy", 0);
     }
-    resize(vw, vh) {
-      this.vw = vw;
-      this.vh = vh;
+    resize(vw2, vh2) {
+      this.vw = vw2;
+      this.vh = vh2;
     }
     /** The whole country in frame. */
-    fit(world) {
-      const fit = Math.max(this.vw / world.w, this.vh / (world.h * Math.cos(CANT))) * FIT_MARGIN;
+    fit(world2) {
+      const fit = Math.max(this.vw / world2.w, this.vh / (world2.h * Math.cos(CANT))) * FIT_MARGIN;
       this.goal.scale = clamp2(fit, MIN_SCALE, MAX_SCALE);
-      this.goal.x = this.vw / 2 - world.w / 2 * this.goal.scale;
-      this.goal.y = this.vh / 2 - world.h / 2 * this.goal.scale;
-      this.clampGoal(world);
+      this.goal.x = this.vw / 2 - world2.w / 2 * this.goal.scale;
+      this.goal.y = this.vh / 2 - world2.h / 2 * this.goal.scale;
+      this.clampGoal(world2);
     }
-    centre(tile, scale, world) {
+    centre(tile, scale, world2) {
       this.goal.scale = clamp2(scale, MIN_SCALE, MAX_SCALE);
-      this.goal.x = this.vw / 2 - (tile % world.w + 0.5) * this.goal.scale;
-      this.goal.y = this.vh / 2 - (Math.floor(tile / world.w) + 0.5) * this.goal.scale;
-      this.clampGoal(world);
+      this.goal.x = this.vw / 2 - (tile % world2.w + 0.5) * this.goal.scale;
+      this.goal.y = this.vh / 2 - (Math.floor(tile / world2.w) + 0.5) * this.goal.scale;
+      this.clampGoal(world2);
     }
     /** Move the goal immediately, used while dragging so panning feels direct. */
-    panBy(dx, dy, world) {
+    panBy(dx, dy, world2) {
       this.goal.x += dx;
       this.goal.y += dy;
-      this.clampGoal(world);
+      this.clampGoal(world2);
     }
     /**
      * Zoom toward or away from whatever sits under the pointer.
@@ -21406,18 +20060,18 @@
       this.goal.y = py - worldY * this.goal.scale;
     }
     /** Zoom about the middle of the frame (keys). */
-    zoomCentre(factor, world) {
+    zoomCentre(factor, world2) {
       this.zoomAt(this.vw / 2, this.vh / 2, factor);
-      this.clampGoal(world);
+      this.clampGoal(world2);
     }
     /** Public clamp, for input that sets the goal directly. */
-    clampTo(world) {
-      this.clampGoal(world);
+    clampTo(world2) {
+      this.clampGoal(world2);
     }
     /** Keep the country on screen: centred when smaller than the frame, else bounded. */
-    clampGoal(world) {
-      const mw = world.w * this.goal.scale;
-      const mh = world.h * this.goal.scale;
+    clampGoal(world2) {
+      const mw = world2.w * this.goal.scale;
+      const mh = world2.h * this.goal.scale;
       const pad = 80;
       this.goal.x = mw <= this.vw ? (this.vw - mw) / 2 : clamp2(this.goal.x, this.vw - mw, 0);
       this.goal.y = mh <= this.vh ? (this.vh - mh) / 2 : clamp2(this.goal.y, this.vh - mh, 0);
@@ -21447,253 +20101,982 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  // src/view/scene.ts
+  var CAM_DIST = 620;
+  var RELIEF = 30;
+  function hsl(h, s, l) {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = h / 60 % 6;
+    const x = c * (1 - Math.abs(hp % 2 - 1));
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    if (hp < 1) [r, g, b] = [c, x, 0];
+    else if (hp < 2) [r, g, b] = [x, c, 0];
+    else if (hp < 3) [r, g, b] = [0, c, x];
+    else if (hp < 4) [r, g, b] = [0, x, c];
+    else if (hp < 5) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    const m = l - c / 2;
+    const to = (v) => Math.round(Math.max(0, Math.min(1, v + m)) * 255);
+    return to(r) << 16 | to(g) << 8 | to(b);
+  }
+  var PALETTE = {
+    ocean: [hsl(196, 0.62, 0.3), hsl(196, 0.6, 0.36)],
+    sand: [hsl(46, 0.58, 0.72), hsl(44, 0.52, 0.64)],
+    plains: [hsl(64, 0.74, 0.4), hsl(62, 0.76, 0.36), hsl(68, 0.7, 0.34), hsl(60, 0.72, 0.42)],
+    forest: [hsl(104, 0.68, 0.26), hsl(108, 0.7, 0.22), hsl(98, 0.62, 0.3)],
+    hills: [hsl(58, 0.66, 0.36), hsl(54, 0.62, 0.4), hsl(62, 0.68, 0.32)],
+    mountain: [hsl(96, 0.1, 0.52), hsl(96, 0.08, 0.44), hsl(96, 0.12, 0.6)],
+    rock: [hsl(90, 0.1, 0.42), hsl(90, 0.09, 0.34), hsl(90, 0.11, 0.5)],
+    road: hsl(30, 0.38, 0.42),
+    plot: hsl(38, 0.42, 0.48)
+  };
+  var Scene2 = class {
+    constructor(canvas2, game2) {
+      this.game = game2;
+      __publicField(this, "renderer");
+      __publicField(this, "scene", new Scene());
+      __publicField(this, "cam");
+      __publicField(this, "sun");
+      __publicField(this, "canvas");
+      __publicField(this, "terrain", null);
+      __publicField(this, "water", null);
+      __publicField(this, "waterUniforms", null);
+      __publicField(this, "trees", null);
+      __publicField(this, "rocks", null);
+      __publicField(this, "castleMesh", null);
+      __publicField(this, "bannerMesh", null);
+      __publicField(this, "plotMeshes", {});
+      __publicField(this, "familyMeshes", {});
+      __publicField(this, "heights");
+      __publicField(this, "sizeKey", "");
+      __publicField(this, "terrainColors", null);
+      __publicField(this, "colourSig", "");
+      /** A ring on the selected castle, so a click is unmistakable on a huge map. */
+      __publicField(this, "ring", null);
+      __publicField(this, "lastCam", null);
+      this.canvas = canvas2;
+      this.heights = computeHeights(game2.world);
+      const renderer = new WebGLRenderer({ canvas: canvas2, antialias: true });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = PCFSoftShadowMap;
+      renderer.outputColorSpace = SRGBColorSpace;
+      renderer.toneMapping = NoToneMapping;
+      this.renderer = renderer;
+      this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 2200);
+      this.cam.position.set(0, Math.cos(CANT) * CAM_DIST, Math.sin(CANT) * CAM_DIST);
+      this.cam.up.set(0, 1, 0);
+      this.cam.lookAt(0, 0, 0);
+      this.sun = new DirectionalLight(16774368, 2.9);
+      this.sun.castShadow = true;
+      this.sun.shadow.mapSize.set(2048, 2048);
+      this.sun.shadow.camera.near = 1;
+      this.sun.shadow.camera.far = 700;
+      this.sun.shadow.bias = -6e-4;
+      this.sun.shadow.normalBias = 1.2;
+      this.scene.add(this.sun);
+      this.scene.add(this.sun.target);
+      this.scene.add(new HemisphereLight(15133403, 9408341, 0.46));
+      const sky = skyTexture();
+      this.scene.background = sky;
+      this.scene.fog = new Fog(12373970, CAM_DIST * 1.25, CAM_DIST * 2.8);
+      this.buildTerrain();
+      this.buildWater();
+      this.buildScatter();
+      this.buildCastles();
+      this.buildPlots();
+    }
+    /* ------------------------------------------------------------ terrain */
+    buildTerrain() {
+      const { w, h, terrain, marks } = this.game.world;
+      const heights = this.heights;
+      const pos = new Float32Array(w * h * 6 * 3);
+      const col = new Uint8Array(w * h * 6 * 4);
+      let p = 0;
+      const pushTri = (x0, z0, x1, z1, x2, z2, r, g, b) => {
+        const H = (px, pz) => heights[Math.min(h - 1, pz) * w + Math.min(w - 1, px)];
+        const ax = x0, ay = H(x0, z0), az = z0;
+        const bx = x1, by = H(x1, z1), bz = z1;
+        const cx2 = x2, cy = H(x2, z2), cz2 = z2;
+        const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+        const e2x = cx2 - ax, e2y = cy - ay, e2z = cz2 - az;
+        let nx = e1y * e2z - e1z * e2y;
+        let ny = e1z * e2x - e1x * e2z;
+        let nz = e1x * e2y - e1y * e2x;
+        const len = Math.hypot(nx, ny, nz) || 1;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        if (ny < 0) {
+          ny = -ny;
+          nx = -nx;
+          nz = -nz;
+        }
+        pos[p] = ax;
+        pos[p + 1] = ay;
+        pos[p + 2] = az;
+        pos[p + 3] = bx;
+        pos[p + 4] = by;
+        pos[p + 5] = bz;
+        pos[p + 6] = cx2;
+        pos[p + 7] = cy;
+        pos[p + 8] = cz2;
+        for (let k = 0; k < 3; k++) {
+          col[p + k * 4] = r * 255;
+          col[p + k * 4 + 1] = g * 255;
+          col[p + k * 4 + 2] = b * 255;
+          col[p + k * 4 + 3] = 255;
+        }
+        p += 9;
+      };
+      for (let z = 0; z < h; z++) {
+        for (let x = 0; x < w; x++) {
+          const t = z * w + x;
+          const kind = terrain[t];
+          const shade = faceShade(x, z, heights, w, h);
+          const slope = faceSlope(x, z, heights, w, h);
+          const rocky = slope > 0.62;
+          const family = rocky ? PALETTE.rock : familyOf(kind);
+          const jitter = hash(x, z, 3) * 0.09 + 0.955;
+          let [r, g, b] = rgb(pick(family, hash(x, z, 11)));
+          if (rocky) {
+            const k = 0.82 + (slope - 0.62) * 0.55;
+            r *= k;
+            g *= k;
+            b *= k;
+          }
+          if (marks[t] & 1) {
+            const [rr, gg, bb] = rgb(PALETTE.road);
+            r = r * 0.35 + rr * 0.65;
+            g = g * 0.35 + gg * 0.65;
+            b = b * 0.35 + bb * 0.65;
+          }
+          if (marks[t] & 2) {
+            const [rr, gg, bb] = rgb(PALETTE.plot);
+            r = r * 0.55 + rr * 0.45;
+            g = g * 0.55 + gg * 0.45;
+            b = b * 0.55 + bb * 0.45;
+          }
+          r *= shade * jitter;
+          g *= shade * jitter;
+          b *= shade * jitter;
+          if (hash(x, z, 17) > 0.5) {
+            pushTri(x, z, x, z + 1, x + 1, z + 1, r, g, b);
+            pushTri(x, z, x + 1, z + 1, x + 1, z, r, g, b);
+          } else {
+            pushTri(x, z, x, z + 1, x + 1, z, r, g, b);
+            pushTri(x + 1, z, x, z + 1, x + 1, z + 1, r, g, b);
+          }
+        }
+      }
+      const geo = new BufferGeometry();
+      geo.setAttribute("position", new BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      const colorAttr = new BufferAttribute(col, 4, true);
+      geo.setAttribute("color", colorAttr);
+      geo.computeBoundingSphere();
+      this.terrainColors = colorAttr;
+      const mat = new MeshStandardMaterial({
+        vertexColors: true,
+        flatShading: true,
+        roughness: 0.96,
+        metalness: 0
+      });
+      const mesh = new Mesh(geo, mat);
+      mesh.castShadow = false;
+      mesh.receiveShadow = true;
+      this.terrain = mesh;
+      this.scene.add(mesh);
+    }
+    /** Ownership rides on the terrain colour, so there is no overlay mesh to sync. */
+    repaintOwnership() {
+      const { w, h, owner } = this.game.world;
+      if (!this.terrainColors) return;
+      const sig = ownerSig(owner);
+      if (sig === this.colourSig) return;
+      this.colourSig = sig;
+      const col = this.terrainColors.array;
+      for (let z = 0; z < h; z++) {
+        for (let x = 0; x < w; x++) {
+          const t = z * w + x;
+          const o = owner[t];
+          const base = t * 6 * 4;
+          if (o < 0) continue;
+          const realm = this.game.realmOf(o);
+          if (!realm) continue;
+          const [pr, pg, pb] = rgb(realm.colour);
+          const edge = x > 0 && owner[t - 1] !== o || x < w - 1 && owner[t + 1] !== o || z > 0 && owner[t - w] !== o || z < h - 1 && owner[t + w] !== o;
+          const mix = edge ? 0.55 : 0.05;
+          const dark = edge ? 0.58 : 1;
+          for (let v = 0; v < 6; v++) {
+            const i = base + v * 4;
+            col[i] = Math.min(255, col[i] * (1 - mix) + pr * 255 * mix * dark);
+            col[i + 1] = Math.min(255, col[i + 1] * (1 - mix) + pg * 255 * mix * dark);
+            col[i + 2] = Math.min(255, col[i + 2] * (1 - mix) + pb * 255 * mix * dark);
+          }
+        }
+      }
+      this.terrainColors.needsUpdate = true;
+    }
+    /* -------------------------------------------------------------- water */
+    buildWater() {
+      const { w, h, seaLevel } = this.game.world;
+      this.waterUniforms = {
+        uTime: { value: 0 },
+        uDeep: { value: new Color(936555) },
+        uShallow: { value: new Color(3582159) },
+        uLight: { value: new Vector3(-0.55, 0.78, -0.3).normalize() },
+        uSun: { value: new Color(16773848) }
+      };
+      const mat = new ShaderMaterial({
+        uniforms: this.waterUniforms,
+        transparent: true,
+        depthWrite: false,
+        vertexShader: `
+        varying vec3 vWorld;
+        varying float vWave;
+        uniform float uTime;
+        void main() {
+          vec3 p = position;
+          float a = sin(p.x * 0.19 + uTime * 0.8) * cos(p.y * 0.17 + uTime * 0.6);
+          float b = sin(p.x * 0.06 - uTime * 0.3 + p.y * 0.08) * 0.8;
+          float c = sin(p.y * 0.31 + uTime * 1.2) * 0.35;
+          vWave = a + b + c;
+          p.z += vWave * 0.34;
+          vec4 wp = modelMatrix * vec4(p, 1.0);
+          vWorld = wp.xyz;
+          gl_Position = projectionMatrix * viewMatrix * wp;
+        }
+      `,
+        fragmentShader: `
+        varying vec3 vWorld;
+        varying float vWave;
+        uniform vec3 uDeep;
+        uniform vec3 uShallow;
+        uniform vec3 uLight;
+        uniform vec3 uSun;
+        uniform float uTime;
+        void main() {
+          vec3 n = normalize(vec3(
+            -cos(vWorld.x * 0.19 + uTime * 0.8) * 0.5,
+            1.0,
+            -cos(vWorld.z * 0.17 + uTime * 0.6) * 0.5));
+          float diff = max(dot(n, uLight), 0.0);
+          float spec = pow(max(dot(reflect(-uLight, n), vec3(0.0, 1.0, 0.0)), 0.0), 26.0);
+          vec3 col = mix(uDeep, uShallow, clamp(0.5 + vWave * 0.4, 0.0, 1.0));
+          col *= 0.74 + diff * 0.48;
+          col += uSun * spec * 0.5;
+          float alpha = 0.68 + clamp(vWave, 0.0, 1.0) * 0.18 + spec * 0.4;
+          // linear -> sRGB: a raw ShaderMaterial does not get this for free
+          vec3 srgb = mix(col * 12.92, 1.055 * pow(max(col, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
+                          step(0.0031308, col));
+          gl_FragColor = vec4(srgb, clamp(alpha, 0.62, 0.94));
+        }
+      `
+      });
+      const geo = new PlaneGeometry(w * 4, h * 4, 200, 200);
+      const mesh = new Mesh(geo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(w / 2, seaHeight(seaLevel), h / 2);
+      this.water = mesh;
+      this.scene.add(mesh);
+    }
+    /* ---------------------------------------------------------- vegetation */
+    buildScatter() {
+      const { w, h, terrain, elev, seaLevel } = this.game.world;
+      const heights = this.heights;
+      const conifers = [];
+      const broadleaf = [];
+      const rockM = [];
+      for (let z = 1; z < h - 1; z++) {
+        for (let x = 1; x < w - 1; x++) {
+          const t = z * w + x;
+          const kind = terrain[t];
+          const y = heights[t];
+          if (y <= seaHeight(seaLevel) + 0.05) continue;
+          const roll = hash(x, z, 21);
+          if (kind === FOREST && roll < 0.56) {
+            const s = 0.9 + hash(x, z, 22) * 0.8;
+            const m = new Matrix4();
+            m.compose(
+              new Vector3(x + 0.5 + (hash(x, z, 23) - 0.5) * 0.5, y, z + 0.5 + (hash(x, z, 24) - 0.5) * 0.5),
+              new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), hash(x, z, 25) * 6.28),
+              new Vector3(s, s * (0.9 + hash(x, z, 26) * 0.5), s)
+            );
+            (hash(x, z, 27) > 0.45 ? conifers : broadleaf).push(m);
+          } else if ((kind === HILLS || kind === PLAINS) && roll > 0.93) {
+            const s = 0.7 + hash(x, z, 28) * 0.6;
+            const m = new Matrix4();
+            m.compose(
+              new Vector3(x + 0.5, y, z + 0.5),
+              new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), hash(x, z, 29) * 6.28),
+              new Vector3(s, s, s)
+            );
+            broadleaf.push(m);
+          } else if (kind === MOUNTAIN && roll < 0.3) {
+            const s = 0.8 + hash(x, z, 30) * 1.1;
+            const m = new Matrix4();
+            m.compose(
+              new Vector3(x + 0.5, y - 0.1, z + 0.5),
+              new Quaternion().setFromEuler(new Euler(hash(x, z, 31) * 0.4, hash(x, z, 32) * 6.28, hash(x, z, 33) * 0.4)),
+              new Vector3(s, s * 0.8, s)
+            );
+            rockM.push(m);
+          }
+        }
+      }
+      const cone = new ConeGeometry(0.42, 1.9, 6);
+      cone.translate(0, 0.95, 0);
+      const trunk = new CylinderGeometry(0.09, 0.11, 0.5, 5);
+      trunk.translate(0, 0.25, 0);
+      const coniferGeo = mergeGeos([cone, trunk]);
+      const crownA = new IcosahedronGeometry(0.52, 0);
+      crownA.translate(0, 0.86, 0);
+      const crownB = new IcosahedronGeometry(0.38, 0);
+      crownB.translate(0.24, 0.62, 0.12);
+      const broadGeo = mergeGeos([crownA, crownB, trunk.clone()]);
+      const treeMat = new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.92 });
+      const coniferMesh = new InstancedMesh(coniferGeo, treeMat, Math.max(1, conifers.length));
+      const broadMesh = new InstancedMesh(broadGeo, treeMat, Math.max(1, broadleaf.length));
+      paintGeometry(coniferGeo, 3103270, 5914404);
+      paintGeometry(broadGeo, 4880944, 5914404);
+      conifers.forEach((m, i) => {
+        coniferMesh.setMatrixAt(i, m);
+        coniferMesh.setColorAt(i, new Color().setHSL(0.27 + hash(i, 1, 41) * 0.05, 0.52, 0.4 + hash(i, 2, 42) * 0.13));
+      });
+      broadleaf.forEach((m, i) => {
+        broadMesh.setMatrixAt(i, m);
+        broadMesh.setColorAt(i, new Color().setHSL(0.24 + hash(i, 3, 43) * 0.07, 0.55, 0.42 + hash(i, 4, 44) * 0.14));
+      });
+      for (const mesh of [coniferMesh, broadMesh]) {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        this.scene.add(mesh);
+      }
+      this.trees = coniferMesh;
+      this.familyMeshes.conifer = coniferMesh;
+      this.familyMeshes.broad = broadMesh;
+      if (rockM.length) {
+        const rockGeo = new IcosahedronGeometry(0.55, 0);
+        paintGeometry(rockGeo, 8225663, 6975596);
+        const rockMesh = new InstancedMesh(rockGeo, treeMat, rockM.length);
+        rockM.forEach((m, i) => rockMesh.setMatrixAt(i, m));
+        rockMesh.castShadow = true;
+        rockMesh.receiveShadow = true;
+        rockMesh.instanceMatrix.needsUpdate = true;
+        this.scene.add(rockMesh);
+        this.rocks = rockMesh;
+      }
+    }
+    /* ------------------------------------------------------------ castles */
+    buildCastles() {
+      const castles = this.game.castles;
+      const geo = castleGeometry();
+      paintGeometry(geo, 11052186, 9209984);
+      const mat = new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.88 });
+      const mesh = new InstancedMesh(geo, mat, Math.max(1, castles.length));
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      const bannerGeo = new PlaneGeometry(1.5, 0.95);
+      bannerGeo.translate(0, 3.05, 0);
+      const bannerMat = new MeshStandardMaterial({
+        vertexColors: true,
+        flatShading: true,
+        side: DoubleSide,
+        roughness: 0.8,
+        metalness: 0
+      });
+      paintGeometry(bannerGeo, 16777215, 16777215);
+      const banners = new InstancedMesh(bannerGeo, bannerMat, Math.max(1, castles.length));
+      const { w } = this.game.world;
+      castles.forEach((c, i) => {
+        const y = this.heights[c.tile];
+        const scale = 1 + (c.level - 1) * 0.22;
+        const m = new Matrix4();
+        m.compose(
+          new Vector3(c.x + 0.5, y, c.y + 0.5),
+          new Quaternion(),
+          new Vector3(scale, scale, scale)
+        );
+        mesh.setMatrixAt(i, m);
+        const realm = this.game.realmOf(c.owner);
+        const col = new Color(realm ? realm.colour : 9277334);
+        mesh.setColorAt(i, col.clone().lerp(new Color(16777215), 0.72));
+        banners.setMatrixAt(i, m);
+        banners.setColorAt(i, col);
+        void w;
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      banners.instanceMatrix.needsUpdate = true;
+      if (banners.instanceColor) banners.instanceColor.needsUpdate = true;
+      this.scene.add(mesh);
+      this.scene.add(banners);
+      this.castleMesh = mesh;
+      this.bannerMesh = banners;
+    }
+    buildPlots() {
+      const { w } = this.game.world;
+      const byKind = {
+        farm: [],
+        lumber: [],
+        mine: [],
+        market: []
+      };
+      for (const c of this.game.castles) {
+        for (const p of c.plots) {
+          const x = p.tile % w;
+          const z = Math.floor(p.tile / w);
+          const y = this.heights[p.tile];
+          const lvl = Math.max(1, p.level);
+          const s = 0.5 + lvl * 0.16;
+          const m = new Matrix4();
+          m.compose(
+            new Vector3(x + 0.5, y, z + 0.5),
+            new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), (hash(x, z, 51) - 0.5) * 0.8),
+            new Vector3(s, s, s)
+          );
+          byKind[p.kind].push({ m, level: p.level, owner: c.owner });
+        }
+      }
+      const builders = {
+        farm: farmGeometry,
+        lumber: lumberGeometry,
+        mine: mineGeometry,
+        market: marketGeometry
+      };
+      for (const kind of Object.keys(builders)) {
+        const list = byKind[kind];
+        if (!list.length) continue;
+        const geo = builders[kind]();
+        paintGeometry(geo, 12168076, 8219214);
+        const mat = new MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
+        const mesh = new InstancedMesh(geo, mat, list.length);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        list.forEach((item, i) => {
+          mesh.setMatrixAt(i, item.m);
+          const realm = this.game.realmOf(item.owner);
+          const base = new Color(realm ? realm.colour : 10132122);
+          mesh.setColorAt(i, base.clone().lerp(new Color(16777215), item.level === 0 ? 0.8 : 0.55));
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        this.scene.add(mesh);
+        this.plotMeshes[kind] = mesh;
+      }
+    }
+    /* --------------------------------------------------------------- draw */
+    draw(cam2, selected, hoverTile, dpr) {
+      const vw2 = this.canvas.clientWidth || window.innerWidth;
+      const vh2 = this.canvas.clientHeight || window.innerHeight;
+      const key = `${vw2}x${vh2}x${dpr}`;
+      if (key !== this.sizeKey) {
+        this.sizeKey = key;
+        this.renderer.setPixelRatio(dpr);
+        this.renderer.setSize(vw2, vh2, false);
+      }
+      const cx = (vw2 / 2 - cam2.x) / cam2.scale;
+      const cz = (vh2 / 2 - cam2.y) / cam2.scale;
+      const halfW = vw2 / 2 / cam2.scale;
+      const halfH = vh2 / 2 / cam2.scale * Math.cos(CANT);
+      this.cam.left = -halfW;
+      this.cam.right = halfW;
+      this.cam.top = halfH;
+      this.cam.bottom = -halfH;
+      this.cam.position.set(cx, Math.cos(CANT) * CAM_DIST, cz + Math.sin(CANT) * CAM_DIST);
+      this.cam.lookAt(cx, 0, cz);
+      this.cam.updateProjectionMatrix();
+      const shadowSpan = Math.min(220, halfW * 1.7 + 30);
+      const sc = this.sun.shadow.camera;
+      sc.left = -shadowSpan;
+      sc.right = shadowSpan;
+      sc.top = shadowSpan;
+      sc.bottom = -shadowSpan;
+      sc.updateProjectionMatrix();
+      this.sun.position.set(cx - 120, 190, cz - 96);
+      this.sun.target.position.set(cx, 0, cz);
+      this.sun.target.updateMatrixWorld();
+      const closeEnough = cam2.scale > 4.5;
+      for (const key2 of Object.keys(this.familyMeshes)) {
+        this.familyMeshes[key2].castShadow = closeEnough;
+      }
+      if (this.waterUniforms) this.waterUniforms.uTime.value = performance.now() / 1e3;
+      this.repaintOwnership();
+      this.highlight(selected, hoverTile);
+      this.renderer.render(this.scene, this.cam);
+    }
+    highlight(selected, hoverTile) {
+      const target = selected.castle !== null ? this.game.castleById(selected.castle) : void 0;
+      if (!target) {
+        if (this.ring) this.ring.visible = false;
+        return;
+      }
+      if (!this.ring) {
+        const geo = new RingGeometry(1.7, 2.1, 28);
+        geo.rotateX(-Math.PI / 2);
+        const mat = new MeshBasicMaterial({ color: 16773312, transparent: true, opacity: 0.85, side: DoubleSide });
+        this.ring = new Mesh(geo, mat);
+        this.scene.add(this.ring);
+      }
+      this.ring.visible = true;
+      this.ring.position.set(target.x + 0.5, this.heights[target.tile] + 0.12, target.y + 0.5);
+      void hoverTile;
+    }
+    tileAtScreen(px, py, cam2) {
+      const c = cam2 ?? this.lastCam;
+      if (!c) return -1;
+      const { w, h } = this.game.world;
+      const x = Math.floor((px - c.x) / c.scale);
+      const z = Math.floor((py - c.y) / c.scale);
+      if (x < 0 || z < 0 || x >= w || z >= h) return -1;
+      return z * w + x;
+    }
+    setCam(cam2) {
+      this.lastCam = cam2;
+    }
+  };
+  function computeHeights(world2) {
+    const { w, h, elev, seaLevel, terrain, coast } = world2;
+    const out = new Float32Array(w * h);
+    const sea = seaHeight(seaLevel);
+    for (let t = 0; t < w * h; t++) {
+      const e = elev[t] - seaLevel;
+      if (terrain[t] === OCEAN) {
+        out[t] = sea - 1.6;
+        continue;
+      }
+      const shoulder = Math.min(1, coast[t] / 6);
+      let y = sea + Math.max(0, e) * RELIEF * (0.35 + 0.65 * shoulder);
+      if (terrain[t] === MOUNTAIN) y += 2.2;
+      out[t] = y;
+    }
+    return out;
+  }
+  function seaHeight(seaLevel) {
+    return Math.max(0, -seaLevel * RELIEF * 0.2) + 0.35;
+  }
+  function familyOf(kind) {
+    switch (kind) {
+      case OCEAN:
+        return PALETTE.ocean;
+      case SAND:
+        return PALETTE.sand;
+      case FOREST:
+        return PALETTE.forest;
+      case HILLS:
+        return PALETTE.hills;
+      case MOUNTAIN:
+        return PALETTE.mountain;
+      case PLAINS:
+      default:
+        return PALETTE.plains;
+    }
+  }
+  function faceSlope(x, z, heights, w, h) {
+    const at = (px, pz) => heights[Math.max(0, Math.min(h - 1, pz)) * w + Math.max(0, Math.min(w - 1, px))];
+    const dx = Math.abs(at(x + 1, z) - at(x - 1, z)) * 0.5;
+    const dz = Math.abs(at(x, z + 1) - at(x, z - 1)) * 0.5;
+    return Math.max(dx, dz);
+  }
+  function faceShade(x, z, heights, w, h) {
+    const at = (px, pz) => heights[Math.max(0, Math.min(h - 1, pz)) * w + Math.max(0, Math.min(w - 1, px))];
+    const gx = at(x + 1, z) - at(x - 1, z);
+    const gz = at(x, z + 1) - at(x, z - 1);
+    const k = 1 - (gx * 0.5 + gz * 0.5) * 0.035;
+    return Math.max(0.62, Math.min(1.28, k));
+  }
+  function hash(x, y, seed2) {
+    let n = x * 374761393 + y * 668265263 + seed2 * 69069;
+    n = (n ^ n >>> 13) * 1274126177;
+    return ((n ^ n >>> 16) >>> 0) / 4294967296;
+  }
+  function pick(list, r) {
+    return list[Math.floor(r * list.length) % list.length];
+  }
+  function rgb(hex) {
+    return [
+      srgbToLinear((hex >> 16 & 255) / 255),
+      srgbToLinear((hex >> 8 & 255) / 255),
+      srgbToLinear((hex & 255) / 255)
+    ];
+  }
+  function srgbToLinear(c) {
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  function ownerSig(owner) {
+    let a = 0;
+    let b = 0;
+    for (let i = 0; i < owner.length; i += 37) {
+      a = a * 31 + owner[i] | 0;
+      b ^= owner[i] + i;
+    }
+    return `${a}:${b}:${owner.length}`;
+  }
+  function skyTexture() {
+    const c = document.createElement("canvas");
+    c.width = 4;
+    c.height = 256;
+    const ctx = c.getContext("2d");
+    const g = ctx.createLinearGradient(0, 0, 0, 256);
+    g.addColorStop(0, "#7ea9c0");
+    g.addColorStop(0.5, "#b9cfd4");
+    g.addColorStop(1, "#e2dcc6");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 4, 256);
+    const tex = new CanvasTexture(c);
+    tex.colorSpace = SRGBColorSpace;
+    return tex;
+  }
+  function paintGeometry(geo, main, secondary) {
+    const pos = geo.getAttribute("position");
+    const count = pos.count;
+    const colors = new Float32Array(count * 3);
+    const [mr, mg, mb] = rgb(main);
+    const [sr, sg, sb] = rgb(secondary);
+    for (let i = 0; i < count; i++) {
+      const y = pos.getY(i);
+      const useSecondary = y > 1.3 && y < 2.6;
+      colors[i * 3] = useSecondary ? sr : mr;
+      colors[i * 3 + 1] = useSecondary ? sg : mg;
+      colors[i * 3 + 2] = useSecondary ? sb : mb;
+    }
+    geo.setAttribute("color", new BufferAttribute(colors, 3));
+  }
+  function mergeGeos(list) {
+    const geos = list.map((g) => g.toNonIndexed());
+    let total = 0;
+    for (const g of geos) total += g.getAttribute("position").count;
+    const pos = new Float32Array(total * 3);
+    let o = 0;
+    for (const g of geos) {
+      const p = g.getAttribute("position");
+      for (let i = 0; i < p.count; i++) {
+        pos[o++] = p.getX(i);
+        pos[o++] = p.getY(i);
+        pos[o++] = p.getZ(i);
+      }
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }
+  function castleGeometry() {
+    const parts = [];
+    const box = (w, h, d, x, y, z) => {
+      const g = new BoxGeometry(w, h, d);
+      g.translate(x, y, z);
+      return g;
+    };
+    parts.push(box(1.9, 2.6, 1.9, 0, 1.3, 0));
+    const roof = new ConeGeometry(1.45, 1, 4);
+    roof.rotateY(Math.PI / 4);
+    roof.translate(0, 3.1, 0);
+    parts.push(roof);
+    for (const [dx, dz] of [[-1.5, -1.5], [1.5, -1.5], [-1.5, 1.5], [1.5, 1.5]]) {
+      const t = new CylinderGeometry(0.42, 0.48, 2.2, 6);
+      t.translate(dx, 1.1, dz);
+      parts.push(t);
+      const cap = new ConeGeometry(0.6, 0.8, 6);
+      cap.translate(dx, 2.6, dz);
+      parts.push(cap);
+    }
+    parts.push(box(3.9, 0.9, 0.26, 0, 0.45, -1.85));
+    parts.push(box(3.9, 0.9, 0.26, 0, 0.45, 1.85));
+    parts.push(box(0.26, 0.9, 3.9, -1.85, 0.45, 0));
+    parts.push(box(0.26, 0.9, 3.9, 1.85, 0.45, 0));
+    parts.push(box(0.9, 1.2, 0.34, 0, 0.6, 1.85));
+    return mergeGeos(parts);
+  }
+  function farmGeometry() {
+    const parts = [];
+    const house = new BoxGeometry(1, 0.6, 0.8);
+    house.translate(0, 0.3, 0);
+    parts.push(house);
+    const roof = new ConeGeometry(0.78, 0.55, 4);
+    roof.rotateY(Math.PI / 4);
+    roof.translate(0, 0.86, 0);
+    parts.push(roof);
+    for (let i = 0; i < 3; i++) {
+      const row = new BoxGeometry(1.5, 0.1, 0.16);
+      row.translate(0, 0.05, 0.62 + i * 0.26);
+      parts.push(row);
+    }
+    return mergeGeos(parts);
+  }
+  function lumberGeometry() {
+    const parts = [];
+    const shed = new BoxGeometry(0.9, 0.5, 0.7);
+    shed.translate(0, 0.25, 0);
+    parts.push(shed);
+    const roof = new BoxGeometry(1, 0.08, 0.8);
+    roof.translate(0, 0.54, 0);
+    parts.push(roof);
+    for (let i = 0; i < 3; i++) {
+      const log = new CylinderGeometry(0.1, 0.1, 0.7, 6);
+      log.rotateZ(Math.PI / 2);
+      log.translate(0, 0.1, 0.55 + i * 0.2);
+      parts.push(log);
+    }
+    return mergeGeos(parts);
+  }
+  function mineGeometry() {
+    const parts = [];
+    const hut = new BoxGeometry(0.8, 0.45, 0.7);
+    hut.translate(0, 0.22, 0);
+    parts.push(hut);
+    const post = new BoxGeometry(0.1, 0.9, 0.1);
+    const a = post.clone();
+    a.translate(-0.22, 0.45, 0.1);
+    parts.push(a);
+    const b = post.clone();
+    b.translate(0.22, 0.45, 0.1);
+    parts.push(b);
+    const cross = new BoxGeometry(0.6, 0.1, 0.1);
+    cross.translate(0, 0.85, 0.1);
+    parts.push(cross);
+    return mergeGeos(parts);
+  }
+  function marketGeometry() {
+    const parts = [];
+    const base = new BoxGeometry(1.3, 0.12, 1.1);
+    base.translate(0, 0.06, 0);
+    parts.push(base);
+    for (let i = 0; i < 3; i++) {
+      const stall = new BoxGeometry(0.32, 0.3, 0.3);
+      stall.translate(-0.4 + i * 0.4, 0.26, 0);
+      parts.push(stall);
+      const canopy = new ConeGeometry(0.3, 0.25, 4);
+      canopy.translate(-0.4 + i * 0.4, 0.54, 0);
+      parts.push(canopy);
+    }
+    return mergeGeos(parts);
+  }
+
   // src/main.ts
-  var SAVE_KEY = "realms.look.v1";
-  var canvas = document.getElementById("map");
   var params = new URLSearchParams(location.search);
-  var seed = Number(params.get("seed") ?? localStorage.getItem("realms.look.seed") ?? 7) || 7;
-  async function loadWorld() {
-    if (params.get("seed")) return generateWorld(seed);
-    try {
-      const res = await fetch("preset/reference_map.json");
-      if (res.ok) {
-        const raw = await res.json();
-        return loadPresetWorld(raw);
-      }
-    } catch {
-    }
-    return generateWorld(seed);
-  }
-  var easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-  async function boot() {
-    const world = await loadWorld();
-    const resumedRaw = params.get("fresh") ? null : localStorage.getItem(SAVE_KEY);
-    const game = (resumedRaw ? Game.load(world, resumedRaw) : null) ?? new Game(world);
-    if (params.get("fresh")) localStorage.removeItem(SAVE_KEY);
-    const look = new Look(canvas, game);
-    const cam = new Camera2();
-    const selected = { host: null, city: null };
-    let hover = -1;
-    let speed = 1;
-    const vw = () => window.innerWidth;
-    const vh = () => window.innerHeight;
-    const fitMap = () => {
-      cam.resize(vw(), vh());
-      cam.fit(world);
-    };
-    const goHome = (scale = 9.5) => {
-      const c = game.citiesOf(0)[0] ?? game.state.cities[0];
-      if (c) {
-        cam.resize(vw(), vh());
-        cam.centre(c.tile, scale, world);
-      }
-    };
+  var seed = Number(params.get("seed") ?? localStorage.getItem("realms.seed") ?? 7) || 7;
+  var SIZE = Number(params.get("size") ?? 512) || 512;
+  var canvas = document.getElementById("map");
+  var world = generateWorld(seed, SIZE, SIZE, Math.round(SIZE * SIZE / 420));
+  var game = new Game(world);
+  var scene = new Scene2(canvas, game);
+  var cam = new Camera2();
+  var selectedCastle = null;
+  var selectedPlot = null;
+  var speed = 1;
+  var vw = () => window.innerWidth;
+  var vh = () => window.innerHeight;
+  var fitMap = () => {
     cam.resize(vw(), vh());
-    fitMap();
-    cam.snap();
-    window.__realms = { game, view: look, cam, world };
-    let dragging = false;
-    let dragX = 0;
-    let dragY = 0;
-    let moved = 0;
-    canvas.addEventListener("pointerdown", (e) => {
-      if (e.button === 2) return;
-      dragging = true;
-      moved = 0;
-      dragX = e.clientX;
-      dragY = e.clientY;
-      canvas.setPointerCapture(e.pointerId);
-    });
-    canvas.addEventListener("pointermove", (e) => {
-      hover = look.tileAtScreen(e.clientX, e.clientY);
-      if (!dragging) return;
-      const dx = e.clientX - dragX;
-      const dy = e.clientY - dragY;
-      dragX = e.clientX;
-      dragY = e.clientY;
-      moved += Math.abs(dx) + Math.abs(dy);
-      cam.panBy(dx, dy, world);
-      cam.cur.x = cam.goal.x;
-      cam.cur.y = cam.goal.y;
-    });
-    canvas.addEventListener("pointerup", (e) => {
-      if (dragging && moved < 6) selectTile(look.tileAtScreen(e.clientX, e.clientY));
-      dragging = false;
-    });
-    canvas.addEventListener("contextmenu", (e) => {
+    cam.fit(world);
+  };
+  var goHome = (scale = 9) => {
+    const mine = game.castlesOf(game.me);
+    const c = mine[0] ?? game.castles[0];
+    if (!c) return;
+    cam.resize(vw(), vh());
+    cam.centre(c.tile, scale, world);
+    selectedCastle = c.id;
+    selectedPlot = null;
+  };
+  cam.resize(vw(), vh());
+  goHome(9);
+  cam.snap();
+  window.__realms = { world, game, scene, cam };
+  var dragging = false;
+  var dragX = 0;
+  var dragY = 0;
+  var moved = 0;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button === 2) return;
+    dragging = true;
+    moved = 0;
+    dragX = e.clientX;
+    dragY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - dragX;
+    const dy = e.clientY - dragY;
+    dragX = e.clientX;
+    dragY = e.clientY;
+    moved += Math.abs(dx) + Math.abs(dy);
+    cam.panBy(dx, dy, world);
+    cam.cur.x = cam.goal.x;
+    cam.cur.y = cam.goal.y;
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    if (dragging && moved < 6) pickAt(e.clientX, e.clientY);
+    dragging = false;
+  });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener(
+    "wheel",
+    (e) => {
       e.preventDefault();
-      orderMarch(look.tileAtScreen(e.clientX, e.clientY));
-    });
-    canvas.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        const factor = Math.pow(1.0016, -e.deltaY);
-        cam.zoomAt(e.clientX, e.clientY, factor);
-        cam.clampTo(world);
-      },
-      { passive: false }
-    );
-    window.addEventListener("resize", () => {
-      cam.resize(vw(), vh());
-      cam.goal && cam.fit(world);
-      cam.snap();
-    });
-    function selectTile(tile) {
-      if (tile < 0) {
-        selected.host = null;
-        selected.city = null;
+      cam.zoomAt(e.clientX, e.clientY, Math.pow(1.0017, -e.deltaY));
+      cam.clampTo(world);
+    },
+    { passive: false }
+  );
+  window.addEventListener("resize", () => {
+    cam.resize(vw(), vh());
+    cam.clampTo(world);
+  });
+  function pickAt(px, py) {
+    const tile = scene.tileAtScreen(px, py, cam.cur);
+    if (tile < 0) {
+      selectedCastle = null;
+      selectedPlot = null;
+      return;
+    }
+    for (const c of game.castles) {
+      const idx = c.plots.findIndex((p) => p.tile === tile);
+      if (idx >= 0) {
+        selectedCastle = c.id;
+        selectedPlot = { castle: c.id, index: idx };
         return;
       }
-      const host = game.state.hosts.find((h) => h.tile === tile);
-      if (host) {
-        selected.host = host.id;
-        selected.city = null;
-        return;
-      }
-      const city = game.cityAt(tile);
-      if (city) {
-        selected.city = city.id;
-        selected.host = null;
-        return;
-      }
-      selected.host = null;
-      selected.city = null;
     }
-    function orderMarch(tile) {
-      if (selected.host === null || tile < 0) return;
-      const nearest = game.state.cities.slice().sort((a, b) => game.tileDistance(a.tile, tile) - game.tileDistance(b.tile, tile))[0];
-      if (!nearest) return;
-      flash(game.march(selected.host, nearest.id));
+    const castle = game.castleAt(tile) ?? game.castleById(world.owner[tile]);
+    if (castle) {
+      selectedCastle = castle.id;
+      selectedPlot = null;
+      return;
     }
-    const el = (id) => document.getElementById(id);
-    const statsEl = el("stats");
-    const logEl = el("log");
-    const panelEl = el("panel");
-    const flashEl = el("flash");
-    let flashTimer = 0;
-    function flash(text) {
-      flashEl.textContent = text;
-      flashEl.classList.add("show");
-      flashTimer = 2.2;
-    }
-    function seasonName() {
-      const s = game.season();
-      if (s > 0.75) return "Winter";
-      if (s > 0.5) return "Harvest";
-      if (s > 0.25) return "Summer";
-      return "Spring";
-    }
-    function renderHud() {
-      const st = game.stats(0);
-      statsEl.innerHTML = `
-      <div class="stat"><span>Grain</span><b>${st.grain.toLocaleString()}</b></div>
-      <div class="stat"><span>People</span><b>${st.pop.toLocaleString()}</b></div>
-      <div class="stat"><span>Men</span><b>${st.men}</b></div>
-      <div class="stat"><span>Holdings</span><b>${st.cities}/${game.state.cities.length}</b></div>
-      <div class="stat"><span>Season</span><b class="${game.isWinter() ? "cold" : ""}">${seasonName()}</b></div>
-      <div class="stat"><span>Supply</span><b>${Math.round(st.supply * 100)}%</b></div>
-    `;
-      if (selected.city !== null) {
-        const c = game.cityById(selected.city);
-        if (!c) return;
-        const owner = c.owner >= 0 ? game.state.players[c.owner].name : "unclaimed";
-        panelEl.innerHTML = `
-        <h2>${c.name}</h2>
-        <p class="sub">${owner}${c.owner === 0 ? " \xB7 yours" : ""}</p>
-        <dl>
-          <div><dt>People</dt><dd>${Math.round(c.pop)}</dd></div>
-          <div><dt>Barn</dt><dd>${Math.round(c.stock).toLocaleString()} / ${c.barnCap.toLocaleString()}</dd></div>
-          <div><dt>Morale</dt><dd>${Math.round(c.morale * 100)}%</dd></div>
-          <div><dt>Tier</dt><dd>${c.tier}</dd></div>
-        </dl>
-        ${c.owner === 0 ? `<button id="muster">Muster men</button>` : ""}
-      `;
-        el("muster")?.addEventListener("click", () => flash(game.muster(c.id)));
-      } else if (selected.host !== null) {
-        const h = game.hostById(selected.host);
-        if (!h) return;
-        const owner = game.state.players[h.owner]?.name ?? "unknown";
-        panelEl.innerHTML = `
-        <h2>Host of ${h.men} men</h2>
-        <p class="sub">${owner}${h.owner === 0 ? " \xB7 yours" : ""}</p>
-        <dl>
-          <div><dt>Supply</dt><dd>${Math.round(h.supply * 100)}%</dd></div>
-          <div><dt>Morale</dt><dd>${Math.round(h.morale * 100)}%</dd></div>
-          <div><dt>Orders</dt><dd>${h.besieging !== null ? "besieging" : h.path.length ? "marching" : "holding"}</dd></div>
-        </dl>
-        <p class="hint">Right-click a hold to march on it.</p>
-      `;
-      } else {
-        panelEl.innerHTML = `<h2>Nothing selected</h2><p class="hint">Click a keep to muster, a host to give orders. Drag to pan, scroll to zoom, F for the whole map.</p>`;
-      }
-      logEl.innerHTML = game.state.log.slice(0, 7).map((l) => `<div>${l}</div>`).join("");
-    }
-    el("speed").addEventListener("click", () => {
-      speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
-      el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
-    });
-    el("mapbtn").addEventListener("click", fitMap);
-    el("homebtn").addEventListener("click", () => goHome());
-    el("fresh").addEventListener("click", () => {
-      const next = Math.floor(Math.random() * 9e3) + 100;
-      localStorage.setItem("realms.look.seed", String(next));
-      localStorage.removeItem(SAVE_KEY);
-      location.href = `?seed=${next}&fresh=1`;
-    });
-    window.addEventListener("keydown", (e) => {
-      const k = e.key.toLowerCase();
-      if (k === "f") fitMap();
-      if (k === "h") goHome();
-      if (k === "=" || k === "+") cam.zoomCentre(1.3, world);
-      if (k === "-" || k === "_") cam.zoomCentre(1 / 1.3, world);
-      if (k === " ") {
-        speed = speed === 0 ? 1 : 0;
-        el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
-        e.preventDefault();
-      }
-    });
-    let last = performance.now();
-    let saveTimer = 0;
-    let hudTimer = 0;
-    function frame(now) {
-      const dt = Math.min(0.25, (now - last) / 1e3);
-      last = now;
-      cam.ease(dt);
-      if (speed > 0) {
-        let left = dt * speed;
-        while (left > 0) {
-          const step = Math.min(0.1, left);
-          game.tick(step);
-          left -= step;
-        }
-      }
-      look.draw(cam.cur, hover, selected, Math.min(2, window.devicePixelRatio || 1));
-      hudTimer -= dt;
-      if (hudTimer <= 0) {
-        hudTimer = 0.25;
-        renderHud();
-      }
-      if (flashTimer > 0) {
-        flashTimer -= dt;
-        if (flashTimer <= 0) flashEl.classList.remove("show");
-      }
-      saveTimer -= dt;
-      if (saveTimer <= 0) {
-        saveTimer = 6;
-        try {
-          localStorage.setItem(SAVE_KEY, game.save());
-        } catch {
-        }
-      }
-      requestAnimationFrame(frame);
-    }
-    renderHud();
-    requestAnimationFrame(frame);
-    void easeInOut;
-    void CANT;
+    selectedCastle = null;
+    selectedPlot = null;
   }
-  boot();
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "f") fitMap();
+    if (k === "h") goHome();
+    if (k === "=" || k === "+") cam.zoomCentre(1.3, world);
+    if (k === "-" || k === "_") cam.zoomCentre(1 / 1.3, world);
+    if (k === " ") {
+      speed = speed === 0 ? 1 : 0;
+      document.getElementById("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
+      e.preventDefault();
+    }
+  });
+  var el = (id) => document.getElementById(id);
+  var statsEl = el("stats");
+  var panelEl = el("panel");
+  var logEl = el("log");
+  var flashEl = el("flash");
+  var flashTimer = 0;
+  function flash(text) {
+    flashEl.textContent = text;
+    flashEl.classList.add("show");
+    flashTimer = 2.4;
+  }
+  function money(n) {
+    return Math.floor(n).toLocaleString();
+  }
+  function renderHud() {
+    const st = game.stats(game.me);
+    const inc = st.income;
+    statsEl.innerHTML = `
+    <div class="stat"><span>Grain</span><b>${money(st.purse.grain)}</b><i>+${inc.grain}/s</i></div>
+    <div class="stat"><span>Timber</span><b>${money(st.purse.timber)}</b><i>+${inc.timber}/s</i></div>
+    <div class="stat"><span>Iron</span><b>${money(st.purse.iron)}</b><i>+${inc.iron}/s</i></div>
+    <div class="stat"><span>Gold</span><b>${money(st.purse.gold)}</b><i>+${inc.gold}/s</i></div>
+    <div class="stat"><span>Castles</span><b>${st.castles}</b><i>${st.levels} plot levels</i></div>
+  `;
+    const castle = selectedCastle !== null ? game.castleById(selectedCastle) : void 0;
+    if (castle) {
+      const owner = game.realmOf(castle.owner);
+      const mine = castle.owner === game.me;
+      const cCost = game.castleCost(castle);
+      const plotRows = castle.plots.map((p, i) => {
+        const rule = PLOT_RULES[p.kind];
+        const cost = game.plotCost(p);
+        const selected = selectedPlot && selectedPlot.castle === castle.id && selectedPlot.index === i;
+        const canAfford = st.purse.grain >= cost.grain && st.purse.timber >= cost.timber && st.purse.iron >= cost.iron && st.purse.gold >= cost.gold;
+        return `<button class="plot ${selected ? "sel" : ""}" data-plot="${i}" ${!mine || p.level >= 5 ? "disabled" : ""}>
+          <span class="kind">${rule.label}</span>
+          <span class="lvl">${p.level > 0 ? "Lv " + p.level : "empty"}</span>
+          <span class="yield">${p.level > 0 ? "+" + rule.yield * p.level + " " + rule.resource + "/s" : "no yield"}</span>
+          <span class="cost ${canAfford ? "" : "short"}">${p.level < 5 ? upgradeShort(p) : "max"}</span>
+        </button>`;
+      }).join("");
+      panelEl.innerHTML = `
+      <h2>${castle.name}</h2>
+      <p class="sub">${owner ? owner.name : "unclaimed"} \xB7 castle level ${castle.level}${mine ? " \xB7 yours" : ""}</p>
+      <div class="plots">${plotRows || "<p class='hint'>No buildable ground around this castle.</p>"}</div>
+      ${mine && castle.level < 5 ? `<button id="upcastle" class="wide">Raise castle to level ${castle.level + 1}
+        <em>${money(cCost.grain)} grain \xB7 ${money(cCost.timber)} timber \xB7 ${money(cCost.iron)} iron \xB7 ${money(cCost.gold)} gold</em></button>` : ""}
+    `;
+      panelEl.querySelectorAll("[data-plot]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const idx = Number(btn.dataset.plot);
+          selectedPlot = { castle: castle.id, index: idx };
+          const plot = castle.plots[idx];
+          if (mine) flash(game.upgradePlot(plot, castle, game.me));
+          renderHud();
+        });
+      });
+      el("upcastle")?.addEventListener("click", () => {
+        flash(game.upgradeCastle(castle, game.me));
+        renderHud();
+      });
+    } else {
+      panelEl.innerHTML = `<h2>No castle selected</h2>
+      <p class="hint">Click a castle to see the land around it. Each castle holds eight plots, and the plots are what you build.</p>`;
+    }
+    logEl.innerHTML = game.log.slice(0, 5).map((l) => `<div>${l}</div>`).join("");
+  }
+  function upgradeShort(p) {
+    const c = game.plotCost(p);
+    return `${c.grain}g \xB7 ${c.timber}t \xB7 ${c.iron}i \xB7 ${c.gold}m`;
+  }
+  el("speed").addEventListener("click", () => {
+    speed = speed === 1 ? 2 : speed === 2 ? 0 : 1;
+    el("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
+  });
+  el("mapbtn").addEventListener("click", fitMap);
+  el("homebtn").addEventListener("click", () => goHome());
+  el("fresh").addEventListener("click", () => {
+    const next = Math.floor(Math.random() * 9e3) + 100;
+    localStorage.setItem("realms.seed", String(next));
+    location.href = `?seed=${next}`;
+  });
+  var last = performance.now();
+  var hudTimer = 0;
+  function frame(now) {
+    const dt = Math.min(0.25, (now - last) / 1e3);
+    last = now;
+    cam.ease(dt);
+    if (speed > 0) {
+      let left = dt * speed;
+      while (left > 0) {
+        const step = Math.min(0.1, left);
+        game.tick(step);
+        left -= step;
+      }
+    }
+    scene.setCam(cam.cur);
+    scene.draw(cam.cur, { castle: selectedCastle, plot: selectedPlot }, -1, Math.min(2, window.devicePixelRatio || 1));
+    hudTimer -= dt;
+    if (hudTimer <= 0) {
+      hudTimer = 0.3;
+      renderHud();
+    }
+    if (flashTimer > 0) {
+      flashTimer -= dt;
+      if (flashTimer <= 0) flashEl.classList.remove("show");
+    }
+    requestAnimationFrame(frame);
+  }
+  renderHud();
+  requestAnimationFrame(frame);
 })();
 /*! Bundled license information:
 
