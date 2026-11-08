@@ -3317,7 +3317,8 @@
   };
 
   // src/net.ts
-  var ENDPOINT = "https://lyra-01a6009e.base44.app/functions/realmsRelay";
+  var LOCAL_RELAY = globalThis.__REALMS_RELAY ?? "";
+  var ENDPOINT = LOCAL_RELAY ? `${LOCAL_RELAY.replace(/\/$/, "")}/functions/realmsRelay` : "https://lyra-01a6009e.base44.app/functions/realmsRelay";
   async function call(payload) {
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -3331,7 +3332,7 @@
   var pollIntents = (code, since) => call({ action: "poll", code, since });
   var postSnapshot = (code, tick, state, prune = false) => call({ action: "snap", code, tick, state, prune });
   var getSnapshot = (code) => call({ action: "view", code });
-  var LOBBY = "https://lyra-01a6009e.base44.app/functions/realmsLobby";
+  var LOBBY = LOCAL_RELAY ? `${LOCAL_RELAY.replace(/\/$/, "")}/functions/realmsLobby` : "https://lyra-01a6009e.base44.app/functions/realmsLobby";
   async function lobbyCall(payload) {
     const res = await fetch(LOBBY, {
       method: "POST",
@@ -3918,6 +3919,11 @@
     if (tile < 0) return;
     const me = game.players[game.human];
     if (game.phase === "spawn") {
+      if (isGuest) {
+        void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "start", tile });
+        spawnOverlay.classList.add("hidden");
+        return;
+      }
       if (game.chooseStart(tile)) {
         spawnOverlay.classList.add("hidden");
         const [x, y] = [tile % game.world.w, tile / game.world.w | 0];
