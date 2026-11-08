@@ -23068,6 +23068,7 @@
       this.scene.add(this.hoverRing);
       this.scene.add(this.selectRing);
       this.buildWorld();
+      window.__view = this;
     }
     /* ---------------------------------------------------------------- */
     /* World construction                                               */
