@@ -3317,7 +3317,8 @@
   };
 
   // src/net.ts
-  var ENDPOINT = "https://lyra-01a6009e.base44.app/functions/realmsRelay";
+  var LOCAL_RELAY = globalThis.__REALMS_RELAY ?? "";
+  var ENDPOINT = LOCAL_RELAY ? `${LOCAL_RELAY.replace(/\/$/, "")}/functions/realmsRelay` : "https://lyra-01a6009e.base44.app/functions/realmsRelay";
   async function call(payload) {
     const res = await fetch(ENDPOINT, {
       method: "POST",
@@ -3331,7 +3332,7 @@
   var pollIntents = (code, since) => call({ action: "poll", code, since });
   var postSnapshot = (code, tick, state, prune = false) => call({ action: "snap", code, tick, state, prune });
   var getSnapshot = (code) => call({ action: "view", code });
-  var LOBBY = "https://lyra-01a6009e.base44.app/functions/realmsLobby";
+  var LOBBY = LOCAL_RELAY ? `${LOCAL_RELAY.replace(/\/$/, "")}/functions/realmsLobby` : "https://lyra-01a6009e.base44.app/functions/realmsLobby";
   async function lobbyCall(payload) {
     const res = await fetch(LOBBY, {
       method: "POST",
@@ -3913,11 +3914,136 @@
   }
   pullBtn.addEventListener("click", () => pullBack());
   warBtn.addEventListener("click", () => breakPeace());
+  var TEST_MODE = new URLSearchParams(location.search).has("test");
+  function testBench() {
+    if (!TEST_MODE) return;
+    const wrap = document.createElement("div");
+    wrap.id = "test-bench";
+    const title = document.createElement("div");
+    title.className = "test-title";
+    title.textContent = "TEST BENCH";
+    wrap.append(title);
+    const readout = document.createElement("div");
+    readout.className = "test-readout";
+    wrap.append(readout);
+    const row = document.createElement("div");
+    row.className = "test-row";
+    wrap.append(row);
+    const btn = (label, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.addEventListener("click", () => {
+        if (isGuest) {
+          log("Test bench drives the host only: reload without ?room= to test solo.");
+          return;
+        }
+        fn();
+        refreshHud();
+        paint();
+      });
+      row.append(b);
+      return b;
+    };
+    const mine = () => game.players[game.human];
+    btn("Drain my stores", () => {
+      const me = mine();
+      for (const st of game.structs.values()) {
+        if (st.owner === me.id) game.cityStock.set(st.tile, 0);
+      }
+      log("Test bench: your city stores are empty. Watch the nerve bar.");
+    });
+    btn("Besiege my city", () => {
+      const me = mine();
+      const city = [...game.structs.values()].find((st) => st.owner === me.id && st.kind === "castle");
+      if (!city) return log("No castle to besiege.");
+      const rival = game.players.find((p) => p.id !== me.id && p.alive);
+      if (!rival) return log("No rival left to do the besieging.");
+      const spot = game.neighbors4(city.tile).find((t) => game.isLand(t));
+      if (spot === void 0) return log("Nowhere to stand outside the walls.");
+      game.cityStock.set(city.tile, 0);
+      game.armies.push({
+        id: 9e3 + game.armies.length,
+        owner: rival.id,
+        home: spot,
+        troops: 600,
+        tile: spot,
+        target: city.tile,
+        progress: 0,
+        taken: 0,
+        cutOff: false,
+        speed: 1,
+        supplyTimer: 0,
+        supply: 1,
+        morale: 1,
+        routed: false,
+        rallyTimer: 0,
+        contactTimer: 0,
+        tier: 2,
+        uid: 99e3 + game.armies.length,
+        rations: 4e3,
+        support: 0,
+        threat: 0,
+        flankSides: 0,
+        pulling: false,
+        regrouping: false,
+        holding: true,
+        holdTimer: 0
+      });
+      log(`${rival.name} has a host outside your walls and your stores are empty. Nerve will fall.`);
+    });
+    btn("Starve selected host", () => {
+      const host = game.armies.find((a) => a.owner === mine().id && (a.uid ?? a.home) === selectedHome);
+      if (!host) return log("Pick one of your hosts first.");
+      host.rations = 0;
+      log("That host has no rations. Hunger will take its nerve, then its men.");
+    });
+    btn("Send a cart", () => {
+      const host = game.armies.find((a) => a.owner === mine().id && (a.uid ?? a.home) === selectedHome);
+      if (!host) return log("Pick one of your hosts first.");
+      const sent = game.dispatchConvoy(mine().id, host);
+      log(sent ? "A cart is on the road with rations." : "No city had stores to load a cart.");
+    });
+    btn("One minute", () => {
+      for (let i = 0; i < 600; i++) game.tick(0.1);
+      log("Test bench: pushed the world a minute forward.");
+    });
+    btn("Famine numbers", () => {
+      const me = mine();
+      for (const city of game.citiesOf(me.id)) {
+        log(`${city.kind} store ${Math.round(game.cityStock.get(city.tile) ?? 0)} of ${game.stockCap(city.tile, me.id)}, nerve ${(game.cityMorale.get(city.tile) ?? 1) * 100 | 0}%`);
+      }
+      for (const a of game.armies.filter((x) => x.owner === me.id)) {
+        log(`host ${Math.round(a.troops)} men, rations ${Number.isFinite(a.rations) ? Math.round(a.rations) : "fed"}, morale ${a.morale * 100 | 0}%`);
+      }
+      log(`carts on the road: ${game.convoys.length}`);
+    });
+    const paint = () => {
+      const me = mine();
+      if (!me || game.phase !== "playing") {
+        readout.textContent = "start a match to test";
+        return;
+      }
+      const cities = game.citiesOf(me.id);
+      const stock = cities.map((c) => Math.round(game.cityStock.get(c.tile) ?? 0));
+      const nerve = cities.map((c) => (game.cityMorale.get(c.tile) ?? 1).toFixed(2));
+      const hosts = game.armies.filter((a) => a.owner === me.id);
+      const feeding = hosts.filter((a) => Number.isFinite(a.rations) && a.rations > 0).length;
+      readout.textContent = `stores [${stock.join(", ")}] \xB7 nerve [${nerve.join(", ")}] \xB7 hosts ${hosts.length} (${feeding} fed) \xB7 carts ${game.convoys.length} \xB7 grain ${Math.round(me.grain)} \xB7 ${game.era} yr ${game.year}`;
+    };
+    document.body.append(wrap);
+    paint();
+    window.setInterval(paint, 700);
+  }
   tierBtn.addEventListener("click", () => tierUp());
   function click(tile) {
     if (tile < 0) return;
     const me = game.players[game.human];
     if (game.phase === "spawn") {
+      if (isGuest) {
+        void postIntent(roomCode, localPlayer, Math.round(game.time * 10), { kind: "start", tile });
+        spawnOverlay.classList.add("hidden");
+        return;
+      }
       if (game.chooseStart(tile)) {
         spawnOverlay.classList.add("hidden");
         const [x, y] = [tile % game.world.w, tile / game.world.w | 0];
@@ -4335,6 +4461,7 @@
     }, 250);
     window.setInterval(watchSync, 2e3);
     log(isHost ? `Match ${roomCode}. ${game.players.length - 1} rival lords are loose.` : `Joined match ${roomCode}.`);
+    testBench();
   }
   function showIdentity(f) {
     const host = document.getElementById("you");

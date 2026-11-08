@@ -575,3 +575,63 @@ button.primary:hover {
     bottom: clamp(14px, 1.6vh, 30px);
   }
 }
+
+/* Test bench: only present when ?test=1 is in the address. */
+#test-bench {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(520px, 94vw);
+  padding: 9px 11px;
+  background: rgba(14, 12, 8, 0.9);
+  border: 1px solid rgba(200, 176, 120, 0.28);
+  border-radius: 8px;
+  color: #efe4c8;
+  font-family: var(--sans, system-ui, sans-serif);
+  font-size: 12px;
+  backdrop-filter: blur(3px);
+}
+
+#test-bench .test-title {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #d8b978;
+}
+
+#test-bench .test-readout {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: #cfd8c6;
+  line-height: 1.4;
+}
+
+#test-bench .test-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#test-bench button {
+  padding: 5px 9px;
+  font-size: 11px;
+  color: #f4ead2;
+  background: rgba(58, 48, 30, 0.9);
+  border: 1px solid rgba(200, 176, 120, 0.35);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#test-bench button:hover {
+  background: rgba(92, 74, 40, 0.95);
+}
+
+@media (max-width: 900px), (max-height: 620px) {
+  #test-bench {
+    max-width: 92vw;
+    font-size: 11px;
+  }
+}
