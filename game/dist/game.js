@@ -162,7 +162,9 @@
     "market",
     "tower",
     "siege",
-    "camp"
+    "camp",
+    // Appended, never inserted: STRUCT_ORDER is the index order used by snapshots.
+    "barn"
   ];
   var CLAIM_REACH = 26;
   var NODE_RADIUS = 34;
@@ -177,7 +179,9 @@
     market: { grain: 25, timber: 55, ore: 0, gold: 20 },
     tower: { grain: 0, timber: 55, ore: 25, gold: 30 },
     siege: { grain: 35, timber: 65, ore: 70, gold: 40 },
-    camp: { grain: 20, timber: 60, ore: 30, gold: 40 }
+    camp: { grain: 20, timber: 60, ore: 30, gold: 40 },
+    // A barn is where a city keeps what it eats. Two thousand rations each.
+    barn: { grain: 0, timber: 60, ore: 10, gold: 20 }
   };
   var STRUCTURE_LABEL = {
     castle: "Castle",
@@ -188,7 +192,8 @@
     tower: "Watchtower",
     siege: "Siege Camp",
     camp: "War Camp",
-    bridge: "Bridge"
+    bridge: "Bridge",
+    barn: "Barn"
   };
   var ARMY_CAP = (level) => 50 * (level * level + 1);
   var YIELD = {
@@ -217,6 +222,17 @@
   var YEAR_SECONDS = 600;
   var PEACE_YEARS = 3;
   var MIDDLE_MARK = 1.15;
+  var RATION_PER_MAN = 5e-3;
+  var BASE_STOCK = 2500;
+  var STOCK_PER_BARN = 2e3;
+  var STOCK_CAP = 12e3;
+  var CITY_POP = 150;
+  var POP_RATION = 0.02;
+  var STOCK_FILL_RATE = 12;
+  var CONVOY_CAP = 400;
+  var CONVOY_STEP = 1.2;
+  var SIEGE_MORALE_DRAIN = 0.05;
+  var SIEGE_MORALE_RECOVER = 0.02;
   var TIER_POWER = [1, 1, 1.35, 1.8];
   var TIER_COST_SCALE = 2.2;
   function tierUpCost(tier) {
@@ -298,6 +314,15 @@
       this.time = 0;
       this.phase = "spawn";
       this.winner = -1;
+      /** Convoys on the road, by owner. */
+      this.convoys = [];
+      /** Rations held in each city, by city tile. */
+      this.cityStock = /* @__PURE__ */ new Map();
+      /**
+       * A city's nerve, 0..1. Separate from any host: a city under siege that runs
+       * out of food cracks, and at zero its garrison goes over to the besieger.
+       */
+      this.cityMorale = /* @__PURE__ */ new Map();
       /** Rough tally of what the AI lords spend their turns on. Diagnostics only. */
       this.botDebug = {};
       /** Peace while realms build their roads, war once the middle is contested. */
@@ -313,6 +338,9 @@
       this.seats = [];
       this.claimNodes = [];
       this.nextArmyId = 1;
+      this.requestTimer = 0;
+      this.nextConvoyId = 1;
+      this.nextArmyUid = 1;
       /* ------------------------------------------------------------------ */
       /* Tick                                                                */
       /* ------------------------------------------------------------------ */
@@ -446,7 +474,7 @@
       for (const a of this.armies) if (a.owner === p.id) soldiers += a.troops;
       p.soldiers = soldiers;
       p.grainProd = grain;
-      p.rates = { grain: grain - soldiers * UPKEEP_PER_TROOP, timber, ore, gold };
+      p.rates = { grain, timber, ore, gold };
     }
     income(p) {
       return p.rates.gold;
@@ -894,6 +922,8 @@
           rallyTimer: 0,
           contactTimer: 0,
           tier: 1,
+          uid: this.nextArmyUid++,
+          rations: cap * RATION_PER_MAN * 150,
           support: 0,
           threat: 0,
           flankSides: 0,
@@ -1245,13 +1275,271 @@
         a.troops += take;
         p.troops -= take;
       }
-      a.morale = Math.min(1, a.morale + MORALE_RALLY * 1.5 * dt);
+      let rations = this.rationsOf(a);
+      const available = this.cityStock.get(a.tile) ?? 0;
+      if (Number.isFinite(rations) && rations <= 0 && available > 20) {
+        const draw = Math.min(available - 20, Math.max(60, a.troops * RATION_PER_MAN * 60), 200 * dt);
+        a.rations = rations + draw;
+        this.cityStock.set(a.tile, available - draw);
+        rations = this.rationsOf(a);
+      }
+      if (!Number.isFinite(rations) || rations > a.troops * RATION_PER_MAN * 30) {
+        a.morale = Math.min(1, a.morale + MORALE_RALLY * 1.5 * dt);
+      }
       a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
       a.contactTimer = 0;
       if (a.routed && a.troops > 25) {
         a.routed = false;
         a.rallyTimer = 0;
       }
+    }
+    /** Rations a host has, treating an untracked host as fed. */
+    rationsOf(a) {
+      return Number.isFinite(a.rations) ? a.rations : Infinity;
+    }
+    /** How much food a city can hold: its barns within reach, capped. */
+    stockCap(tile, owner) {
+      let barns = 0;
+      for (const st of this.structs.values()) {
+        if (st.owner !== owner || st.kind !== "barn") continue;
+        if (this.tileDistance(st.tile, tile) <= 3) barns++;
+      }
+      return Math.min(STOCK_CAP, BASE_STOCK + STOCK_PER_BARN * barns);
+    }
+    /** Every city this realm holds: castles and markets are where food lives. */
+    citiesOf(owner) {
+      const out = [];
+      for (const st of this.structs.values()) {
+        if (st.owner === owner && (st.kind === "castle" || st.kind === "market")) out.push(st);
+      }
+      return out;
+    }
+    /**
+     * A city's food store, filled from the realm's granary and eaten by its people.
+     *
+     * The realm still earns grain; what changes is that food in a city is a finite
+     * pile that can be starved, rather than a number nobody can interrupt.
+     */
+    cityStockTick(p, dt) {
+      const cities = this.citiesOf(p.id);
+      if (!cities.length) {
+        for (const [tile] of this.cityStock) {
+          const st = this.structs.get(tile);
+          if (!st || st.owner === p.id) this.cityStock.delete(tile);
+        }
+        return;
+      }
+      for (const city of cities) {
+        const cap = this.stockCap(city.tile, p.id);
+        const popEat = (CITY_POP + city.level * 75) * POP_RATION;
+        let stock = this.cityStock.get(city.tile) ?? 0;
+        stock = Math.max(0, stock - popEat * dt);
+        const larder = Math.min(cap, popEat * 180);
+        const spare = (p.grain - 40) * 0.5;
+        if (stock < larder && spare > 0) {
+          const pull = Math.min(STOCK_FILL_RATE * dt, larder - stock, spare);
+          stock += pull;
+          p.grain -= pull;
+        }
+        this.cityStock.set(city.tile, stock);
+        let nerve = this.cityMorale.get(city.tile) ?? 1;
+        if (stock <= 0.5) {
+          nerve = Math.max(0, nerve - SIEGE_MORALE_DRAIN * dt);
+        } else {
+          nerve = Math.min(1, nerve + SIEGE_MORALE_RECOVER * dt);
+        }
+        this.cityMorale.set(city.tile, nerve);
+        if (nerve <= 0) this.cityCracks(city, p);
+      }
+    }
+    /**
+     * Hosts in the field ask for food, and cities answer with a convoy.
+     *
+     * This is deliberately automatic: a player sets the lines up by taking ground
+     * and building barns, and the carts run from there. What the player controls is
+     * whether the road stays open.
+     */
+    supplyRequests(dt) {
+      this.requestTimer -= dt;
+      if (this.requestTimer > 0) return;
+      this.requestTimer = 2.5;
+      for (const p of this.players) {
+        if (!p.alive) continue;
+        for (const a of this.armies) {
+          if (a.owner !== p.id) continue;
+          const rations = this.rationsOf(a);
+          const need = a.troops * RATION_PER_MAN * 90;
+          if (Number.isFinite(rations) && rations > need) continue;
+          if (this.convoys.some((c) => c.owner === p.id && c.to === (a.uid ?? a.home))) continue;
+          this.dispatchConvoy(p.id, a);
+        }
+      }
+    }
+    /**
+     * A starved host that has lost its nerve goes over to somebody else.
+     *
+     * The men are not destroyed: they enlist with the nearest rival holding ground,
+     * which is what makes starving an army better than fighting it.
+     */
+    hostDefects(a) {
+      const from = this.players[a.owner];
+      let taker;
+      let best = 20;
+      for (const other of this.players) {
+        if (!other.alive || other.id === a.owner) continue;
+        let near = Infinity;
+        for (const t of other.tiles) {
+          const d = this.tileDistance(t, a.tile);
+          if (d < near) near = d;
+          if (near < best) break;
+        }
+        if (near < best) {
+          best = near;
+          taker = other;
+        }
+      }
+      if (taker) {
+        taker.troops += a.troops;
+        if (!from.isBot) this.note(`Your hungry host gave up and went over to ${taker.name}: ${Math.round(a.troops)} men lost.`);
+        else if (!taker.isBot) this.note(`${from.name}'s starving host came over to you: ${Math.round(a.troops)} men.`);
+      } else {
+        if (!from.isBot) this.note(`Your hungry host dispersed: ${Math.round(a.troops)} men simply went home.`);
+      }
+    }
+    /** A city whose nerve is gone falls to whoever is besieging it. */
+    cityCracks(city, p) {
+      let besieger;
+      let best = 7;
+      for (const a of this.armies) {
+        if (a.owner === p.id) continue;
+        const d = this.tileDistance(a.tile, city.tile);
+        if (d < best) {
+          best = d;
+          besieger = a;
+        }
+      }
+      if (!besieger) {
+        this.cityMorale.set(city.tile, 0);
+        return;
+      }
+      const taker = this.players[besieger.owner];
+      const old = p;
+      city.owner = besieger.owner;
+      this.cityStock.set(city.tile, 0);
+      this.cityMorale.set(city.tile, 0.5);
+      for (const t of this.neighbors4(city.tile)) {
+        if (this.owners[t] === old.id) this.claim(t, besieger.owner);
+      }
+      for (const a of this.armies) {
+        if (a.owner !== old.id) continue;
+        if (this.tileDistance(a.tile, city.tile) > 2) continue;
+        a.owner = besieger.owner;
+        a.rations = 0;
+      }
+      this.note(`${old.name} lost ${city.kind === "castle" ? "its castle" : "a market"}: the garrison went over to ${taker.name}.`);
+    }
+    /** Rations in the nearest city of a realm. */
+    nearestStockTile(owner, from) {
+      let best = -1;
+      let bestD = Infinity;
+      for (const city of this.citiesOf(owner)) {
+        const d = this.tileDistance(city.tile, from);
+        if (d < bestD && (this.cityStock.get(city.tile) ?? 0) > 20) {
+          bestD = d;
+          best = city.tile;
+        }
+      }
+      return best;
+    }
+    /**
+     * Send rations from a city to a host in the field.
+     *
+     * The food travels: a real convoy on the map that an enemy host can cut. That
+     * is the whole point of the supply war, so nothing is delivered abstractly.
+     */
+    dispatchConvoy(owner, host) {
+      const from = this.nearestStockTile(owner, host.tile);
+      if (from < 0) return false;
+      const stock = this.cityStock.get(from) ?? 0;
+      const load = Math.min(CONVOY_CAP, stock - 20, Math.max(80, host.troops * RATION_PER_MAN * 90));
+      if (load <= 20) return false;
+      this.cityStock.set(from, stock - load);
+      this.convoys.push({
+        id: this.nextConvoyId++,
+        owner,
+        from,
+        to: host.uid ?? host.home,
+        tile: from,
+        rations: load,
+        progress: 0
+      });
+      return true;
+    }
+    /** Convoys move, arrive, and die. */
+    convoyTick(dt) {
+      if (!this.convoys.length) return;
+      const keep = [];
+      for (const c of this.convoys) {
+        const target = this.armies.find((a) => (a.uid ?? a.home) === c.to && a.owner === c.owner);
+        if (!target) {
+          const home = this.citiesOf(c.owner).sort(
+            (x, y) => this.tileDistance(x.tile, c.tile) - this.tileDistance(y.tile, c.tile)
+          )[0];
+          if (!home) continue;
+          c.to = -1;
+          c.tile = this.stepToward(c.tile, home.tile, c.owner) ?? c.tile;
+          if (c.tile === home.tile) this.cityStock.set(home.tile, (this.cityStock.get(home.tile) ?? 0) + c.rations);
+          else keep.push(c);
+          continue;
+        }
+        let ambush;
+        for (const a of this.armies) {
+          if (a.owner === c.owner) continue;
+          if (this.tileDistance(a.tile, c.tile) <= 1 && a.troops > 40) {
+            ambush = a;
+            break;
+          }
+        }
+        if (ambush) {
+          this.note(`A convoy of ${this.players[c.owner].name} was cut: ${Math.round(c.rations)} rations lost.`);
+          for (const a of this.armies) {
+            if (a.owner === c.owner && this.tileDistance(a.tile, c.tile) <= 6) {
+              a.morale = Math.max(0, a.morale - 0.05);
+            }
+          }
+          continue;
+        }
+        c.progress += dt / CONVOY_STEP;
+        while (c.progress >= 1) {
+          c.progress -= 1;
+          const step = this.stepToward(c.tile, target.tile, c.owner);
+          if (step !== null) c.tile = step;
+        }
+        if (this.tileDistance(c.tile, target.tile) <= 1) {
+          target.rations = this.rationsOf(target) + c.rations;
+          if (!this.players[c.owner].isBot) this.note(`${Math.round(c.rations)} rations reached your host.`);
+          continue;
+        }
+        keep.push(c);
+      }
+      this.convoys = keep;
+    }
+    /** The next step along your own ground toward a target, or null. */
+    stepToward(from, to, owner) {
+      if (from === to) return null;
+      let best = null;
+      let bestD = this.tileDistance(from, to);
+      for (const n of this.neighbors4(from)) {
+        if (!this.isLand(n)) continue;
+        const o = this.owners[n];
+        if (o >= 0 && o !== owner) continue;
+        const d = this.tileDistance(n, to);
+        if (d < bestD) {
+          bestD = d;
+          best = n;
+        }
+      }
+      return best;
     }
     /** What this host's morale is trying to be, given supply and the field. */
     moraleTarget(a) {
@@ -1285,14 +1573,34 @@
             if (a.cutOff && !p.isBot) this.note("A push has been cut off from home.");
           }
         }
+        const rations = this.rationsOf(a);
+        const starving = Number.isFinite(rations) && rations <= 0;
+        if (Number.isFinite(rations)) {
+          const eat = a.troops * RATION_PER_MAN * dt;
+          a.rations = rations - eat;
+          if (a.rations <= 0) {
+            a.rations = 0;
+            a.morale = Math.max(0, a.morale - 0.06 * dt);
+            a.supply = Math.max(0, a.supply - SUPPLY_CUT * dt);
+            if (a.morale <= 0.02) {
+              this.hostDefects(a);
+              this.armies.splice(i, 1);
+              continue;
+            }
+          }
+          const steadyFood = a.troops * RATION_PER_MAN * 30;
+          if (a.rations > steadyFood && a.morale < 1) {
+            a.morale = Math.min(1, a.morale + 0.02 * dt);
+          }
+        }
         if (a.cutOff) a.supply = Math.max(0, a.supply - SUPPLY_CUT * dt);
         else if (p.grain > 0 && p.rates.grain >= 0) a.supply = Math.min(1, a.supply + SUPPLY_GAIN * dt);
         else a.supply = Math.max(0, a.supply - SUPPLY_HUNGRY * dt);
         if (a.contactTimer > 0) a.contactTimer = Math.max(0, a.contactTimer - dt);
         a.supplyTimer -= 0;
         this.surveyPressure(a);
-        const steady = this.moraleTarget(a);
-        if (a.contactTimer <= 0) {
+        const steady = starving ? 0 : this.moraleTarget(a);
+        if (a.contactTimer <= 0 && !starving) {
           if (a.morale < steady) a.morale = Math.min(steady, a.morale + MORALE_RALLY * dt);
           else a.morale = Math.max(steady, a.morale - MORALE_RALLY * 0.5 * dt);
         }
@@ -1725,6 +2033,9 @@
             );
           }
         }
+        for (const p of this.players) if (p.alive) this.cityStockTick(p, dt);
+        this.convoyTick(dt);
+        this.supplyRequests(dt);
         this.checkSurrender(dt);
         this.checkStanding();
       }
@@ -1964,7 +2275,9 @@
         rt: a.routed ? 1 : 0,
         tr: a.tier,
         pl: a.pulling ? 1 : 0,
-        rg: a.regrouping ? 1 : 0
+        rg: a.regrouping ? 1 : 0,
+        ui: a.uid ?? 0,
+        ra: Number.isFinite(a.rations) ? Math.round(a.rations) : -1
       }));
       const nodes = this.claimNodes.slice(0, 240).map((n) => [n.tile, n.owner, n.done ? 1 : 0]);
       const structs = [...this.structs.values()].map((st) => [
@@ -1988,7 +2301,12 @@
         p: players,
         a: armies,
         s: structs,
-        cn: nodes
+        cn: nodes,
+        cv: this.convoys.map((c) => [c.id, c.owner, c.from, c.to, c.tile, Math.round(c.rations)]),
+        cs: [...this.cityStock.entries()].map(([t, v]) => [t, Math.round(v)]),
+        cm: [...this.cityMorale.entries()].map(([t, v]) => [t, +v.toFixed(2)]),
+        ua: this.nextArmyUid,
+        uc: this.nextConvoyId
       });
     }
     /** Guest side: become a display of the host's world. */
@@ -2004,6 +2322,19 @@
       this.owners.fill(-1);
       this.armies = [];
       this.structs.clear();
+      this.convoys = (snap.cv ?? []).map((r) => ({
+        id: r[0],
+        owner: r[1],
+        from: r[2],
+        to: r[3],
+        tile: r[4],
+        rations: r[5],
+        progress: 0
+      }));
+      this.cityStock = new Map((snap.cs ?? []).map((r) => [r[0], r[1]]));
+      this.cityMorale = new Map((snap.cm ?? []).map((r) => [r[0], r[1]]));
+      this.nextArmyUid = Number.isFinite(snap.ua) ? snap.ua : 1;
+      this.nextConvoyId = Number.isFinite(snap.uc) ? snap.uc : 1;
       this.claimNodes = (snap.cn ?? []).map((r) => ({
         owner: r[1],
         tile: r[0],
@@ -2068,6 +2399,8 @@
           rallyTimer: 0,
           contactTimer: 0,
           tier: typeof d.tr === "number" ? d.tr : 1,
+          uid: typeof d.ui === "number" && d.ui > 0 ? d.ui : void 0,
+          rations: typeof d.ra === "number" && d.ra >= 0 ? d.ra : void 0,
           support: 0,
           threat: 0,
           flankSides: 0,
@@ -2501,6 +2834,34 @@
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this.ownerCv, 0, 0, this.ownerCv.width, this.ownerCv.height, cam2.x, cam2.y, dw, dh);
       ctx.drawImage(this.borderCv, 0, 0, this.borderCv.width, this.borderCv.height, cam2.x, cam2.y, dw, dh);
+      for (const c of this.g.convoys) {
+        const cx = c.tile % w + 0.5;
+        const cy = (c.tile / w | 0) + 0.5;
+        const sx = cam2.x + cx * cam2.scale;
+        const sy = cam2.y + cy * cam2.scale;
+        if (sx < -20 || sy < -20 || sx > this.canvas.width / dpr2 + 20 || sy > this.canvas.height / dpr2 + 20) continue;
+        const col = PALETTE[c.owner % PALETTE.length];
+        const r = Math.max(1.4, Math.min(4.5, cam2.scale * 0.22));
+        ctx.fillStyle = "rgba(12,9,6,0.55)";
+        ctx.beginPath();
+        ctx.arc(sx + r * 0.3, sy + r * 0.35, r * 1.05, 0, 6.283);
+        ctx.fill();
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r * 0.85, 0, 6.283);
+        ctx.fill();
+        ctx.fillStyle = "rgba(250,244,220,0.9)";
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(0.6, r * 0.35), 0, 6.283);
+        ctx.fill();
+        if (cam2.scale >= 5) {
+          const fill = Math.max(0, Math.min(1, c.rations / 400));
+          ctx.fillStyle = "rgba(10,8,5,0.6)";
+          ctx.fillRect(sx - r * 1.4, sy - r * 2.2, r * 2.8, Math.max(1.4, r * 0.42));
+          ctx.fillStyle = "rgba(232,196,110,0.95)";
+          ctx.fillRect(sx - r * 1.4, sy - r * 2.2, r * 2.8 * fill, Math.max(1.4, r * 0.42));
+        }
+      }
       const toScreen = (t) => {
         const x = t % w + 0.5;
         const y = (t / w | 0) + 0.5;
@@ -3628,7 +3989,7 @@
   ratioInput.addEventListener("input", () => {
     ratioVal.textContent = `${ratioInput.value}%`;
   });
-  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "market", "tower", "camp", "bridge"];
+  var BUILD_ORDER = ["castle", "farm", "lumber", "mine", "barn", "market", "tower", "camp", "bridge"];
   var BUILD_HINT = {
     farm: "plains",
     lumber: "forest",
@@ -3740,8 +4101,9 @@
         tierBtn.disabled = true;
       } else {
         const label = TIER_NAME[host.tier] ?? "Levy";
+        const food = Number.isFinite(host.rations) ? ` \xB7 ${Math.round(host.rations)} rations` : "";
         const state = host.routed ? "routed" : host.pulling ? "pulling back" : host.regrouping ? "making for a city" : host.holding ? game.isOwnCity(me, host.tile) ? "garrisoned" : "holding" : "on the march";
-        hostInfo.textContent = `${label} \xB7 ${fmt(host.troops)} men \xB7 ${state} \xB7 supply ${host.supply * 100 | 0}%`;
+        hostInfo.textContent = `${label} \xB7 ${fmt(host.troops)} men \xB7 ${state} \xB7 supply ${host.supply * 100 | 0}%${food}`;
         pullBtn.disabled = host.tile === host.home;
         tierBtn.disabled = host.tier >= 3;
       }
