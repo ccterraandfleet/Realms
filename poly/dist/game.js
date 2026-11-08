@@ -48,7 +48,56 @@
     "Dunmar",
     "Sablewick"
   ];
-  function generateWorld(seed2, w = 260, h = 180, seaLevel = 0.24) {
+  function carveRivers(terrain, w, h, seed2, richness) {
+    const sources = [];
+    for (let t = 0; t < w * h; t++) {
+      if (terrain[t] !== MOUNTAIN && terrain[t] !== FOREST) continue;
+      const x = t % w;
+      const y = t / w | 0;
+      if (x < 10 || y < 10 || x > w - 11 || y > h - 11) continue;
+      if (noise(x, y, 31, seed2 + 303) > 0.45) sources.push(t);
+    }
+    sources.sort((a, b) => (noise(a % w, a / w | 0, 31, seed2 + 303) - noise(b % w, b / w | 0, 31, seed2 + 303)) * -1);
+    const chosen = [];
+    for (const s of sources) {
+      if (chosen.length >= 4) break;
+      const sx = s % w;
+      const sy = s / w | 0;
+      if (chosen.some((c) => Math.hypot(c % w - sx, (c / w | 0) - sy) < 28)) continue;
+      chosen.push(s);
+    }
+    for (const start of chosen) {
+      let x = start % w;
+      let y = start / w | 0;
+      let dirX = 0;
+      let dirY = 0;
+      let steps = 0;
+      while (steps++ < w + h) {
+        const wobble = (noise(x, y, 7, seed2 + 71) - 0.5) * 2.2;
+        dirX = dirX * 0.72 + (x - w / 2) / w * 1.4 + wobble;
+        dirY = dirY * 0.72 + (y - h / 2) / h * 1.4 + wobble * 0.6;
+        const len = Math.hypot(dirX, dirY) || 1;
+        x += Math.round(dirX / len * 1.4);
+        y += Math.round(dirY / len * 1.4);
+        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) break;
+        const t = y * w + x;
+        if (terrain[t] === OCEAN) break;
+        terrain[t] = OCEAN;
+        richness[t] = 0;
+        const across = Math.abs(dirX) > Math.abs(dirY) ? [0, 1] : [1, 0];
+        for (const d of [[0, 0], [across[0], across[1]]]) {
+          const nx = x + d[0];
+          const ny = y + d[1];
+          if (nx < 1 || ny < 1 || nx >= w - 1 || ny >= h - 1) continue;
+          const t2 = ny * w + nx;
+          if (terrain[t2] === OCEAN) continue;
+          terrain[t2] = OCEAN;
+          richness[t2] = 0;
+        }
+      }
+    }
+  }
+  function generateWorld(seed2, w = 260, h = 180, seaLevel = 0.18) {
     const terrain = new Uint8Array(w * h);
     const richness = new Float32Array(w * h);
     const road = new Uint8Array(w * h);
@@ -79,6 +128,7 @@
         richness[t] = (0.8 + noise(x, y, 13, seed2 + 7) * 0.9) * (0.85 + centrePull * 1.6) * (terrain[t] === MOUNTAIN ? 0.45 : 1);
       }
     }
+    carveRivers(terrain, w, h, seed2, richness);
     const sites = [];
     const wantSites = 18;
     const minGap = 20;
@@ -134,6 +184,23 @@
       const path = findPath(terrain, w, h, sites[a].tile, sites[b].tile);
       if (!path) continue;
       for (const t of path) road[t] = 1;
+    }
+    for (const site of sites) {
+      if (findPath(terrain, w, h, site.tile, sites[0].tile, 4e4)) continue;
+      const ax = site.tile % w;
+      const ay = site.tile / w | 0;
+      const bx = sites[0].tile % w;
+      const by = sites[0].tile / w | 0;
+      const steps = Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+      for (let i = 0; i <= steps; i++) {
+        const x = Math.round(ax + (bx - ax) * i / steps);
+        const y = Math.round(ay + (by - ay) * i / steps);
+        const t = y * w + x;
+        if (terrain[t] === OCEAN) {
+          terrain[t] = SAND;
+          road[t] = 1;
+        }
+      }
     }
     return { seed: seed2, w, h, terrain, richness, road, citySites: sites, cityEdges: edges };
   }
@@ -20264,16 +20331,16 @@
   var CAM_DIST = 300;
   var CHUNK = 3;
   var BIOME = {
-    [OCEAN]: [3114672, 2783907, 3708095, 2388122],
-    [SAND]: [15258267, 14534028, 15917230],
-    [PLAINS]: [8567378, 9423199, 7711560, 10212202],
-    [FOREST]: [4165446, 4955729, 3505469, 5811806],
-    [MOUNTAIN]: [10196108, 11117210, 9143421, 12235431]
+    [OCEAN]: [2399424, 2067632, 2861260, 1736609],
+    [SAND]: [13217904, 12559461, 13942144],
+    [PLAINS]: [9477168, 11053104, 8687652, 10266672],
+    [FOREST]: [3103266, 4025128, 1588248, 2377756],
+    [MOUNTAIN]: [8224632, 9079940, 7237738, 9869455]
   };
-  var ROAD_TONES = [11901550, 11045986, 12757371];
-  var TREE_GREENS = [3508028, 4168261, 2913332, 4892751];
-  var STONE = 13617076;
-  var STONE_DARK = 11051150;
+  var ROAD_TONES = [9401416, 8480576, 10256724];
+  var TREE_GREENS = [2839587, 3366954, 1983772, 3828270];
+  var STONE = 6052951;
+  var STONE_DARK = 4539711;
   function hash2(x, y, seed2) {
     let h = x * 374761393 + y * 668265263 + seed2 * 2246822519;
     h = (h ^ h >>> 13) * 1274126177;
@@ -20320,13 +20387,13 @@
       this.renderer.shadowMap.type = PCFSoftShadowMap;
       this.renderer.outputColorSpace = SRGBColorSpace;
       this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.14;
+      this.renderer.toneMappingExposure = 1.16;
       this.scene.background = new Color(1319724);
       this.scene.fog = new Fog(11058372, 320, 700);
       this.cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1200);
       this.cam.position.set(0, CAM_DIST, 0);
       this.cam.lookAt(0, 0, 0);
-      const key = new DirectionalLight(16774364, 2.05);
+      const key = new DirectionalLight(16772808, 1.78);
       key.position.set(-70, 130, -60);
       key.castShadow = true;
       key.shadow.mapSize.set(2048, 2048);
@@ -20339,8 +20406,8 @@
       key.shadow.bias = -7e-4;
       this.sun = key;
       this.scene.add(key, key.target);
-      this.scene.add(new HemisphereLight(14085375, 6123592, 1.25));
-      const rim = new DirectionalLight(11062512, 0.42);
+      this.scene.add(new HemisphereLight(13032686, 6974024, 1.12));
+      const rim = new DirectionalLight(11062512, 0.3);
       rim.position.set(80, 70, 90);
       this.scene.add(rim);
       this.hoverRing = this.ring(16777215, 0.9);
