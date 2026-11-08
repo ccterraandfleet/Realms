@@ -23041,7 +23041,7 @@
       this.renderer.toneMappingExposure = 1.02;
       this.scene = new Scene();
       this.scene.background = new Color(1319724);
-      this.scene.fog = new Fog(10465464, 120, 340);
+      this.scene.fog = new Fog(11058372, 300, 620);
       this.cam3 = new OrthographicCamera(-1, 1, 1, -1, 0.1, 900);
       this.cam3.position.set(0, CAM_DIST, 0);
       this.cam3.lookAt(0, 0, 0);
@@ -23185,11 +23185,11 @@
         const jitter = 0.93 + hash2(x, z, 13) * 0.15;
         c.multiplyScalar(jitter);
         if (hash2(x, z, 3) < 0.5) {
-          pushTri(x, z, x + 1, z, x + 1, z + 1);
-          pushTri(x, z, x + 1, z + 1, x, z + 1);
+          pushTri(x, z, x + 1, z + 1, x + 1, z);
+          pushTri(x, z, x, z + 1, x + 1, z + 1);
         } else {
-          pushTri(x, z, x + 1, z, x, z + 1);
-          pushTri(x + 1, z, x + 1, z + 1, x, z + 1);
+          pushTri(x, z, x, z + 1, x + 1, z);
+          pushTri(x + 1, z, x, z + 1, x + 1, z + 1);
         }
       }
       const geo = new BufferGeometry();
@@ -23251,6 +23251,7 @@
         map: tex,
         transparent: true,
         opacity: 0.62,
+        side: DoubleSide,
         depthWrite: false,
         polygonOffset: true,
         polygonOffsetFactor: -2
