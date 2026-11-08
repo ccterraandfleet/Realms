@@ -22984,13 +22984,16 @@
   var TILT = 0.5;
   var CAM_DIST = 260;
   var BIOME = {
-    [OCEAN]: [1920875, 2251130, 1722209, 2516100],
-    [SAND]: [14206093, 13613183, 14732695],
-    [PLAINS]: [7313999, 8037463, 6590279, 8498014],
-    [FOREST]: [4156218, 4682809, 3628851, 5012288],
-    [MOUNTAIN]: [9276294, 10131343, 8289399, 11052186]
+    // Saturated, cleanly separated families: the reference frame reads as flat
+    // coloured facets, not as a photograph, so the tones have to stay distinct.
+    [OCEAN]: [3114672, 2783907, 3708095, 2388122],
+    [SAND]: [15258267, 14534028, 15917230],
+    [PLAINS]: [8567378, 9423199, 7711560, 10212202],
+    [FOREST]: [4165446, 4955729, 3505469, 5811806],
+    [MOUNTAIN]: [10196108, 11117210, 9143421, 12235431]
   };
-  var TREE_GREENS = [3104052, 3631930, 2641964, 4225602];
+  var CHUNK = 3;
+  var TREE_GREENS = [3508028, 4168261, 2913332, 4892751];
   var ROOF_RED = 10238766;
   var ROOF_BLUE = 3104646;
   var STONE = 13617076;
@@ -23028,6 +23031,11 @@
       this.banners = null;
       this.buildings = /* @__PURE__ */ new Map();
       this.heights = null;
+      /** Chunk grid the facets are cut on. */
+      this.cw = 0;
+      this.ch = 0;
+      this.cornerH = null;
+      this.surface = null;
       this.ownerKey = "";
       this.resizeKey = "";
       this.ray = new Raycaster();
@@ -23045,7 +23053,7 @@
       this.cam3 = new OrthographicCamera(-1, 1, 1, -1, 0.1, 900);
       this.cam3.position.set(0, CAM_DIST, 0);
       this.cam3.lookAt(0, 0, 0);
-      const key = new DirectionalLight(16770754, 2.15);
+      const key = new DirectionalLight(16773330, 1.72);
       key.position.set(-70, 120, -60);
       key.castShadow = true;
       key.shadow.mapSize.set(2048, 2048);
@@ -23125,17 +23133,63 @@
       }
       return soft;
     }
+    /**
+     * Coarse corner heights: the landform the facets are cut from. Sampled from
+     * the fine noise field, then the per-tile array is rewritten from these
+     * corners so every object stands on the surface the player actually sees.
+     */
+    buildCoarse() {
+      const { w, h } = this.g.world;
+      const fine = this.heights;
+      const cw = this.cw = Math.ceil(w / CHUNK);
+      const ch = this.ch = Math.ceil(h / CHUNK);
+      const corners = this.cornerH = new Float32Array((cw + 1) * (ch + 1));
+      const at = (x, y) => {
+        const cx = Math.max(0, Math.min(w - 1, x));
+        const cy = Math.max(0, Math.min(h - 1, y));
+        return fine[cy * w + cx];
+      };
+      for (let cy = 0; cy <= ch; cy++) {
+        for (let cx = 0; cx <= cw; cx++) {
+          const tx = cx * CHUNK;
+          const ty = cy * CHUNK;
+          corners[cy * (cw + 1) + cx] = (at(tx - 1, ty - 1) + at(tx, ty - 1) + at(tx - 1, ty) + at(tx, ty)) * 0.25;
+        }
+      }
+      const surface = new Float32Array(w * h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const fx = x / CHUNK;
+          const fz = y / CHUNK;
+          const x0 = Math.max(0, Math.min(cw - 1, Math.floor(fx)));
+          const z0 = Math.max(0, Math.min(ch - 1, Math.floor(fz)));
+          const tx = Math.min(1, Math.max(0, fx - x0));
+          const tz = Math.min(1, Math.max(0, fz - z0));
+          const i0 = z0 * (cw + 1) + x0;
+          const i1 = i0 + (cw + 1);
+          const a = corners[i0] * (1 - tx) + corners[i0 + 1] * tx;
+          const b = corners[i1] * (1 - tx) + corners[i1 + 1] * tx;
+          surface[y * w + x] = a * (1 - tz) + b * tz;
+        }
+      }
+      this.heights = surface;
+      this.surface = surface;
+    }
     buildWorld() {
       const { w, h } = this.g.world;
       this.heights = this.buildHeights();
+      this.buildCoarse();
       const H = this.heights;
       const at = (x, y) => {
         const cx = Math.max(0, Math.min(w - 1, x));
         const cy = Math.max(0, Math.min(h - 1, y));
         return H[cy * w + cx];
       };
-      const corner = (x, y) => (at(x - 1, y - 1) + at(x, y - 1) + at(x - 1, y) + at(x, y)) * 0.25;
-      const cells = w * h;
+      void at;
+      const cw = this.cw;
+      const corners = this.cornerH;
+      const corner = (cx, cy) => corners[Math.max(0, Math.min(this.ch, cy)) * (cw + 1) + Math.max(0, Math.min(cw, cx))];
+      const cells = cw * this.ch;
       const pos = new Float32Array(cells * 6 * 3);
       const col = new Float32Array(cells * 6 * 3);
       const normal = new Float32Array(cells * 6 * 3);
@@ -23175,21 +23229,32 @@
           p += 3;
         }
       };
-      for (let t = 0; t < cells; t++) {
-        const x = t % w;
-        const z = t / w | 0;
-        const kind = terrain[t];
-        const family = BIOME[kind] ?? BIOME[PLAINS];
-        const pick = family[hash2(x, z, 7) * family.length | 0];
-        c.setHex(pick);
-        const jitter = 0.93 + hash2(x, z, 13) * 0.15;
-        c.multiplyScalar(jitter);
-        if (hash2(x, z, 3) < 0.5) {
-          pushTri(x, z, x + 1, z + 1, x + 1, z);
-          pushTri(x, z, x, z + 1, x + 1, z + 1);
-        } else {
-          pushTri(x, z, x, z + 1, x + 1, z);
-          pushTri(x + 1, z, x, z + 1, x + 1, z + 1);
+      for (let z = 0; z < this.ch; z++) {
+        for (let x = 0; x < cw; x++) {
+          const counts = /* @__PURE__ */ new Map();
+          for (let dz = 0; dz < CHUNK; dz++) {
+            for (let dx = 0; dx < CHUNK; dx++) {
+              const tx = Math.min(w - 1, x * CHUNK + dx);
+              const ty = Math.min(h - 1, z * CHUNK + dz);
+              const k = terrain[ty * w + tx];
+              counts.set(k, (counts.get(k) ?? 0) + 1);
+            }
+          }
+          let kind = PLAINS;
+          let best = -1;
+          for (const [k, n] of counts) if (n > best) best = n, kind = k;
+          const family = BIOME[kind] ?? BIOME[PLAINS];
+          const pick = family[hash2(x, z, 7) * family.length | 0];
+          c.setHex(pick);
+          const jitter = 0.96 + hash2(x, z, 13) * 0.09;
+          c.multiplyScalar(jitter);
+          if (hash2(x, z, 3) < 0.5) {
+            pushTri(x, z, x + 1, z + 1, x + 1, z);
+            pushTri(x, z, x, z + 1, x + 1, z + 1);
+          } else {
+            pushTri(x, z, x, z + 1, x + 1, z);
+            pushTri(x + 1, z, x, z + 1, x + 1, z + 1);
+          }
         }
       }
       const geo = new BufferGeometry();
@@ -23227,7 +23292,7 @@
       const at = (x, y) => {
         const cx = Math.max(0, Math.min(w - 1, x));
         const cy = Math.max(0, Math.min(h - 1, y));
-        return H[cy * w + cx];
+        return H[cy * w + cx] + 0.02;
       };
       for (let y = 0; y <= h; y++) {
         for (let x = 0; x <= w; x++) {
@@ -23304,7 +23369,7 @@
         if (terrain[t] !== FOREST) continue;
         const x = t % w;
         const z = t / w | 0;
-        if (hash2(x, z, 31) > 0.62) continue;
+        if (hash2(x, z, 31) > 0.55) continue;
         const n = 1 + (hash2(x, z, 37) * 2 | 0);
         for (let i = 0; i < n; i++) {
           const jx = x + 0.15 + hash2(x, z, 41 + i) * 0.7;
@@ -23313,13 +23378,13 @@
             x: jx,
             z: jz,
             y: H[t],
-            s: 0.55 + hash2(x, z, 53 + i) * 0.6,
+            s: 1.15 + hash2(x, z, 53 + i) * 0.95,
             r: hash2(x, z, 59 + i) * 6.283,
             c: TREE_GREENS[hash2(x, z, 61 + i) * TREE_GREENS.length | 0]
           });
         }
       }
-      const geo = new ConeGeometry(0.3, 1, 5, 1);
+      const geo = new ConeGeometry(0.42, 1, 6, 1);
       geo.translate(0, 0.5, 0);
       const mat = new MeshStandardMaterial({
         flatShading: true,
