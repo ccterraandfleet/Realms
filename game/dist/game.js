@@ -23046,14 +23046,14 @@
       this.renderer.shadowMap.type = PCFSoftShadowMap;
       this.renderer.outputColorSpace = SRGBColorSpace;
       this.renderer.toneMapping = ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.02;
+      this.renderer.toneMappingExposure = 1.14;
       this.scene = new Scene();
       this.scene.background = new Color(1319724);
       this.scene.fog = new Fog(11058372, 300, 620);
       this.cam3 = new OrthographicCamera(-1, 1, 1, -1, 0.1, 900);
       this.cam3.position.set(0, CAM_DIST, 0);
       this.cam3.lookAt(0, 0, 0);
-      const key = new DirectionalLight(16773330, 1.72);
+      const key = new DirectionalLight(16774364, 2.05);
       key.position.set(-70, 120, -60);
       key.castShadow = true;
       key.shadow.mapSize.set(2048, 2048);
@@ -23067,8 +23067,8 @@
       this.sun = key;
       this.scene.add(key);
       this.scene.add(key.target);
-      this.scene.add(new HemisphereLight(12375784, 4872762, 0.85));
-      const rim = new DirectionalLight(10338528, 0.5);
+      this.scene.add(new HemisphereLight(14085375, 6123592, 1.25));
+      const rim = new DirectionalLight(11062512, 0.42);
       rim.position.set(80, 60, 90);
       this.scene.add(rim);
       this.hoverRing = this.makeRing(16777215, 0.9);
