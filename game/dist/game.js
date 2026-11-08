@@ -2629,7 +2629,7 @@
           const ny = -dhdy * relief;
           const nlen = Math.hypot(nx, ny, 1);
           const diffuse = Math.max(0, (nx * Lx + ny * Ly + Lz) / nlen);
-          let lum = 0.52 + 0.95 * diffuse;
+          let lum = 0.68 + 1.02 * diffuse;
           const wet = terrain[t00] === OCEAN && terrain[t10] === OCEAN && terrain[t01] === OCEAN && terrain[t11] === OCEAN;
           if (wet) {
             const dep = depth[t00] ?? 8;
@@ -2762,7 +2762,7 @@
       const bctx = this.borderCv.getContext("2d");
       octx.clearRect(x * P, y * P, P, P);
       if (owner >= 0) {
-        octx.globalAlpha = 0.34;
+        octx.globalAlpha = 0.92;
         octx.fillStyle = PALETTE[owner % PALETTE.length];
         octx.fillRect(x * P, y * P, P, P);
         octx.globalAlpha = 1;
@@ -2832,8 +2832,33 @@
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(this.terrainCv, 0, 0, this.terrainCv.width, this.terrainCv.height, cam2.x, cam2.y, dw, dh);
       ctx.imageSmoothingEnabled = false;
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalCompositeOperation = "overlay";
+      ctx.globalAlpha = 0.62;
       ctx.drawImage(this.ownerCv, 0, 0, this.ownerCv.width, this.ownerCv.height, cam2.x, cam2.y, dw, dh);
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      ctx.imageSmoothingEnabled = false;
+      ctx.shadowColor = "rgba(6, 10, 14, 0.55)";
+      ctx.shadowBlur = Math.max(2, cam2.scale * 0.9);
+      ctx.shadowOffsetY = Math.max(1, cam2.scale * 0.25);
       ctx.drawImage(this.borderCv, 0, 0, this.borderCv.width, this.borderCv.height, cam2.x, cam2.y, dw, dh);
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.shadowColor = "transparent";
+      const vw = this.canvas.width / dpr2;
+      const vh = this.canvas.height / dpr2;
+      const sun = ctx.createLinearGradient(0, 0, vw * 0.45, vh);
+      sun.addColorStop(0, "rgba(255, 236, 190, 0.10)");
+      sun.addColorStop(0.55, "rgba(255, 236, 190, 0.02)");
+      sun.addColorStop(1, "rgba(20, 30, 40, 0.10)");
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, vw, vh);
+      const vig = ctx.createRadialGradient(vw / 2, vh / 2, Math.min(vw, vh) * 0.32, vw / 2, vh / 2, Math.max(vw, vh) * 0.78);
+      vig.addColorStop(0, "rgba(0, 0, 0, 0)");
+      vig.addColorStop(1, "rgba(6, 10, 14, 0.42)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, vw, vh);
       for (const c of this.g.convoys) {
         const cx = c.tile % w + 0.5;
         const cy = (c.tile / w | 0) + 0.5;
@@ -2935,17 +2960,43 @@
         ctx.arc(bx, by, cs * 0.62, 0, 6.283);
         ctx.stroke();
         ctx.globalAlpha = 1;
-        const dots = Math.max(3, Math.min(9, 2 + Math.floor(Math.log10(1 + a.troops) * 2)));
-        const r = Math.max(1.2, cam2.scale * 0.16);
+        ctx.fillStyle = "rgba(8, 12, 10, 0.34)";
+        ctx.beginPath();
+        ctx.ellipse(ax, ay + cam2.scale * 0.34, cam2.scale * 0.62, cam2.scale * 0.3, 0, 0, 6.283);
+        ctx.fill();
+        const dots = Math.max(4, Math.min(14, 3 + Math.floor(Math.log10(1 + a.troops) * 3)));
+        const r = Math.max(1.3, cam2.scale * 0.15);
         ctx.globalAlpha = 0.35 + 0.65 * a.supply;
         for (let i = 0; i < dots; i++) {
-          const ang = i / dots * 6.283;
-          const rad = cam2.scale * (0.3 + 0.11 * (i % 3));
-          const px = ax + Math.cos(ang) * rad;
-          const py = ay - cam2.scale * 0.1 + Math.sin(ang) * rad * 0.7;
-          ctx.fillStyle = i === 0 ? "#fdf6e4" : col;
+          const row = i % 3;
+          const k = Math.floor(i / 3);
+          const px = ax + (k - (dots / 3 - 1) / 2) * cam2.scale * 0.26 + row * cam2.scale * 0.03;
+          const py = ay + (row - 1) * cam2.scale * 0.2;
+          ctx.fillStyle = col;
           ctx.beginPath();
           ctx.arc(px, py, r, 0, 6.283);
+          ctx.fill();
+          if (row === 0) {
+            ctx.fillStyle = "rgba(253, 246, 228, 0.85)";
+            ctx.beginPath();
+            ctx.arc(px, py - r * 0.35, r * 0.42, 0, 6.283);
+            ctx.fill();
+          }
+        }
+        if (cam2.scale >= 2.2) {
+          const poleH = cam2.scale * 0.92;
+          ctx.strokeStyle = "rgba(28, 22, 14, 0.85)";
+          ctx.lineWidth = Math.max(1, cam2.scale * 0.08);
+          ctx.beginPath();
+          ctx.moveTo(ax, ay - cam2.scale * 0.18);
+          ctx.lineTo(ax, ay - poleH);
+          ctx.stroke();
+          ctx.fillStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay - poleH);
+          ctx.lineTo(ax + cam2.scale * 0.42, ay - poleH + cam2.scale * 0.16);
+          ctx.lineTo(ax, ay - poleH + cam2.scale * 0.34);
+          ctx.closePath();
           ctx.fill();
         }
         ctx.globalAlpha = 1;
