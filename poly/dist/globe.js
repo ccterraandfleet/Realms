@@ -31309,45 +31309,75 @@
     territory.frustumCulled = false;
     territory.visible = false;
     o.castleGroup.add(territory);
-    const SOL_COLS = 4;
-    const SOL_RANKS = 3;
+    const SOL_COLS = 3;
+    const SOL_RANKS = 5;
     const SOLDIERS_PER_HOST = SOL_COLS * SOL_RANKS;
-    const SOL_SPACING = 2.4;
-    const SOL_W = 1.6;
-    const SOL_H = 2.6;
-    const SOL_D = 1;
+    const SOL_SPACING = 1.05;
     const HOST_MAX = 64;
-    const bodyGeo = new BoxGeometry(SOL_W, SOL_H, SOL_D);
-    const headGeo = new SphereGeometry(0.46, 6, 4);
-    const shadowGeo = new CircleGeometry(SOL_SPACING * 3.1, 16);
-    const poleGeo = new BoxGeometry(0.34, 8, 0.34);
-    const flagGeo = new PlaneGeometry(3.2, 2);
-    const bodyMesh = new InstancedMesh(
-      bodyGeo,
+    const legsGeo = new BoxGeometry(0.52, 0.44, 0.34);
+    const tunicGeo = new BoxGeometry(0.64, 0.8, 0.42);
+    const headGeo = new SphereGeometry(0.155, 6, 4);
+    const helmGeo = new ConeGeometry(0.2, 0.26, 6);
+    const spearGeo = new BoxGeometry(0.045, 1.65, 0.045);
+    const shadowGeo = new CircleGeometry(SOL_SPACING * 3.2, 16);
+    const poleGeo = new BoxGeometry(0.2, 4.4, 0.2);
+    const clothGeo = new PlaneGeometry(2.5, 1.45);
+    const crownGeo = new PlaneGeometry(1.35, 0.95);
+    const skinMat = new MeshStandardMaterial({ color: 15122842, roughness: 0.85, flatShading: true });
+    const legsMat = new MeshStandardMaterial({ color: 3881528, roughness: 0.9, flatShading: true });
+    const helmMat = new MeshStandardMaterial({ color: 11055284, roughness: 0.45, metalness: 0.45, flatShading: true });
+    const spearMat = new MeshStandardMaterial({ color: 7031343, roughness: 0.9 });
+    const legsMesh = new InstancedMesh(legsGeo, legsMat, HOST_MAX * SOLDIERS_PER_HOST);
+    const tunicMesh = new InstancedMesh(
+      tunicGeo,
       new MeshStandardMaterial({ color: 16777215, roughness: 0.72, metalness: 0.04 }),
       HOST_MAX * SOLDIERS_PER_HOST
     );
-    const headMesh = new InstancedMesh(
-      headGeo,
-      new MeshStandardMaterial({ color: 2761504, roughness: 0.8, flatShading: true }),
-      HOST_MAX * SOLDIERS_PER_HOST
-    );
+    const headMesh = new InstancedMesh(headGeo, skinMat, HOST_MAX * SOLDIERS_PER_HOST);
+    const helmMesh = new InstancedMesh(helmGeo, helmMat, HOST_MAX * SOLDIERS_PER_HOST);
+    const spearMesh = new InstancedMesh(spearGeo, spearMat, HOST_MAX * SOLDIERS_PER_HOST);
     const shadowMesh = new InstancedMesh(
       shadowGeo,
-      new MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.26, depthWrite: false }),
+      new MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.24, depthWrite: false }),
       HOST_MAX
     );
     const poleMesh = new InstancedMesh(
       poleGeo,
-      new MeshStandardMaterial({ color: 5917240, roughness: 0.85 }),
+      new MeshStandardMaterial({ color: 5128243, roughness: 0.88 }),
       HOST_MAX
     );
-    const flagMesh = new InstancedMesh(
-      flagGeo,
-      new MeshStandardMaterial({ color: 16777215, roughness: 0.7, side: DoubleSide }),
+    const clothMesh = new InstancedMesh(
+      clothGeo,
+      new MeshStandardMaterial({ color: 16777215, roughness: 0.75, side: DoubleSide }),
       HOST_MAX
     );
-    for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) {
+    const crownCanvas = document.createElement("canvas");
+    crownCanvas.width = 64;
+    crownCanvas.height = 48;
+    {
+      const c2 = crownCanvas.getContext("2d");
+      c2.fillStyle = "#ffffff";
+      c2.beginPath();
+      c2.moveTo(6, 38);
+      c2.lineTo(11, 12);
+      c2.lineTo(22, 26);
+      c2.lineTo(32, 6);
+      c2.lineTo(42, 26);
+      c2.lineTo(53, 12);
+      c2.lineTo(58, 38);
+      c2.closePath();
+      c2.fill();
+      c2.fillRect(6, 40, 52, 5);
+    }
+    const crownTex = new CanvasTexture(crownCanvas);
+    crownTex.colorSpace = SRGBColorSpace;
+    const crownMesh = new InstancedMesh(
+      crownGeo,
+      new MeshBasicMaterial({ map: crownTex, transparent: true, alphaTest: 0.45, depthWrite: false, side: DoubleSide }),
+      HOST_MAX
+    );
+    const armyParts = [legsMesh, tunicMesh, headMesh, helmMesh, spearMesh, shadowMesh, poleMesh, clothMesh, crownMesh];
+    for (const m of armyParts) {
       m.frustumCulled = false;
       m.count = 0;
       o.castleGroup.add(m);
@@ -31371,6 +31401,12 @@
     o.castleGroup.add(territoryRim);
     const m4 = new Matrix4();
     const q4 = new Quaternion();
+    const bodyCount = (bodies, shadows, banners) => {
+      const on = armiesOn;
+      legsMesh.count = tunicMesh.count = headMesh.count = helmMesh.count = spearMesh.count = on ? bodies : 0;
+      shadowMesh.count = on ? shadows : 0;
+      poleMesh.count = clothMesh.count = crownMesh.count = on ? banners : 0;
+    };
     const ih3ForHost = (a, b, c) => {
       const n = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
       return n - Math.floor(n);
@@ -31423,10 +31459,10 @@
         rebuildAt = nowMs;
       }
       if (!armiesOn) {
-        for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) m.count = 0;
+        for (const m of armyParts) m.count = 0;
       }
       const altForHosts = Math.max(0, o.camera.position.length() - o.R);
-      const formScale = Math.max(0.8, Math.min(4, altForHosts / 150));
+      const formScale = Math.max(0.85, Math.min(4, altForHosts / 130));
       const rankGap = SOL_SPACING * formScale;
       let bodies = 0;
       let shadows = 0;
@@ -31434,6 +31470,7 @@
       const fwd = new Vector3();
       const right = new Vector3();
       const basis = new Matrix4();
+      const footDir = new Vector3();
       for (const h of hosts) {
         if (shadows >= HOST_MAX) break;
         const a = nodes2.get(h.path[h.seg]);
@@ -31451,51 +31488,55 @@
         basis.makeBasis(right, here, fwd);
         q4.setFromRotationMatrix(basis);
         const shade = realms[h.owner]?.colour ?? 16777215;
-        v4.copy(here).multiplyScalar(radius + 0.6);
         s4.setScalar(formScale);
+        v4.copy(here).multiplyScalar(radius + 0.5);
         m4.compose(v4, q4, s4);
         shadowMesh.setMatrixAt(shadows++, m4);
         for (let r = 0; r < SOL_RANKS; r++) {
           for (let c = 0; c < SOL_COLS; c++) {
             if (bodies >= HOST_MAX * SOLDIERS_PER_HOST) break;
-            const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.5 * formScale;
+            const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.22 * formScale;
             const ox = (c - (SOL_COLS - 1) / 2) * rankGap + jitter;
-            const oz = (r - (SOL_RANKS - 1) / 2) * rankGap + jitter * 0.6;
-            v4.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
-            v4.normalize().multiplyScalar(radius + (SOL_H / 2 + 0.15) * formScale);
-            s4.setScalar(formScale);
+            const oz = ((SOL_RANKS - 1) / 2 - r) * rankGap + jitter * 0.7;
+            footDir.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
+            footDir.normalize();
+            v4.copy(footDir).multiplyScalar(radius + 0.22 * formScale);
             m4.compose(v4, q4, s4);
-            bodyMesh.setMatrixAt(bodies, m4);
-            col4.setHex(shade).multiplyScalar(h.routed ? 0.62 : 1);
-            bodyMesh.setColorAt(bodies, col4);
-            v4.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
-            v4.normalize().multiplyScalar(radius + (SOL_H + 0.7) * formScale);
+            legsMesh.setMatrixAt(bodies, m4);
+            v4.copy(footDir).multiplyScalar(radius + 0.84 * formScale);
+            m4.compose(v4, q4, s4);
+            tunicMesh.setMatrixAt(bodies, m4);
+            col4.setHex(shade).multiplyScalar(h.routed ? 0.6 : 1.12);
+            tunicMesh.setColorAt(bodies, col4);
+            v4.copy(footDir).multiplyScalar(radius + 1.32 * formScale);
             m4.compose(v4, q4, s4);
             headMesh.setMatrixAt(bodies, m4);
+            v4.copy(footDir).multiplyScalar(radius + 1.48 * formScale);
+            m4.compose(v4, q4, s4);
+            helmMesh.setMatrixAt(bodies, m4);
+            v4.copy(footDir).multiplyScalar(radius + 0.82 * formScale).addScaledVector(right, 0.34 * formScale);
+            m4.compose(v4, q4, s4);
+            spearMesh.setMatrixAt(bodies, m4);
             bodies++;
           }
         }
-        v4.copy(here).multiplyScalar(radius).addScaledVector(fwd, (SOL_RANKS / 2 + 0.55) * rankGap);
-        const base = v4.clone();
-        v4.normalize().multiplyScalar(radius + 4.2 * formScale);
-        s4.setScalar(formScale);
+        v4.copy(here).multiplyScalar(radius).addScaledVector(fwd, (SOL_RANKS / 2 + 0.85) * rankGap);
+        const poleFoot = v4.clone().normalize();
+        v4.copy(poleFoot).multiplyScalar(radius + 2 * formScale);
         m4.compose(v4, q4, s4);
         poleMesh.setMatrixAt(banners, m4);
-        col4.setHex(shade).multiplyScalar(1.25);
-        flagMesh.setColorAt(banners, col4);
-        v4.copy(base).normalize().multiplyScalar(radius + 7.7 * formScale).addScaledVector(right, 1.7 * formScale);
+        v4.copy(poleFoot).multiplyScalar(radius + 3.5 * formScale).addScaledVector(right, 1.25 * formScale);
         m4.compose(v4, q4, s4);
-        flagMesh.setMatrixAt(banners, m4);
+        clothMesh.setMatrixAt(banners, m4);
+        col4.setHex(shade).multiplyScalar(1.18);
+        clothMesh.setColorAt(banners, col4);
+        v4.copy(poleFoot).multiplyScalar(radius + 3.5 * formScale).addScaledVector(right, 1.25 * formScale).addScaledVector(fwd, -0.04 * formScale);
+        m4.compose(v4, q4, s4);
+        crownMesh.setMatrixAt(banners, m4);
         banners++;
       }
-      if (armiesOn) {
-        bodyMesh.count = bodies;
-        headMesh.count = bodies;
-        shadowMesh.count = shadows;
-        poleMesh.count = banners;
-        flagMesh.count = banners;
-      }
-      for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) {
+      bodyCount(bodies, shadows, banners);
+      for (const m of armyParts) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
       }
@@ -32034,7 +32075,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 04:56";
+  var BUILD = "2026-11-09 05:14";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32229,8 +32270,8 @@
   scene.add(sea);
   var stoneMat = new MeshStandardMaterial({ color: 9407363, roughness: 0.9, flatShading: true });
   var stoneDarkMat = new MeshStandardMaterial({ color: 7302245, roughness: 0.92, flatShading: true });
-  var roofRedMat = new MeshStandardMaterial({ color: 10369836, roughness: 0.8, flatShading: true });
-  var roofBlueMat = new MeshStandardMaterial({ color: 3364463, roughness: 0.8, flatShading: true });
+  var roofRedMat = new MeshStandardMaterial({ color: 11552556, roughness: 0.72, flatShading: true });
+  var roofBlueMat = new MeshStandardMaterial({ color: 2850726, roughness: 0.72, flatShading: true });
   var woodMat = new MeshStandardMaterial({ color: 7031343, roughness: 0.95, flatShading: true });
   var goldMat = new MeshStandardMaterial({ color: 13214247, roughness: 0.5, metalness: 0.25 });
   var treeMat = new MeshStandardMaterial({ roughness: 0.95, flatShading: true });
@@ -32476,7 +32517,11 @@
     const A = 6.2 * scale;
     const wallH = 2.1 * scale;
     const wallT = 0.55 * scale;
-    g.add(box(A * 2.5, 2.6 * scale, A * 2.5, stoneDarkMat, 0, -1.1 * scale, 0));
+    const plinth = new Mesh(new CylinderGeometry(A * 1.45, A * 1.75, 2.2 * scale, 7), stoneDarkMat);
+    plinth.position.y = -0.85 * scale;
+    plinth.castShadow = true;
+    plinth.receiveShadow = true;
+    g.add(plinth);
     const runs = [
       [0, -A, A * 2, wallT],
       [0, A, A * 2, wallT],
@@ -32504,18 +32549,55 @@
     for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       g.add(tower(1.25 * scale, 4.4 * scale, roof, sx * A, sz * A));
     }
-    const keepH = 7.4 * scale;
-    g.add(box(4.4 * scale, keepH, 4.4 * scale, stoneMat, 0, keepH / 2, 0));
-    const keepRoof = new Mesh(new ConeGeometry(3.5 * scale, 3.2 * scale, 4), roof);
-    keepRoof.position.y = keepH + 1.5 * scale;
-    keepRoof.rotation.y = Math.PI / 4;
+    const keepH = 9.2 * scale;
+    g.add(box(4.6 * scale, keepH, 4.6 * scale, stoneMat, 0, keepH / 2, 0));
+    for (const [fx, fz, rot] of [[0, 1, 0], [0, -1, 0], [1, 0, Math.PI / 2], [-1, 0, Math.PI / 2]]) {
+      for (const wy of [0.42, 0.72]) {
+        const win = box(
+          0.34 * scale,
+          1.1 * scale,
+          0.1 * scale,
+          windowMat,
+          fx * 2.32 * scale,
+          keepH * wy,
+          fz * 2.32 * scale
+        );
+        win.rotation.y = rot;
+        g.add(win);
+      }
+    }
+    const keepRoof = new Mesh(new ConeGeometry(3.6 * scale, 4.4 * scale, 8), roof);
+    keepRoof.position.y = keepH + 2.2 * scale;
+    keepRoof.rotation.y = Math.PI / 8;
     keepRoof.castShadow = true;
     g.add(keepRoof);
-    g.add(box(0.09 * scale, 2.2 * scale, 0.09 * scale, woodMat, 0, keepH + 3.6 * scale, 0));
-    g.add(box(1.1 * scale, 0.62 * scale, 0.05 * scale, goldMat, 0.58 * scale, keepH + 4.3 * scale, 0));
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      const merlon = box(
+        0.7 * scale,
+        0.5 * scale,
+        0.42 * scale,
+        stoneDarkMat,
+        Math.cos(a) * 2.5 * scale,
+        keepH + 0.2 * scale,
+        Math.sin(a) * 2.5 * scale
+      );
+      merlon.rotation.y = -a;
+      g.add(merlon);
+    }
+    g.add(box(0.09 * scale, 2.4 * scale, 0.09 * scale, woodMat, 0, keepH + 4.2 * scale, 0));
+    g.add(box(1.2 * scale, 0.7 * scale, 0.05 * scale, goldMat, 0.62 * scale, keepH + 5 * scale, 0));
     g.add(tower(0.95 * scale, 3.3 * scale, roof, -1.5 * scale, A + 0.2 * scale));
     g.add(tower(0.95 * scale, 3.3 * scale, roof, 1.5 * scale, A + 0.2 * scale));
     g.add(box(2.3 * scale, 2 * scale, 0.5 * scale, woodMat, 0, 1 * scale, A + 0.2 * scale));
+    const arch = new Mesh(new CylinderGeometry(0.85 * scale, 0.85 * scale, 0.6 * scale, 10, 1, false, 0, Math.PI), windowMat);
+    arch.rotation.z = Math.PI / 2;
+    arch.position.set(0, 2 * scale, A + 0.25 * scale);
+    g.add(arch);
+    for (const sx of [-1.5, 1.5]) {
+      g.add(box(0.07 * scale, 1.5 * scale, 0.07 * scale, woodMat, sx * scale, 5.6 * scale, A + 0.2 * scale));
+      g.add(box(0.66 * scale, 0.42 * scale, 0.04 * scale, goldMat, sx * scale + 0.34 * scale, 6.1 * scale, A + 0.2 * scale));
+    }
     g.add(box(3 * scale, 1.9 * scale, 2 * scale, stoneDarkMat, -1.6 * scale, 0.95 * scale, -1.8 * scale));
     return g;
   }
@@ -32711,7 +32793,8 @@
   }
   var FACTION_YOU = 0;
   var FACTION_ENEMY = 1;
-  var roofNeutralMat = new MeshStandardMaterial({ color: 9077624, roughness: 0.85, metalness: 0.02 });
+  var roofNeutralMat = new MeshStandardMaterial({ color: 9274744, roughness: 0.85, metalness: 0.02 });
+  var windowMat = new MeshStandardMaterial({ color: 1777444, roughness: 0.95, flatShading: true });
   var OWN_COLOUR = new Color(4161488);
   var ENEMY_COLOUR = new Color(12597547);
   var NEUTRAL_COLOUR = new Color(10195588);
@@ -33026,7 +33109,7 @@
         if (castles.has(s.key)) continue;
         const owner = seatOwner(s.key, s.dir);
         const roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
-        const g = mergeGroup(buildCastle(0.9, roof));
+        const g = mergeGroup(buildCastle(1.15, roof));
         g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
