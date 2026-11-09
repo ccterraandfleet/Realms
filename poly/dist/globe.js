@@ -30694,7 +30694,8 @@
     let dirtyTerritory = true;
     let selected = null;
     let paused = false;
-    let lastLog = "click one of your keeps, or an unclaimed one beside your road";
+    let lastLog = "press H to fly to your castle \xB7 click an unclaimed keep to claim it";
+    const BUILD_TAG = o.build ?? "";
     const cellSize = Math.PI * o.R / 2 / o.TERR_PER_FACE;
     const nodeKey = (f, tu, tv) => `${f}/${tu}/${tv}`;
     const edgeKeyOf = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -30906,22 +30907,22 @@
     }
     const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
     const beamMat = new MeshBasicMaterial({
-      color: 7320831,
+      color: 12116223,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.5,
       depthWrite: false,
       side: DoubleSide
     });
-    const beamGeo = new CylinderGeometry(cellSize * 0.045, cellSize * 0.075, cellSize * 3.4, 8, 1, true);
+    const beamGeo = new CylinderGeometry(cellSize * 0.07, cellSize * 0.11, cellSize * 3.4, 10, 1, true);
     const beam = new Mesh(beamGeo, beamMat);
     beam.visible = false;
     beam.frustumCulled = false;
     o.castleGroup.add(beam);
-    const ringGeoHome = new RingGeometry(cellSize * 0.42, cellSize * 0.5, 28);
+    const ringGeoHome = new RingGeometry(cellSize * 0.4, cellSize * 0.56, 28);
     const ringMatHome = new MeshBasicMaterial({
-      color: 9357055,
+      color: 14085375,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.95,
       depthWrite: false,
       side: DoubleSide
     });
@@ -31409,13 +31410,13 @@
       const camDist = o.camera.position.length();
       const altAbove = Math.max(0, camDist - o.R);
       const homeGrow = Math.max(0.2, Math.min(8, altAbove / 400));
-      const beamFade = Math.max(0, Math.min(1, (altAbove - 120) / 250));
+      const beamFade = Math.max(0, Math.min(1, (altAbove - 30) / 160));
       if (cap && realms[0].alive && beaconOn) {
         beam.visible = beamFade > 0.02;
         beam.position.copy(cap.dir).multiplyScalar(surfaceR(cap) + cellSize * 3.4 * homeGrow / 2);
         beam.quaternion.setFromUnitVectors(UP, cap.dir);
         beam.scale.set(homeGrow, homeGrow, homeGrow);
-        beamMat.opacity = 0.34 * beamFade;
+        beamMat.opacity = 0.5 * beamFade;
         homeRing.visible = true;
         homeRing.position.copy(cap.dir).multiplyScalar(surfaceR(cap) + cellSize * 0.12);
         homeRing.quaternion.setFromUnitVectors(UP, cap.dir);
@@ -31445,7 +31446,7 @@
     panel.style.cssText = [
       "position:absolute",
       "left:14px",
-      "bottom:14px",
+      "bottom:150px",
       "z-index:9",
       "font:12px/1.45 ui-monospace,Menlo,Consolas,monospace",
       "color:#e9eef2",
@@ -31459,6 +31460,26 @@
       "text-shadow:0 1px 2px rgba(0,0,0,0.6)"
     ].join(";");
     document.body.appendChild(panel);
+    const homeBtn = document.createElement("button");
+    homeBtn.textContent = "\u2302 Home (H)";
+    homeBtn.style.cssText = [
+      "position:absolute",
+      "left:14px",
+      "bottom:96px",
+      "z-index:10",
+      "pointer-events:auto",
+      "font:12px/1 ui-monospace,monospace",
+      "color:#eaf4ff",
+      "background:rgba(28,52,80,0.92)",
+      "border:1px solid rgba(140,200,255,0.55)",
+      "border-radius:7px",
+      "padding:8px 11px",
+      "cursor:pointer"
+    ].join(";");
+    homeBtn.addEventListener("click", () => {
+      key("h");
+    });
+    document.body.appendChild(homeBtn);
     const say = (s) => {
       lastLog = s;
       o.log(s);
@@ -31487,11 +31508,12 @@
         lines.push(`selected ${label(sel)} (${owner}) \xB7 ${dist} units from home`);
         lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
       } else {
-        lines.push("H flies home \xB7 click an unclaimed keep beside your roads to claim it");
+        lines.push("click an unclaimed keep beside your roads to claim it");
       }
       lines.push(`\u2014 ${lastLog}`);
-      lines.push(`home ${me.capital ?? "lost"} \xB7 H fly home \xB7 1-9 your castles \xB7 F follow army`);
-      lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause \xB7 click a road to cut it");
+      if (BUILD_TAG) lines.push(`build ${BUILD_TAG}`);
+      lines.push("H home \xB7 1-9 your castles \xB7 F follow army \xB7 click a road to cut it");
+      lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause");
       panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
     }
     function projectToScreen(p) {
@@ -31590,9 +31612,20 @@
           say("you have no capital");
           return true;
         }
-        o.flyToDir(cap.dir);
+        const camDir2 = o.camera.position.clone().normalize();
+        const off = camDir2.angleTo(cap.dir);
+        const altAbove = Math.max(0, o.camera.position.length() - o.R);
         selected = cap.key;
-        say(`flying home to ${label(cap)}`);
+        if (off < 0.08 && altAbove < 140) {
+          o.flyToDir(cap.dir, 34);
+          say("already home: closing in on your keep");
+        } else if (off < 0.08) {
+          o.flyToDir(cap.dir, 90);
+          say("already home: zooming in on your keep");
+        } else {
+          o.flyToDir(cap.dir, Math.min(altAbove, 260));
+          say(`flying home to ${label(cap)}`);
+        }
         return true;
       }
       if (k >= "1" && k <= "9" && k.length === 1) {
@@ -31904,6 +31937,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
+  var BUILD = "2026-11-09 04:35";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -33274,32 +33308,47 @@
   };
   window.__globe = api;
   if (hud) hud.addEventListener("click", report);
-  if (hud) hud.textContent = `forging the world from seed ${SEED}\u2026`;
+  if (hud) hud.textContent = `forging the world from seed ${SEED}\u2026 build ${BUILD}`;
   setTimeout(() => {
     const t0 = performance.now();
-    world = createWorld({
-      R,
-      TERR_PER_FACE,
-      RELIEF,
-      SEED,
-      seatOf: seatCached,
-      SPAWN_DIR,
-      castleGroup,
-      camera,
-      canvas,
-      log: (line) => {
-        console.log("[realms]", line);
-      },
-      flyToDir: (dir) => {
-        aim.lat = Math.asin(Math.max(-1, Math.min(1, dir.y)));
-        aim.lon = Math.atan2(dir.z, dir.x);
-        markDirty();
-      }
-    });
-    window.__world = world;
-    console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms`);
-    syncCastles();
-    markDirty();
+    try {
+      world = createWorld({
+        R,
+        TERR_PER_FACE,
+        RELIEF,
+        SEED,
+        seatOf: seatCached,
+        SPAWN_DIR,
+        castleGroup,
+        camera,
+        canvas,
+        log: (line) => {
+          console.log("[realms]", line);
+        },
+        build: BUILD,
+        flyToDir: (dir, alt) => {
+          aim.lat = Math.asin(Math.max(-1, Math.min(1, dir.y)));
+          aim.lon = Math.atan2(dir.z, dir.x);
+          if (alt !== void 0) aim.alt = Math.max(MIN_ALT, alt);
+          markDirty();
+        }
+      });
+      window.__world = world;
+      console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`);
+      syncCastles();
+      markDirty();
+    } catch (err) {
+      const msg = err instanceof Error ? `${err.message}` : String(err);
+      console.error("[realms] world build failed", err);
+      if (hud) hud.textContent = `world build failed: ${msg}`;
+      const fail = document.createElement("div");
+      fail.style.cssText = "position:fixed;left:14px;top:14px;z-index:20;max-width:520px;padding:10px 12px;font:12px/1.5 ui-monospace,monospace;color:#ffd9d9;background:rgba(60,12,12,.9);border:1px solid rgba(255,120,120,.5);border-radius:8px;white-space:pre-wrap";
+      fail.textContent = `Realms world build failed on this browser:
+${msg}
+
+build ${BUILD}`;
+      document.body.appendChild(fail);
+    }
   }, 250);
   var worldClock = 0;
   var lastT = performance.now();

@@ -19,6 +19,13 @@
   <body>
     <canvas id="stage"></canvas>
     <div id="hud">loading</div>
-    <script src="dist/globe.js"></script>
+    <!-- GitHub Pages caches assets for 10 minutes, which served a stale bundle after every
+         publish: Mason pressed H and nothing happened because his browser still had the build
+         from before H existed. The stamp makes every load a miss, so a plain reload is enough. -->
+    <script>
+      var boot = document.createElement("script");
+      boot.src = "dist/globe.js?v=" + Date.now();
+      document.body.appendChild(boot);
+    </script>
   </body>
 </html>
