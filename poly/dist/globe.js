@@ -31368,6 +31368,10 @@
   var aim = { lat: cam.lat, lon: cam.lon, alt: cam.alt };
   var MIN_ALT = 20;
   var MAX_ALT = R * 3.2;
+  var carriedNorth = new Vector3(0, 1, 0);
+  function latCos(lat) {
+    return Math.max(0.35, Math.cos(lat));
+  }
   var LOD_FREEZE_ALT = 4200;
   var frozeHigh = false;
   function unitsPerPixel(alt) {
@@ -31389,8 +31393,15 @@
     const s = sample(up, false);
     const r = R + Math.max(0, s.h) * RELIEF * R;
     target.copy(up).multiplyScalar(r);
-    north.set(0, 1, 0).sub(up.clone().multiplyScalar(up.y)).normalize();
+    north.copy(carriedNorth);
+    north.addScaledVector(up, -north.dot(up));
+    if (north.lengthSq() < 1e-6) {
+      north.set(1, 0, 0).addScaledVector(up, -up.x);
+      if (north.lengthSq() < 1e-6) north.set(0, 0, 1).addScaledVector(up, -up.z);
+    }
+    north.normalize();
     east.crossVectors(north, up).normalize();
+    carriedNorth.copy(north);
     cam.tilt = tiltFor(cam.alt);
     camDir.copy(up).multiplyScalar(R + cam.alt);
     const d = Math.max(cam.alt, 0.4);
@@ -31559,7 +31570,7 @@
     lastY = e.clientY;
     const fine = aim.alt < 60 ? 0.35 : 1;
     const upp = unitsPerPixel(aim.alt) * fine;
-    aim.lon -= dx * upp / (R * Math.cos(Math.max(0.1, aim.lat)));
+    aim.lon -= dx * upp / (R * latCos(aim.lat));
     aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dy * upp / R));
   });
   canvas.addEventListener("wheel", (e) => {
@@ -31578,7 +31589,7 @@
     const py2 = ny * 0.5 * innerHeight;
     const dEast = px2 * (oldUpp - newUpp);
     const dNorth = -py2 * (oldUpp - newUpp);
-    aim.lon += dEast / (R * Math.cos(Math.max(0.1, aim.lat)));
+    aim.lon += dEast / (R * latCos(aim.lat));
     aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dNorth / R));
   }, { passive: false });
   addEventListener("keydown", (e) => {
