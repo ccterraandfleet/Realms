@@ -31466,6 +31466,118 @@
     }
     markDirty();
   }
+  var FACTION_YOU = 0;
+  var FACTION_ENEMY = 1;
+  var OWN_COLOUR = new Color(4161488);
+  var ENEMY_COLOUR = new Color(12597547);
+  var OWN_BLOCK = 6;
+  var SPAWN_DIR = new Vector3(
+    Math.cos(0.42) * Math.cos(-1.15),
+    Math.sin(0.42),
+    Math.cos(0.42) * Math.sin(-1.15)
+  ).normalize();
+  var YOUR_REACH = OWN_BLOCK * (R * 2) / TERR_PER_FACE / R;
+  function factionOf(dir) {
+    return dir.angleTo(SPAWN_DIR) < YOUR_REACH ? FACTION_YOU : FACTION_ENEMY;
+  }
+  var ROAD_WIDTH = 4.2;
+  var ROAD_TINT = 13218959;
+  var roadMesh = null;
+  var roadMat = new MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.95,
+    metalness: 0,
+    side: DoubleSide
+  });
+  function clearRoads() {
+    if (!roadMesh) return;
+    castleGroup.remove(roadMesh);
+    roadMesh.geometry.dispose();
+    roadMesh = null;
+  }
+  function syncRoads(face, cu, cv, reach0) {
+    if (cam.alt > R * 0.25) {
+      clearRoads();
+      return;
+    }
+    const reach = Math.min(reach0, 8);
+    const positions = [];
+    const colours = [];
+    const cA = new Vector3();
+    const cB = new Vector3();
+    const dir = new Vector3();
+    const sway = new Vector3();
+    const tan = new Vector3();
+    const upv = new Vector3();
+    const side = new Vector3();
+    const tint = new Color();
+    const K = 9;
+    const wide = Math.max(1, Math.min(3, cam.alt / 150));
+    let pairs = 0;
+    for (let dv = -reach; dv <= reach; dv++) {
+      for (let du = -reach; du <= reach; du++) {
+        const tu = cu + du;
+        const tv = cv + dv;
+        if (tu < 0 || tv < 0 || tu + 1 >= TERR_PER_FACE || tv + 1 >= TERR_PER_FACE) continue;
+        const a = seatCached(face, tu, tv);
+        if (!a) continue;
+        for (const [ox, oy] of [[1, 0], [0, 1]]) {
+          const bq = seatCached(face, tu + ox, tv + oy);
+          if (!bq || pairs >= 420) continue;
+          cA.copy(a.dir);
+          cB.copy(bq.dir);
+          const span = 2 / TERR_PER_FACE;
+          const u0 = -1 + tu * span;
+          const v0 = -1 + tv * span;
+          const mid = faceDir(face, u0 + span * (0.5 + ox * 0.5), v0 + span * (0.5 + oy * 0.5), dir).clone();
+          if (sample(mid, false).h <= SEA) continue;
+          pairs++;
+          tint.setHex(ROAD_TINT).multiplyScalar(0.9 + ih3(tu, tv, ox + oy, 71) * 0.18);
+          sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(tu, tv, 5, 73) - 0.5) * 0.1);
+          const pts = [];
+          const sides = [];
+          let drowned = false;
+          for (let i = 0; i <= K; i++) {
+            const t = i / K;
+            dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
+            const h = sample(dir, false).h;
+            if (h <= SEA) {
+              drowned = true;
+              break;
+            }
+            pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + 0.55));
+          }
+          if (drowned || pts.length < 2) continue;
+          for (let i = 0; i < pts.length; i++) {
+            tan.subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
+            upv.copy(pts[i]).normalize();
+            side.crossVectors(tan, upv).normalize().multiplyScalar(ROAD_WIDTH * wide / 2);
+            sides.push(side.clone());
+          }
+          for (let i = 0; i < pts.length - 1; i++) {
+            const l0 = pts[i].clone().sub(sides[i]);
+            const r0 = pts[i].clone().add(sides[i]);
+            const l1 = pts[i + 1].clone().sub(sides[i + 1]);
+            const r1 = pts[i + 1].clone().add(sides[i + 1]);
+            for (const v of [l0, r0, r1, l0, r1, l1]) {
+              positions.push(v.x, v.y, v.z);
+              colours.push(tint.r, tint.g, tint.b);
+            }
+          }
+        }
+      }
+    }
+    clearRoads();
+    if (!positions.length) return;
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new Float32BufferAttribute(positions, 3));
+    geo.setAttribute("color", new Float32BufferAttribute(colours, 3));
+    geo.computeVertexNormals();
+    roadMesh = new Mesh(geo, roadMat);
+    roadMesh.receiveShadow = true;
+    roadMesh.frustumCulled = false;
+    castleGroup.add(roadMesh);
+  }
   var BEACON_MAX = 1400;
   var beaconGeo = null;
   var beacons = null;
@@ -31510,6 +31622,7 @@
     };
     if (!far) {
       clearDetail();
+      clearRoads();
       if (beacons) beacons.count = 0;
       return;
     }
@@ -31534,12 +31647,13 @@
       }
     }
     lastSeats = seats.length;
+    syncRoads(face, cu, cv, reach);
     if (near) {
       lastTier = "detail";
       if (beacons) beacons.count = 0;
       for (const s of seats) {
         if (castles.has(s.key)) continue;
-        const g = mergeGroup(buildCastle(0.9, (s.key.length + s.h * 100) % 2 > 1 ? roofRedMat : roofBlueMat));
+        const g = mergeGroup(buildCastle(0.9, factionOf(s.dir) === FACTION_YOU ? roofBlueMat : roofRedMat));
         g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
@@ -31559,7 +31673,7 @@
     if (!beacons) {
       beacons = new InstancedMesh(
         beaconGeometry(),
-        new MeshStandardMaterial({ color: 11972770, roughness: 0.85, metalness: 0.02 }),
+        new MeshStandardMaterial({ color: 16777215, roughness: 0.8, metalness: 0.02 }),
         BEACON_MAX
       );
       beacons.frustumCulled = false;
@@ -31567,8 +31681,10 @@
     }
     const grow = Math.max(1, Math.min(12, cam.alt / 45));
     let n = 0;
+    const tint = new Color();
     for (const s of seats) {
       if (n >= BEACON_MAX) break;
+      tint.copy(factionOf(s.dir) === FACTION_YOU ? OWN_COLOUR : ENEMY_COLOUR);
       _bq.setFromUnitVectors(_bup, s.dir);
       _bs.set(grow, grow, grow);
       _bm.compose(
@@ -31576,8 +31692,11 @@
         _bq,
         _bs
       );
-      beacons.setMatrixAt(n++, _bm);
+      beacons.setMatrixAt(n, _bm);
+      beacons.setColorAt(n, tint);
+      n++;
     }
+    if (beacons.instanceColor) beacons.instanceColor.needsUpdate = true;
     beacons.count = n;
     beacons.instanceMatrix.needsUpdate = true;
   }
@@ -31589,6 +31708,12 @@
     if (ay >= ax && ay >= az) return d.y > 0 ? 2 : 3;
     return d.z > 0 ? 4 : 5;
   }
+  var _pa = new Vector3();
+  var _pu = new Vector3();
+  var _pv = new Vector3();
+  var _r = new Vector3();
+  var _tu = new Vector3();
+  var _tv = new Vector3();
   function faceUV(face, d) {
     let u = 0;
     let v = 0;
@@ -31618,7 +31743,28 @@
         v = d.y / -d.z;
         break;
     }
-    return { u: Math.max(-1, Math.min(1, u)), v: Math.max(-1, Math.min(1, v)) };
+    const h = 1e-4;
+    for (let i = 0; i < 8; i++) {
+      faceDir(face, u, v, _pa);
+      _r.subVectors(d, _pa);
+      if (_r.lengthSq() < 1e-14) break;
+      faceDir(face, u + h, v, _pu);
+      faceDir(face, u, v + h, _pv);
+      _tu.subVectors(_pu, _pa).divideScalar(h);
+      _tv.subVectors(_pv, _pa).divideScalar(h);
+      const a11 = _tu.dot(_tu);
+      const a12 = _tu.dot(_tv);
+      const a22 = _tv.dot(_tv);
+      const b1 = _tu.dot(_r);
+      const b2 = _tv.dot(_r);
+      const det = a11 * a22 - a12 * a12;
+      if (Math.abs(det) < 1e-12) break;
+      u += (b1 * a22 - b2 * a12) / det;
+      v += (a11 * b2 - a12 * b1) / det;
+      u = Math.max(-1.02, Math.min(1.02, u));
+      v = Math.max(-1.02, Math.min(1.02, v));
+    }
+    return { u, v };
   }
   function resize() {
     renderer.setSize(innerWidth, innerHeight, false);
@@ -31738,6 +31884,17 @@
     cam,
     nodes,
     castles,
+    probeFaceUV: (n) => {
+      let worst = 0;
+      for (let i = 0; i < n; i++) {
+        const d = new Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+        const f = faceOf(d);
+        const uv = faceUV(f, d);
+        const back = faceDir(f, uv.u, uv.v, new Vector3());
+        worst = Math.max(worst, back.angleTo(d));
+      }
+      return worst;
+    },
     castleGroup,
     stats: () => ({
       seats: lastSeats,
