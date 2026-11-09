@@ -31178,7 +31178,11 @@
         if (node.trees) nodeGroup.add(node.trees);
       }
     };
-    for (let f = 0; f < 6; f++) consider(f, 0, 0, 0);
+    for (let f = 0; f < 6; f++) {
+      for (let iu0 = 0; iu0 < 4; iu0++) {
+        for (let iv0 = 0; iv0 < 4; iv0++) consider(f, 2, iu0, iv0);
+      }
+    }
     for (const [key, node] of nodes) {
       if (!wanted.has(key)) {
         disposeNode(node);
@@ -31364,6 +31368,12 @@
   var aim = { lat: cam.lat, lon: cam.lon, alt: cam.alt };
   var MIN_ALT = 20;
   var MAX_ALT = R * 3.2;
+  var LOD_FREEZE_ALT = 4200;
+  var frozeHigh = false;
+  function unitsPerPixel(alt) {
+    const viewHeight = 2 * Math.tan(camera.fov * Math.PI / 360) * Math.max(alt, 0.5);
+    return viewHeight / Math.max(1, innerHeight);
+  }
   function tiltFor(alt) {
     const t = Math.log(Math.max(1, alt / 14)) / Math.log(1400 / 14);
     const k = Math.max(0, Math.min(1, t));
@@ -31422,8 +31432,19 @@
     const key = `${cam.lat.toFixed(5)}|${cam.lon.toFixed(5)}|${Math.round(cam.alt * 4)}|${aspect2.toFixed(3)}`;
     if (key !== lastKey) {
       lastKey = key;
-      buildTree();
-      syncCastles();
+      const high = cam.alt > LOD_FREEZE_ALT;
+      if (high && !frozeHigh) {
+        frozeHigh = true;
+        buildTree();
+        syncCastles();
+      } else if (!high && frozeHigh) {
+        frozeHigh = false;
+        buildTree();
+        syncCastles();
+      } else if (!high) {
+        buildTree();
+        syncCastles();
+      }
     }
     markDirty();
   }
@@ -31536,29 +31557,29 @@
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
-    const groundPan = aim.alt < R * 0.02;
-    if (groundPan) {
-      const perPixel = aim.alt * 1.4 / innerHeight;
-      const dLon = dx * perPixel / (R * Math.cos(Math.max(0.1, aim.lat)));
-      const dLat = dy * perPixel / R;
-      aim.lon += dLon;
-      aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dLat));
-    } else {
-      aim.lon -= dx * 5e-3;
-      aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dy * 5e-3));
-    }
+    const fine = aim.alt < 60 ? 0.35 : 1;
+    const upp = unitsPerPixel(aim.alt) * fine;
+    aim.lon -= dx * upp / (R * Math.cos(Math.max(0.1, aim.lat)));
+    aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dy * upp / R));
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const f = Math.exp(e.deltaY * 11e-4);
+    const kz = aim.alt < 90 ? 45e-5 : 9e-4;
+    const dz = Math.max(-150, Math.min(150, e.deltaY));
+    const f = Math.exp(dz * kz);
     const before = aim.alt;
     aim.alt = Math.max(MIN_ALT, Math.min(MAX_ALT, aim.alt * f));
     const rect = canvas.getBoundingClientRect();
     const nx = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
     const ny = ((e.clientY - rect.top) / rect.height - 0.5) * 2;
-    const k = 1 - aim.alt / before;
-    aim.lon += nx * aim.alt * 0.9 / R * k;
-    aim.lat -= ny * aim.alt * 0.9 / R * k;
+    const oldUpp = unitsPerPixel(before);
+    const newUpp = unitsPerPixel(aim.alt);
+    const px2 = nx * 0.5 * innerWidth;
+    const py2 = ny * 0.5 * innerHeight;
+    const dEast = px2 * (oldUpp - newUpp);
+    const dNorth = -py2 * (oldUpp - newUpp);
+    aim.lon += dEast / (R * Math.cos(Math.max(0.1, aim.lat)));
+    aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dNorth / R));
   }, { passive: false });
   addEventListener("keydown", (e) => {
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
@@ -31583,6 +31604,9 @@
   markDirty();
   var api = {
     THREE: three_module_exports,
+    get aim() {
+      return aim;
+    },
     renderer,
     scene,
     camera,
