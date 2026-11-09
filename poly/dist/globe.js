@@ -30646,6 +30646,1003 @@
     }
   }
 
+  // src/globe/realms.ts
+  var ARMY_CAP = [100, 250, 500, 1e3, 1600, 2200, 2700, 3250];
+  var CLAIM_GRAIN = 120;
+  var CLAIM_GOLD = 40;
+  var MUSTER_MEN = 100;
+  var MUSTER_COST = { grain: 90, gold: 30, ore: 20 };
+  var TRUNK_SPEED = 26;
+  var LANE_SPEED = 15;
+  var BEAT = 1;
+  var SIEGE_DRAIN = 0.05;
+  var SIEGE_RECOVER = 0.02;
+  var REALM_NAMES = [
+    "You",
+    "Ashfell",
+    "Brinewatch",
+    "Coldharbour",
+    "Dunmoor",
+    "Eastmarch",
+    "Fenwick",
+    "Greyhollow",
+    "Highmoor",
+    "Ironvale",
+    "Kestrel",
+    "Longford"
+  ];
+  var REALM_COLOURS = [
+    4161488,
+    12597547,
+    9323693,
+    1482885,
+    13849600,
+    2899536,
+    8359053,
+    12092939,
+    2600544,
+    10502144,
+    6122878,
+    9711910
+  ];
+  function createWorld(o) {
+    const nodes2 = /* @__PURE__ */ new Map();
+    const edges = /* @__PURE__ */ new Map();
+    const incident = /* @__PURE__ */ new Map();
+    const realms = [];
+    const hosts = [];
+    let dirtyTerritory = true;
+    let selected = null;
+    let paused = false;
+    let lastLog = "click one of your keeps, or an unclaimed one beside your road";
+    const cellSize = Math.PI * o.R / 2 / o.TERR_PER_FACE;
+    const nodeKey = (f, tu, tv) => `${f}/${tu}/${tv}`;
+    const edgeKeyOf = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+    const surfaceR = (n) => o.R + Math.max(0, n.h) * o.RELIEF * o.R;
+    const t0 = performance.now();
+    for (let f = 0; f < 6; f++) {
+      for (let tu = 0; tu < o.TERR_PER_FACE; tu++) {
+        for (let tv = 0; tv < o.TERR_PER_FACE; tv++) {
+          const seat = o.seatOf(f, tu, tv);
+          if (!seat) continue;
+          const key2 = nodeKey(f, tu, tv);
+          const n = {
+            key: key2,
+            face: f,
+            tu,
+            tv,
+            dir: seat.dir,
+            h: seat.h,
+            owner: -1,
+            level: 1,
+            morale: 1,
+            pos: new Vector3()
+          };
+          n.pos.copy(seat.dir).multiplyScalar(surfaceR(n) + 0.3);
+          nodes2.set(key2, n);
+        }
+      }
+    }
+    const cand = [];
+    const seenPair = /* @__PURE__ */ new Set();
+    const addCand = (a, b) => {
+      if (a.key === b.key) return;
+      const key2 = edgeKeyOf(a.key, b.key);
+      if (seenPair.has(key2)) return;
+      seenPair.add(key2);
+      cand.push({ key: key2, a, b, len: a.dir.distanceTo(b.dir) });
+    };
+    for (const n of nodes2.values()) {
+      for (const [du, dv] of [[1, 0], [0, 1], [1, 1], [1, -1]]) {
+        const other = nodes2.get(nodeKey(n.face, n.tu + du, n.tv + dv));
+        if (other) addCand(n, other);
+      }
+    }
+    const BUCKET = 28;
+    const grid = /* @__PURE__ */ new Map();
+    const bucketOf = (d) => `${Math.floor((d.x + 1) * 0.5 * BUCKET)},${Math.floor((d.y + 1) * 0.5 * BUCKET)},${Math.floor((d.z + 1) * 0.5 * BUCKET)}`;
+    for (const n of nodes2.values()) {
+      const k = bucketOf(n.dir);
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(n);
+    }
+    for (const n of nodes2.values()) {
+      const near = [];
+      const bx = Math.floor((n.dir.x + 1) * 0.5 * BUCKET);
+      const by = Math.floor((n.dir.y + 1) * 0.5 * BUCKET);
+      const bz = Math.floor((n.dir.z + 1) * 0.5 * BUCKET);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dz = -1; dz <= 1; dz++) {
+            const list = grid.get(`${bx + dx},${by + dy},${bz + dz}`);
+            if (!list) continue;
+            for (const other of list) {
+              if (other.face === n.face) continue;
+              near.push({ node: other, d: n.dir.distanceTo(other.dir) });
+            }
+          }
+        }
+      }
+      near.sort((p, q) => p.d - q.d);
+      for (const candNode of near.slice(0, 2)) addCand(n, candNode.node);
+    }
+    cand.sort((p, q) => p.len - q.len);
+    const parent = /* @__PURE__ */ new Map();
+    for (const n of nodes2.keys()) parent.set(n, n);
+    const find = (x) => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r);
+      let c = x;
+      while (parent.get(c) !== r) {
+        const nx = parent.get(c);
+        parent.set(c, r);
+        c = nx;
+      }
+      return r;
+    };
+    const tree = [];
+    const spare = [];
+    for (const e of cand) {
+      const ra = find(e.a.key);
+      const rb = find(e.b.key);
+      if (ra === rb) {
+        spare.push(e);
+        continue;
+      }
+      parent.set(ra, rb);
+      tree.push(e);
+    }
+    const median = tree.length ? tree[Math.floor(tree.length / 2)].len : 0;
+    let loops = 0;
+    const loopBudget = Math.ceil(tree.length * 0.08);
+    for (const e of spare) {
+      if (loops >= loopBudget) break;
+      if (e.len > median * 1.2) continue;
+      if ((e.a.tu * 31 + e.b.tv * 17 + e.a.tv * 7) % 100 > 62) continue;
+      loops++;
+      tree.push(e);
+    }
+    const adjT = /* @__PURE__ */ new Map();
+    for (const e of tree) {
+      if (!adjT.has(e.a.key)) adjT.set(e.a.key, []);
+      if (!adjT.has(e.b.key)) adjT.set(e.b.key, []);
+      adjT.get(e.a.key).push(e.b.key);
+      adjT.get(e.b.key).push(e.a.key);
+    }
+    const par = /* @__PURE__ */ new Map();
+    const order = [];
+    const first = nodes2.values().next();
+    if (!first.done) {
+      par.set(first.value.key, null);
+      order.push(first.value.key);
+      for (let i = 0; i < order.length; i++) {
+        for (const nb of adjT.get(order[i]) ?? []) {
+          if (par.has(nb)) continue;
+          par.set(nb, order[i]);
+          order.push(nb);
+        }
+      }
+    }
+    const size = /* @__PURE__ */ new Map();
+    for (const k of order) size.set(k, 1);
+    for (let i = order.length - 1; i > 0; i--) {
+      const k = order[i];
+      const pk = par.get(k);
+      if (pk) size.set(pk, (size.get(pk) ?? 1) + (size.get(k) ?? 1));
+    }
+    const total = nodes2.size || 1;
+    const traffic = (e) => {
+      if (par.get(e.b.key) === e.a.key) return Math.min(size.get(e.b.key) ?? 1, total - (size.get(e.b.key) ?? 1));
+      if (par.get(e.a.key) === e.b.key) return Math.min(size.get(e.a.key) ?? 1, total - (size.get(e.a.key) ?? 1));
+      return 0;
+    };
+    const ranked = [...tree].sort((p, q) => traffic(q) - traffic(p));
+    const trunkCut = Math.max(1, Math.floor(ranked.length * 0.35));
+    ranked.forEach((e, i) => {
+      edges.set(e.key, { key: e.key, a: e.a.key, b: e.b.key, tier: i < trunkCut ? 1 : 0, cut: false });
+    });
+    for (const e of edges.values()) {
+      if (!incident.has(e.a)) incident.set(e.a, []);
+      if (!incident.has(e.b)) incident.set(e.b, []);
+      incident.get(e.a).push(e.key);
+      incident.get(e.b).push(e.key);
+    }
+    for (let i = 0; i < 12; i++) {
+      realms.push({
+        id: i,
+        name: REALM_NAMES[i],
+        colour: REALM_COLOURS[i],
+        capital: null,
+        res: { grain: 400, timber: 200, ore: 100, gold: 150 },
+        alive: true,
+        home: new Vector3(1, 0, 0)
+      });
+    }
+    const allNodes = [...nodes2.values()];
+    const nearestTo = (dir, pool) => {
+      let best = null;
+      let bd = Infinity;
+      for (const n of pool) {
+        const d = n.dir.angleTo(dir);
+        if (d < bd) {
+          bd = d;
+          best = n;
+        }
+      }
+      return best;
+    };
+    const playerCapital = nearestTo(o.SPAWN_DIR, allNodes);
+    if (playerCapital) {
+      playerCapital.owner = 0;
+      playerCapital.morale = 1;
+      realms[0].capital = playerCapital.key;
+      realms[0].home.copy(playerCapital.dir);
+    }
+    const taken = playerCapital ? [playerCapital] : [];
+    for (let i = 1; i < 12; i++) {
+      let best = null;
+      let bestScore = -Infinity;
+      for (let s = 0; s < 40; s++) {
+        const a = (i * 2.399963 + s * 0.7) % (Math.PI * 2);
+        const z = 1 - 2 * ((i * 0.19 + s * 0.11) % 1);
+        const rr = Math.sqrt(Math.max(0, 1 - z * z));
+        const probe = new Vector3(rr * Math.cos(a), z, rr * Math.sin(a));
+        const cand2 = nearestTo(probe, allNodes.filter((n) => n.owner < 0 && !taken.includes(n)));
+        if (!cand2) continue;
+        let sep = Infinity;
+        for (const t of taken) sep = Math.min(sep, cand2.dir.angleTo(t.dir));
+        const score = sep + cand2.h * 0.3;
+        if (score > bestScore) {
+          bestScore = score;
+          best = cand2;
+        }
+      }
+      if (best) {
+        best.owner = i;
+        realms[i].capital = best.key;
+        realms[i].home.copy(best.dir);
+        taken.push(best);
+      }
+    }
+    const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
+    function supplyEdges(capitalKey, budget = 9e4) {
+      const fed = /* @__PURE__ */ new Set();
+      const seen = /* @__PURE__ */ new Set([capitalKey]);
+      const queue = [capitalKey];
+      while (queue.length && fed.size < budget) {
+        const k = queue.shift();
+        for (const ek of incident.get(k) ?? []) {
+          const e = edges.get(ek);
+          if (!e || e.cut) continue;
+          fed.add(ek);
+          const other = e.a === k ? e.b : e.a;
+          if (!seen.has(other)) {
+            seen.add(other);
+            queue.push(other);
+          }
+        }
+      }
+      return fed;
+    }
+    const fedCache = /* @__PURE__ */ new Map();
+    function fedFor(realmId) {
+      const r = realms[realmId];
+      if (!r?.capital) return /* @__PURE__ */ new Set();
+      const now2 = performance.now();
+      const hit = fedCache.get(realmId);
+      if (hit && now2 - hit.at < 400) return hit.set;
+      const set = supplyEdges(r.capital);
+      fedCache.set(realmId, { set, at: now2 });
+      return set;
+    }
+    const cutsChanged = () => fedCache.clear();
+    function ownedBy(id) {
+      const out = [];
+      for (const n of nodes2.values()) if (n.owner === id) out.push(n);
+      return out;
+    }
+    function tickEconomy(dt) {
+      for (const r of realms) {
+        if (!r.alive) continue;
+        const mine = ownedBy(r.id);
+        if (!mine.length) continue;
+        let gain = 0;
+        const add = { grain: 0, timber: 0, ore: 0, gold: 0 };
+        const fed = r.capital ? fedFor(r.id) : null;
+        for (const n of mine) {
+          const mult = 1 + 0.3 * (n.level - 1);
+          const connected = !fed || !edges.size ? true : true;
+          add.grain += 0.6 * mult;
+          add.timber += 0.35 * mult;
+          add.ore += 0.15 * mult;
+          add.gold += 0.25 * mult;
+          gain += connected ? 1 : 0;
+        }
+        r.res.grain += add.grain * dt;
+        r.res.timber += add.timber * dt;
+        r.res.ore += add.ore * dt;
+        r.res.gold += add.gold * dt;
+      }
+    }
+    function pathBetween(from, to) {
+      if (from === to) return [from];
+      const dist = /* @__PURE__ */ new Map([[from, 0]]);
+      const prev = /* @__PURE__ */ new Map();
+      const seen = /* @__PURE__ */ new Set();
+      const heap = [{ k: from, d: 0 }];
+      while (heap.length) {
+        heap.sort((p, q) => p.d - q.d);
+        const cur2 = heap.shift();
+        if (seen.has(cur2.k)) continue;
+        seen.add(cur2.k);
+        if (cur2.k === to) break;
+        for (const ek of incident.get(cur2.k) ?? []) {
+          const e = edges.get(ek);
+          if (!e) continue;
+          const cutPenalty = e.cut ? 6 : 1;
+          const step = cellSize / (e.tier ? TRUNK_SPEED : LANE_SPEED) * cutPenalty;
+          const other = e.a === cur2.k ? e.b : e.a;
+          const nd = cur2.d + step;
+          if (nd < (dist.get(other) ?? Infinity)) {
+            dist.set(other, nd);
+            prev.set(other, cur2.k);
+            heap.push({ k: other, d: nd });
+          }
+        }
+      }
+      if (!prev.has(to)) return [];
+      const out = [to];
+      let cur = to;
+      while (cur !== from) {
+        const p = prev.get(cur);
+        if (!p) return [];
+        out.push(p);
+        cur = p;
+      }
+      return out.reverse();
+    }
+    let nextHostId = 1;
+    function hostAt(key2) {
+      return hosts.find((h) => !h.routed && (h.path[h.seg] === key2 || h.path[h.seg + 1] === key2));
+    }
+    function muster(castleKey) {
+      const n = nodes2.get(castleKey);
+      if (!n || n.owner < 0) return false;
+      const r = realms[n.owner];
+      const cap = ARMY_CAP[Math.min(8, n.level) - 1];
+      const already = hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
+      if (already + MUSTER_MEN > cap) {
+        say("army is at its cap for this castle level");
+        return false;
+      }
+      if (r.res.grain < MUSTER_COST.grain || r.res.gold < MUSTER_COST.gold || r.res.ore < MUSTER_COST.ore) {
+        say("not enough stores to muster");
+        return false;
+      }
+      r.res.grain -= MUSTER_COST.grain;
+      r.res.gold -= MUSTER_COST.gold;
+      r.res.ore -= MUSTER_COST.ore;
+      hosts.push({
+        id: nextHostId++,
+        owner: n.owner,
+        men: MUSTER_MEN,
+        startMen: MUSTER_MEN,
+        path: [castleKey],
+        seg: 0,
+        prog: 0,
+        from: castleKey,
+        to: null,
+        routed: false,
+        lastBeat: 0
+      });
+      say(`${MUSTER_MEN} men mustered at ${label(n)}`);
+      return true;
+    }
+    function orderMarch(host, to) {
+      const at = host.to ?? host.path[host.seg];
+      const path = pathBetween(at, to);
+      if (path.length < 2) {
+        say("no road route to that castle");
+        return false;
+      }
+      host.path = path;
+      host.seg = 0;
+      host.prog = 0;
+      host.from = path[0];
+      host.to = path[1];
+      host.routed = false;
+      say(`${host.men} men marching to ${label(nodes2.get(to))}`);
+      return true;
+    }
+    function label(n) {
+      if (!n) return "?";
+      return `cell ${n.tu},${n.tv} of face ${n.face}`;
+    }
+    function tickHosts(dt) {
+      for (const h of hosts) {
+        if (h.to === null) continue;
+        const e = edges.get(edgeKeyOf(h.path[h.seg], h.path[h.seg + 1]));
+        const speed = e ? e.tier ? TRUNK_SPEED : LANE_SPEED : LANE_SPEED;
+        const step = speed / cellSize * dt;
+        h.prog += step;
+        if (h.prog >= 1) {
+          h.prog = 0;
+          h.seg++;
+          h.from = h.path[h.seg];
+          const next = h.path[h.seg + 1];
+          h.to = next ?? null;
+          if (h.to === null) arrive(h);
+        }
+      }
+      for (let i = hosts.length - 1; i >= 0; i--) {
+        const h = hosts[i];
+        if (h.routed && h.to === null) hosts.splice(i, 1);
+        else if (!h.routed && h.to === null && h.path.length === 1 && h.men <= 0) hosts.splice(i, 1);
+      }
+    }
+    function arrive(h) {
+      const key2 = h.path[h.path.length - 1];
+      const n = nodes2.get(key2);
+      if (!n) return;
+      if (n.owner === h.owner) {
+        say(`${h.men} men reached ${label(n)}`);
+        return;
+      }
+      if (n.owner >= 0) {
+        const garrison = ARMY_CAP[Math.min(8, n.level) - 1];
+        if (h.men > garrison * 2.2) {
+          takeCastle(n, h.owner);
+          say(`${label(n)} stormed and taken`);
+        } else {
+          say(`besieging ${label(n)} \xB7 waiting for the road to be cut`);
+        }
+        return;
+      }
+      claimNode(n, h.owner);
+      say(`${label(n)} claimed by ${realms[h.owner].name}`);
+    }
+    function power(h) {
+      const n = h.from ? nodes2.get(h.from) : null;
+      const e = h.from && h.to ? edges.get(edgeKeyOf(h.from, h.to)) : null;
+      const tierBonus = e?.tier ? 1.15 : 1;
+      const fed = fedFor(h.owner).size > 0 ? 1 : 0.65;
+      return h.men * tierBonus * fed;
+    }
+    function tickCombat(dt) {
+      for (let i = 0; i < hosts.length; i++) {
+        const a = hosts[i];
+        if (a.to === null || a.routed) continue;
+        for (let j = i + 1; j < hosts.length; j++) {
+          const b = hosts[j];
+          if (b.to === null || b.routed || b.owner === a.owner) continue;
+          const aCells = [a.from, a.to];
+          const bCells = [b.from, b.to];
+          const shared = aCells.some((c) => bCells.includes(c));
+          if (!shared) continue;
+          a.lastBeat += dt;
+          if (a.lastBeat < BEAT) continue;
+          a.lastBeat = 0;
+          const pa = power(a);
+          const pb = power(b);
+          const total2 = pa + pb || 1;
+          const swing = Math.min(0.25, 0.12 * (Math.max(pa, pb) / total2) * 2);
+          const dmgA = Math.round(b.men * swing);
+          const dmgB = Math.round(a.men * swing * (pb / (pa || 1)) * 0.5 + a.men * 0.02);
+          a.men = Math.max(0, a.men - dmgA);
+          b.men = Math.max(0, b.men - dmgB);
+          if (a.men <= a.startMen * 0.4 || a.men <= 0) route(a);
+          if (b.men <= b.startMen * 0.4 || b.men <= 0) route(b);
+          break;
+        }
+      }
+    }
+    function route(h) {
+      const home = realms[h.owner].capital;
+      if (!home) return;
+      const here = h.path[h.seg];
+      const back = pathBetween(here, home);
+      h.routed = true;
+      if (back.length >= 2) {
+        h.path = back;
+        h.seg = 0;
+        h.prog = 0;
+        h.from = back[0];
+        h.to = back[1];
+        say(`${realms[h.owner].name} host broke and is falling back`);
+      } else {
+        h.to = null;
+      }
+    }
+    function tickSiege(dt) {
+      for (const n of nodes2.values()) {
+        if (n.owner < 0) continue;
+        const r = realms[n.owner];
+        if (!r?.capital) continue;
+        const besiegers = hosts.filter(
+          (h) => !h.routed && h.to === null && h.path[h.path.length - 1] === n.key && h.owner !== n.owner
+        );
+        if (!besiegers.length) {
+          n.morale = Math.min(1, n.morale + SIEGE_RECOVER * dt);
+          continue;
+        }
+        const fed = fedFor(n.owner);
+        const connected = n.key === r.capital || (incident.get(n.key) ?? []).some((ek) => fed.has(ek));
+        if (!connected) {
+          n.morale -= SIEGE_DRAIN * dt;
+          if (n.morale <= 0) {
+            const taker = besiegers[0].owner;
+            takeCastle(n, taker);
+            say(`${label(n)} starved out and fell to ${realms[taker].name}`);
+          }
+        } else {
+          n.morale = Math.min(1, n.morale + SIEGE_RECOVER * dt * 0.5);
+        }
+      }
+    }
+    function takeCastle(n, by) {
+      const prev = n.owner;
+      n.owner = by;
+      n.morale = 0.5;
+      n.level = Math.max(1, n.level - 1);
+      dirtyTerritory = true;
+      hostOwnersChanged();
+      if (prev >= 0) {
+        const still = ownedBy(prev).length;
+        if (!still) {
+          realms[prev].alive = false;
+          say(`${realms[prev].name} has lost its last castle`);
+        }
+      }
+    }
+    function hostOwnersChanged() {
+      for (const h of hosts) if (h.owner >= 0 && !realms[h.owner]?.alive) route(h);
+    }
+    function adjacentToRealm(n, realmId) {
+      for (const ek of incident.get(n.key) ?? []) {
+        const e = edges.get(ek);
+        const other = e.a === n.key ? e.b : e.a;
+        if (ownerOf(other) === realmId) return true;
+      }
+      return false;
+    }
+    function claimNode(n, realmId) {
+      const r = realms[realmId];
+      if (!r) return false;
+      if (realmId === 0) {
+        if (r.res.grain < CLAIM_GRAIN || r.res.gold < CLAIM_GOLD) {
+          say("not enough gold or grain to claim");
+          return false;
+        }
+        r.res.grain -= CLAIM_GRAIN;
+        r.res.gold -= CLAIM_GOLD;
+      }
+      n.owner = realmId;
+      n.level = 1;
+      n.morale = 1;
+      dirtyTerritory = true;
+      return true;
+    }
+    let worldTime = 0;
+    const AI_GRACE = 120;
+    let aiClock = 0;
+    function tickAI(dt) {
+      aiClock += dt;
+      if (aiClock < 6) return;
+      aiClock = 0;
+      for (const r of realms) {
+        if (r.id === 0 || !r.alive) continue;
+        const mine = ownedBy(r.id);
+        if (!mine.length) continue;
+        if (mine.length < 8 && r.res.grain > CLAIM_GRAIN * 2 && r.res.gold > CLAIM_GOLD * 2) {
+          const frontier = [];
+          for (const n of mine) {
+            for (const ek of incident.get(n.key) ?? []) {
+              const e = edges.get(ek);
+              if (e.cut) continue;
+              const other = nodes2.get(e.a === n.key ? e.b : e.a);
+              if (other && other.owner < 0) frontier.push(other);
+            }
+          }
+          if (frontier.length) claimNode(frontier[Math.floor(Math.random() * frontier.length)], r.id);
+        }
+        const myHosts = hosts.filter((h) => h.owner === r.id && !h.routed);
+        if (myHosts.length < 2 && r.res.grain > 200 && r.res.gold > 80) {
+          const from = mine[Math.floor(Math.random() * mine.length)];
+          if (muster(from.key)) {
+            const host = hosts[hosts.length - 1];
+            let target2 = null;
+            let bd = Infinity;
+            for (const n of nodes2.values()) {
+              if (n.owner < 0 || n.owner === r.id) continue;
+              if (n.owner === 0 && worldTime < AI_GRACE) continue;
+              const d = n.dir.angleTo(from.dir);
+              if (d < bd) {
+                bd = d;
+                target2 = n;
+              }
+            }
+            if (target2) orderMarch(host, target2.key);
+          }
+        }
+      }
+    }
+    const territoryGeo = new CircleGeometry(cellSize * 0.52, 14);
+    const territoryMat = new MeshBasicMaterial({
+      vertexColors: false,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      side: DoubleSide
+    });
+    const TERR_MAX = 2048;
+    const territory = new InstancedMesh(territoryGeo, territoryMat, TERR_MAX);
+    territory.frustumCulled = false;
+    territory.visible = false;
+    o.castleGroup.add(territory);
+    const hostGeo = new ConeGeometry(cellSize * 0.055, cellSize * 0.16, 6);
+    const hostMat = new MeshStandardMaterial({ color: 16777215, roughness: 0.6, metalness: 0.1 });
+    const HOST_MAX = 64;
+    const hostMesh = new InstancedMesh(hostGeo, hostMat, HOST_MAX);
+    hostMesh.frustumCulled = false;
+    hostMesh.count = 0;
+    o.castleGroup.add(hostMesh);
+    const ringGeo = new RingGeometry(cellSize * 0.3, cellSize * 0.38, 20);
+    const ringMat = new MeshBasicMaterial({ color: 16777215, transparent: true, opacity: 0.85, side: DoubleSide });
+    const ring = new Mesh(ringGeo, ringMat);
+    ring.visible = false;
+    o.castleGroup.add(ring);
+    const m4 = new Matrix4();
+    const q4 = new Quaternion();
+    const v4 = new Vector3();
+    const s4 = new Vector3(1, 1, 1);
+    const col4 = new Color();
+    const UP = new Vector3(0, 1, 0);
+    function placeOnGround(node, scale = 1) {
+      q4.setFromUnitVectors(UP, node.dir);
+      s4.set(scale, scale, scale);
+      v4.copy(node.dir).multiplyScalar(surfaceR(node) + 1.1);
+      m4.compose(v4, q4, s4);
+    }
+    function rebuildTerritory() {
+      let n = 0;
+      for (const node of nodes2.values()) {
+        if (node.owner < 0) continue;
+        if (n >= TERR_MAX) break;
+        const realm = realms[node.owner];
+        const grow = 1 + (node.level - 1) * 0.18;
+        placeOnGround(node, grow);
+        territory.setMatrixAt(n, m4);
+        col4.setHex(realm ? realm.colour : 16777215);
+        col4.multiplyScalar(0.45 + 0.55 * node.morale);
+        territory.setColorAt(n, col4);
+        n++;
+      }
+      territory.count = n;
+      territory.visible = n > 0;
+      territory.instanceMatrix.needsUpdate = true;
+      if (territory.instanceColor) territory.instanceColor.needsUpdate = true;
+      dirtyTerritory = false;
+    }
+    function render() {
+      if (dirtyTerritory) rebuildTerritory();
+      let n = 0;
+      for (const h of hosts) {
+        if (n >= HOST_MAX) break;
+        const a = nodes2.get(h.path[h.seg]);
+        if (!a) continue;
+        const b = h.to ? nodes2.get(h.to) : null;
+        const dirA = a.dir;
+        const dirB = b ? b.dir : a.dir;
+        const dir = dirA.clone().lerp(dirB, h.prog).normalize();
+        const hh = b ? a.h + (b.h - a.h) * h.prog : a.h;
+        v4.copy(dir).multiplyScalar(o.R + Math.max(0, hh) * o.RELIEF * o.R + cellSize * 0.1);
+        q4.setFromUnitVectors(UP, dir);
+        s4.set(1, 1, 1);
+        m4.compose(v4, q4, s4);
+        hostMesh.setMatrixAt(n, m4);
+        col4.setHex(realms[h.owner]?.colour ?? 16777215);
+        if (h.routed) col4.multiplyScalar(0.5);
+        hostMesh.setColorAt(n, col4);
+        n++;
+      }
+      hostMesh.count = n;
+      hostMesh.instanceMatrix.needsUpdate = true;
+      if (hostMesh.instanceColor) hostMesh.instanceColor.needsUpdate = true;
+      const sel = selected ? nodes2.get(selected) : null;
+      if (sel) {
+        placeOnGround(sel, 1);
+        ring.position.copy(sel.dir).multiplyScalar(surfaceR(sel) + 1.4);
+        ring.quaternion.setFromUnitVectors(UP, sel.dir);
+        ring.visible = true;
+        ringMat.color.setHex(realms[sel.owner]?.colour ?? 16777215);
+      } else {
+        ring.visible = false;
+      }
+    }
+    const panel = document.createElement("div");
+    panel.id = "realms-panel";
+    panel.style.cssText = [
+      "position:absolute",
+      "left:14px",
+      "bottom:14px",
+      "z-index:9",
+      "font:12px/1.45 ui-monospace,Menlo,Consolas,monospace",
+      "color:#e9eef2",
+      "background:rgba(12,18,22,0.82)",
+      "border:1px solid rgba(255,255,255,0.14)",
+      "border-radius:8px",
+      "padding:10px 12px",
+      "max-width:330px",
+      "white-space:pre",
+      "pointer-events:none",
+      "text-shadow:0 1px 2px rgba(0,0,0,0.6)"
+    ].join(";");
+    document.body.appendChild(panel);
+    const say = (s) => {
+      lastLog = s;
+      o.log(s);
+      if (panelUpdateAt === 0) paint();
+    };
+    let panelUpdateAt = 0;
+    const hex = (c) => `#${c.toString(16).padStart(6, "0")}`;
+    function paint() {
+      const me = realms[0];
+      const mine = ownedBy(0);
+      const cap = me.capital ? nodes2.get(me.capital) : null;
+      const sel = selected ? nodes2.get(selected) : null;
+      const myHosts = hosts.filter((h) => h.owner === 0 && !h.routed);
+      const men = myHosts.reduce((s, h) => s + h.men, 0);
+      const lines = [
+        `${me.name}: ${mine.length} castle${mine.length === 1 ? "" : "s"} \xB7 ${men} men afield`,
+        `grain ${Math.floor(me.res.grain)}  timber ${Math.floor(me.res.timber)}  ore ${Math.floor(me.res.ore)}  gold ${Math.floor(me.res.gold)}`
+      ];
+      if (cap) {
+        const capFed = (incident.get(cap.key) ?? []).some((ek) => fedFor(0).has(ek));
+        lines.push(`capital lvl ${cap.level} \xB7 army cap ${ARMY_CAP[Math.min(8, cap.level) - 1]} \xB7 ${capFed ? "supplied" : "CUT OFF"}`);
+      }
+      if (sel) {
+        const owner = sel.owner >= 0 ? realms[sel.owner].name : "unclaimed";
+        lines.push(`selected ${label(sel)} (${owner})`);
+        lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
+      } else {
+        lines.push("click an unclaimed keep beside your roads to claim it");
+      }
+      lines.push(`\u2014 ${lastLog}`);
+      lines.push("M muster \xB7 U upgrade \xB7 F follow army \xB7 R repair roads \xB7 space pause");
+      panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
+    }
+    function projectToScreen(p) {
+      const v = p.clone().project(o.camera);
+      return {
+        x: (v.x * 0.5 + 0.5) * o.canvas.clientWidth,
+        y: (-v.y * 0.5 + 0.5) * o.canvas.clientHeight,
+        z: v.z
+      };
+    }
+    function pickKeep(x, y) {
+      const camDir2 = o.camera.position.clone().normalize();
+      let best = null;
+      let bestPx = 26;
+      for (const n of nodes2.values()) {
+        if (n.owner < 0 && !adjacentToRealm(n, 0)) continue;
+        const ang = n.dir.angleTo(camDir2);
+        if (ang > 0.35) continue;
+        const p = projectToScreen(n.pos);
+        if (p.z > 1) continue;
+        const d = Math.hypot(p.x - x, p.y - y);
+        if (d < bestPx) {
+          bestPx = d;
+          best = n;
+        }
+      }
+      return best;
+    }
+    function click(x, y) {
+      const n = pickKeep(x, y);
+      if (!n) return false;
+      if (n.owner === 0) {
+        selected = n.key;
+        say(`selected ${label(n)}`);
+        return true;
+      }
+      if (n.owner < 0) {
+        if (claimNode(n, 0)) {
+          selected = n.key;
+          say(`claimed ${label(n)}`);
+        }
+        return true;
+      }
+      const mine = hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null);
+      if (!mine.length) {
+        say("no host in reserve to send");
+        selected = n.key;
+        return true;
+      }
+      const host = mine.sort((a, b) => b.men - a.men)[0];
+      orderMarch(host, n.key);
+      selected = n.key;
+      return true;
+    }
+    function key(k) {
+      if (k === "m" || k === "M") {
+        const sel = selected ? nodes2.get(selected) : null;
+        if (sel && sel.owner === 0) {
+          muster(sel.key);
+          return true;
+        }
+        say("select one of your castles first");
+        return true;
+      }
+      if (k === "u" || k === "U") {
+        const sel = selected ? nodes2.get(selected) : null;
+        if (!sel || sel.owner !== 0) {
+          say("select one of your castles first");
+          return true;
+        }
+        if (sel.level >= 8) {
+          say("already at the highest level");
+          return true;
+        }
+        const me = realms[0];
+        const cost = {
+          grain: Math.round(300 * Math.pow(1.8, sel.level - 1)),
+          gold: Math.round(120 * Math.pow(1.8, sel.level - 1)),
+          ore: Math.round(60 * Math.pow(1.8, sel.level - 1))
+        };
+        if (me.res.grain < cost.grain || me.res.gold < cost.gold || me.res.ore < cost.ore) {
+          say(`upgrade needs ${cost.grain} grain, ${cost.gold} gold, ${cost.ore} ore`);
+          return true;
+        }
+        me.res.grain -= cost.grain;
+        me.res.gold -= cost.gold;
+        me.res.ore -= cost.ore;
+        sel.level++;
+        dirtyTerritory = true;
+        say(`${label(sel)} raised to level ${sel.level}`);
+        return true;
+      }
+      if (k === "f" || k === "F") {
+        const h = hosts.find((hh) => hh.owner === 0 && !hh.routed && hh.to);
+        if (!h) {
+          say("no army marching");
+          return true;
+        }
+        const a = nodes2.get(h.path[h.seg]);
+        if (a) {
+          say(`following your host at ${label(a)}`);
+          return true;
+        }
+        return true;
+      }
+      if (k === " ") {
+        paused = !paused;
+        say(paused ? "paused" : "running");
+        return true;
+      }
+      if (k === "escape") {
+        selected = null;
+        return true;
+      }
+      return false;
+    }
+    function tick(dt) {
+      if (paused) return;
+      worldTime += dt;
+      tickEconomy(dt);
+      tickHosts(dt);
+      tickCombat(dt);
+      tickSiege(dt);
+      tickAI(dt);
+      panelUpdateAt += dt;
+      if (panelUpdateAt > 0.25) {
+        panelUpdateAt = 0;
+        paint();
+      }
+    }
+    function edgesInView(center, maxAngle) {
+      const fed = fedFor(0);
+      const out = [];
+      for (const e of edges.values()) {
+        const a = nodes2.get(e.a);
+        const b = nodes2.get(e.b);
+        if (!a || !b) continue;
+        const mid = a.dir.clone().add(b.dir).normalize();
+        if (mid.angleTo(center) > maxAngle) continue;
+        out.push({
+          key: e.key,
+          a: a.dir,
+          b: b.dir,
+          tier: e.tier,
+          cut: e.cut,
+          fed: fed.has(e.key),
+          mid: mid.clone().multiplyScalar(o.R + 1),
+          seed: (a.tu * 7919 + a.tv * 104729 + b.tu * 1299709 + b.tv * 15485863) % 1e5
+        });
+      }
+      return out;
+    }
+    const toggleCutKey = (key2) => {
+      const e = edges.get(key2);
+      if (!e) return null;
+      e.cut = !e.cut;
+      cutsChanged();
+      dirtyTerritory = true;
+      say(e.cut ? "road cut: supply past it is lost" : "road repaired");
+      return e.cut;
+    };
+    const stats = () => ({
+      nodes: nodes2.size,
+      edges: edges.size,
+      trunks: [...edges.values()].filter((e) => e.tier === 1).length,
+      realms: realms.filter((r) => r.alive).length,
+      owned: [...nodes2.values()].filter((n) => n.owner >= 0).length,
+      hosts: hosts.length,
+      men: hosts.reduce((s, h) => s + h.men, 0),
+      buildMs: Math.round(performance.now() - t0),
+      player: { grain: Math.round(realms[0].res.grain), gold: Math.round(realms[0].res.gold) },
+      log: lastLog,
+      selected,
+      worldTime: Math.round(worldTime)
+    });
+    paint();
+    return {
+      tick,
+      render,
+      click,
+      key,
+      edgesInView,
+      toggleCutKey,
+      stats,
+      node: (k) => nodes2.get(k),
+      realms: () => realms.map((r) => ({ ...r, castles: ownedBy(r.id).length })),
+      hosts: () => hosts.map((h) => ({ ...h })),
+      cutRoad: (a, b) => toggleCutKey(edgeKeyOf(a, b)),
+      // test hooks
+      dev: {
+        claim: (k) => {
+          const n = nodes2.get(k);
+          return n ? claimNode(n, 0) : false;
+        },
+        spawn: (owner, at, men) => {
+          const h = {
+            id: nextHostId++,
+            owner,
+            men,
+            startMen: men,
+            path: [at],
+            seg: 0,
+            prog: 0,
+            from: at,
+            to: null,
+            routed: false,
+            lastBeat: 0
+          };
+          hosts.push(h);
+          return h.id;
+        },
+        morale: (k) => nodes2.get(k)?.morale ?? -1,
+        owner: (k) => nodes2.get(k)?.owner ?? -2,
+        muster,
+        orderMarch,
+        host: () => hosts,
+        fedFor,
+        pathBetween,
+        takeCastle: (k, by) => {
+          const n = nodes2.get(k);
+          if (n) takeCastle(n, by);
+        },
+        select: (k) => {
+          selected = k;
+        },
+        pause: (v) => {
+          paused = v;
+        },
+        capital: () => realms[0].capital,
+        neighbours: (k) => (incident.get(k) ?? []).map((ek) => edges.get(ek))
+      }
+    };
+  }
+
   // ../realms/node_modules/three/examples/jsm/utils/BufferGeometryUtils.js
   function mergeGeometries(geometries, useGroups = false) {
     const isIndexed = geometries[0].index !== null;
@@ -31512,165 +32509,9 @@
     roadMesh = null;
   }
   var CUT_GREY = new Color(6643282);
-  var cutEdges = /* @__PURE__ */ new Set();
   var roadEdgeMid = /* @__PURE__ */ new Map();
-  var roadEdgeTier = /* @__PURE__ */ new Map();
+  var world = null;
   var roadStats = { roads: 0, trunk: 0, cut: 0, supplied: 0 };
-  function edgeKeyOf(a, b) {
-    return a < b ? `${a}|${b}` : `${b}|${a}`;
-  }
-  var landCache = /* @__PURE__ */ new Map();
-  function edgeIsDry(a, b) {
-    const key = edgeKeyOf(a.key, b.key);
-    const hit = landCache.get(key);
-    if (hit !== void 0) return hit;
-    const mid = new Vector3().copy(a.dir).add(b.dir).normalize();
-    const dry = sample(mid, false).h > SEA;
-    landCache.set(key, dry);
-    return dry;
-  }
-  function buildNetwork(face, cu, cv, reach) {
-    const nodes2 = [];
-    const byCell = /* @__PURE__ */ new Map();
-    for (let dv = -reach; dv <= reach; dv++) {
-      for (let du = -reach; du <= reach; du++) {
-        const tu = cu + du;
-        const tv = cv + dv;
-        if (tu < 0 || tv < 0 || tu >= TERR_PER_FACE || tv >= TERR_PER_FACE) continue;
-        const s = seatCached(face, tu, tv);
-        if (!s) continue;
-        const n = { key: `${tu},${tv}`, tu, tv, dir: s.dir };
-        nodes2.push(n);
-        byCell.set(n.key, n);
-      }
-    }
-    const seen = /* @__PURE__ */ new Set();
-    const cand = [];
-    for (const n of nodes2) {
-      for (let dv = -1; dv <= 1; dv++) {
-        for (let du = -1; du <= 1; du++) {
-          if (!du && !dv) continue;
-          const other = byCell.get(`${n.tu + du},${n.tv + dv}`);
-          if (!other) continue;
-          const key = edgeKeyOf(n.key, other.key);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          if (!edgeIsDry(n, other)) continue;
-          cand.push({ key, a: n, b: other, len: n.dir.distanceTo(other.dir) });
-        }
-      }
-    }
-    cand.sort((p, q) => p.len - q.len);
-    const parent = /* @__PURE__ */ new Map();
-    for (const n of nodes2) parent.set(n.key, n.key);
-    const find = (x) => {
-      let r = x;
-      while (parent.get(r) !== r) r = parent.get(r);
-      let c = x;
-      while (parent.get(c) !== r) {
-        const nx = parent.get(c);
-        parent.set(c, r);
-        c = nx;
-      }
-      return r;
-    };
-    const tree = [];
-    const extras = [];
-    for (const e of cand) {
-      const ra = find(e.a.key);
-      const rb = find(e.b.key);
-      if (ra === rb) {
-        extras.push(e);
-        continue;
-      }
-      parent.set(ra, rb);
-      tree.push(e);
-    }
-    const loopBudget = Math.ceil(tree.length * 0.08);
-    const median = tree.length ? tree[Math.floor(tree.length / 2)].len : 0;
-    let loops = 0;
-    for (const e of extras) {
-      if (loops >= loopBudget) break;
-      if (e.len > median * 1.2) continue;
-      if (ih3(e.a.tu, e.b.tv, e.a.tv + e.b.tu, 137) > 0.62) continue;
-      loops++;
-      tree.push({ ...e, len: e.len });
-    }
-    const adjT = /* @__PURE__ */ new Map();
-    for (const e of tree) {
-      if (!adjT.has(e.a.key)) adjT.set(e.a.key, []);
-      if (!adjT.has(e.b.key)) adjT.set(e.b.key, []);
-      adjT.get(e.a.key).push(e.b.key);
-      adjT.get(e.b.key).push(e.a.key);
-    }
-    const root = nodes2[0]?.key;
-    const par = /* @__PURE__ */ new Map();
-    const order = [];
-    if (root) {
-      par.set(root, null);
-      order.push(root);
-      for (let i = 0; i < order.length; i++) {
-        for (const nb of adjT.get(order[i]) ?? []) {
-          if (par.has(nb)) continue;
-          par.set(nb, order[i]);
-          order.push(nb);
-        }
-      }
-    }
-    const size = /* @__PURE__ */ new Map();
-    for (const k of order) size.set(k, 1);
-    for (let i = order.length - 1; i > 0; i--) {
-      const k = order[i];
-      const pk = par.get(k);
-      if (pk) size.set(pk, (size.get(pk) ?? 1) + (size.get(k) ?? 1));
-    }
-    const total = nodes2.length || 1;
-    const trafficOf = (e) => {
-      if (par.get(e.b.key) === e.a.key) return Math.min(size.get(e.b.key) ?? 1, total - (size.get(e.b.key) ?? 1));
-      if (par.get(e.a.key) === e.b.key) return Math.min(size.get(e.a.key) ?? 1, total - (size.get(e.a.key) ?? 1));
-      return 0;
-    };
-    const ranked = [...tree].sort((p, q) => trafficOf(q) - trafficOf(p));
-    const trunkCut = Math.max(1, Math.floor(ranked.length * 0.35));
-    const edges = /* @__PURE__ */ new Map();
-    ranked.forEach((e, i) => edges.set(e.key, { tier: i < trunkCut ? 1 : 0, a: e.a, b: e.b }));
-    return { nodes: nodes2, edges };
-  }
-  function supplyFromCapital(nodes2, edges) {
-    let capital = null;
-    let best = Infinity;
-    for (const n of nodes2) {
-      const d = n.dir.distanceTo(SPAWN_DIR);
-      if (d < best) {
-        best = d;
-        capital = n;
-      }
-    }
-    const adj = /* @__PURE__ */ new Map();
-    for (const [key, e] of edges) {
-      if (cutEdges.has(key)) continue;
-      if (!adj.has(e.a.key)) adj.set(e.a.key, []);
-      if (!adj.has(e.b.key)) adj.set(e.b.key, []);
-      adj.get(e.a.key).push({ to: e.b.key, edge: key });
-      adj.get(e.b.key).push({ to: e.a.key, edge: key });
-    }
-    const fed = /* @__PURE__ */ new Set();
-    const fedEdges = /* @__PURE__ */ new Set();
-    if (!capital) return { fed, fedEdges };
-    const queue = [capital.key];
-    fed.add(capital.key);
-    while (queue.length) {
-      const k = queue.shift();
-      for (const step of adj.get(k) ?? []) {
-        fedEdges.add(step.edge);
-        if (!fed.has(step.to)) {
-          fed.add(step.to);
-          queue.push(step.to);
-        }
-      }
-    }
-    return { fed, fedEdges };
-  }
   function syncRoads(face, cu, cv, reach0) {
     if (cam.alt > R * 0.3) {
       clearRoads();
@@ -31694,132 +32535,118 @@
     const focus = up.clone().multiplyScalar(R);
     const stoneRange = Math.max(38, cam.alt * 1.1);
     const pebbleSpots = [];
-    const net = buildNetwork(face, cu, cv, reach);
-    const supply = supplyFromCapital(net.nodes, net.edges);
     roadEdgeMid.clear();
-    roadEdgeTier.clear();
     let trunkCount = 0;
     let cutCount = 0;
-    for (let dv = -reach; dv <= reach; dv++) {
-      for (let du = -reach; du <= reach; du++) {
-        const tu = cu + du;
-        const tv = cv + dv;
-        if (tu < 0 || tv < 0 || tu + 1 >= TERR_PER_FACE || tv + 1 >= TERR_PER_FACE) continue;
-        const a = seatCached(face, tu, tv);
-        if (!a) continue;
-        for (const [ox, oy] of [[1, 0], [0, 1]]) {
-          const bq = seatCached(face, tu + ox, tv + oy);
-          if (!bq || pairs >= 420) continue;
-          const pairKey = edgeKeyOf(`${tu},${tv}`, `${tu + ox},${tv + oy}`);
-          const link = net.edges.get(pairKey);
-          if (!link) continue;
-          const isTrunk = link.tier === 1;
-          const isCut = cutEdges.has(pairKey);
-          const isFed = supply.fedEdges.has(pairKey);
-          if (isTrunk) trunkCount++;
-          if (isCut) cutCount++;
-          cA.copy(a.dir);
-          cB.copy(bq.dir);
-          const span = 2 / TERR_PER_FACE;
-          const u0 = -1 + tu * span;
-          const v0 = -1 + tv * span;
-          const mid = faceDir(face, u0 + span * (0.5 + ox * 0.5), v0 + span * (0.5 + oy * 0.5), dir).clone();
-          if (sample(mid, false).h <= SEA) continue;
-          pairs++;
-          wide = wideBase * (isTrunk ? 1.75 : 1);
-          if (isCut) wide *= 0.62;
-          tint.setHex(ROAD_TINT);
-          roadEdgeMid.set(pairKey, cA.clone().add(cB).normalize().multiplyScalar(R + 1));
-          roadEdgeTier.set(pairKey, isTrunk ? 1 : 0);
-          sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(tu, tv, 5, 73) - 0.5) * 0.1);
-          const pts = [];
-          const sides = [];
-          let drowned = false;
-          for (let i = 0; i <= K; i++) {
-            const t = i / K;
-            dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
-            const h = sample(dir, false).h;
-            if (h <= SEA) {
-              drowned = true;
-              break;
-            }
-            pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + 0.55));
+    let fedCount = 0;
+    let roadCount = 0;
+    const cellAng = Math.PI / 2 / TERR_PER_FACE;
+    const maxAngle = Math.min(1.2, (reach + 0.6) * cellAng * 1.15);
+    const view = world ? world.edgesInView(up.clone().normalize(), maxAngle) : [];
+    for (const e of view) {
+      if (pairs >= 520) break;
+      const s1 = e.seed;
+      const s2 = e.seed % 9773;
+      cA.copy(e.a);
+      cB.copy(e.b);
+      const isTrunk = e.tier === 1;
+      const isCut = e.cut;
+      const isFed = e.fed;
+      roadCount++;
+      if (isTrunk) trunkCount++;
+      if (isCut) cutCount++;
+      if (isFed) fedCount++;
+      pairs++;
+      wide = wideBase * (isTrunk ? 1.75 : 1);
+      if (isCut) wide *= 0.62;
+      tint.setHex(ROAD_TINT);
+      roadEdgeMid.set(e.key, { p: e.mid, key: e.key, tier: e.tier, cut: isCut });
+      sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.1);
+      const pts = [];
+      const sides = [];
+      let drowned = false;
+      for (let i = 0; i <= K; i++) {
+        const t = i / K;
+        dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
+        const h = sample(dir, false).h;
+        if (h <= SEA) {
+          drowned = true;
+          break;
+        }
+        pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + 0.55));
+      }
+      if (drowned || pts.length < 2) continue;
+      for (let i = 0; i < pts.length; i++) {
+        tan.subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
+        upv.copy(pts[i]).normalize();
+        side.crossVectors(tan, upv).normalize().multiplyScalar(ROAD_WIDTH * wide / 2);
+        sides.push(side.clone());
+      }
+      const wantStones = cam.alt < R * 0.045;
+      const lanes = [];
+      const laneCols = [];
+      for (let i = 0; i < pts.length; i++) {
+        const row = [];
+        const rowCol = [];
+        const wobble = 0.82 + ih3(s1 * 131 + i, s2 * 197, 7, 79) * 0.36;
+        for (let ln = 0; ln <= ROAD_LANES; ln++) {
+          const t = ln / ROAD_LANES;
+          const off = (t - 0.5) * 2 * wobble;
+          const raw = pts[i].clone().addScaledVector(sides[i], off);
+          const up2 = raw.clone().normalize();
+          raw.addScaledVector(up2, ih3(s1 + ln, s2 + i, 11, 83) * 0.22);
+          row.push(raw);
+          const isEdge = ln === 0 || ln === ROAD_LANES;
+          const stone = PEBBLE_TONES[Math.floor(ih3(s1 * 7 + i, s2 * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
+          const col = new Color(isEdge ? SHOULDER_TONE : stone);
+          if (isCut) col.lerp(CUT_GREY, 0.72).multiplyScalar(0.72);
+          else if (!isFed) col.lerp(CUT_GREY, 0.35).multiplyScalar(0.86);
+          else if (isTrunk) col.multiplyScalar(1.1);
+          col.multiplyScalar(0.88 + ih3(s1 + i, s2 + ln, 23, 97) * 0.26);
+          rowCol.push(col);
+        }
+        lanes.push(row);
+        laneCols.push(rowCol);
+      }
+      if (wantStones) {
+        for (let i = 0; i < pts.length && pebbleSpots.length < PEBBLE_MAX; i++) {
+          for (let pc = 0; pc < 14; pc++) {
+            if (pebbleSpots.length >= PEBBLE_MAX) break;
+            if (ih3(s1 * 977 + i, s2 * 613 + pc, 31, 101) > 0.985) continue;
+            const lat = ih3(s1 + i, s2 + pc, 37, 103) * 2.4 - 1.2;
+            const sp = pts[i].clone().addScaledVector(sides[i], lat);
+            if (sp.distanceTo(focus) > stoneRange) continue;
+            sp.addScaledVector(sp.clone().normalize(), 0.26 + ih3(s1, s2 + i, 41, 107) * 0.12);
+            pebbleSpots.push({
+              p: sp,
+              s: 0.34 + ih3(s1 + pc, s2 + i, 43, 109) * 0.42,
+              t: ih3(s1, s2, i + pc, 113)
+            });
           }
-          if (drowned || pts.length < 2) continue;
-          for (let i = 0; i < pts.length; i++) {
-            tan.subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
-            upv.copy(pts[i]).normalize();
-            side.crossVectors(tan, upv).normalize().multiplyScalar(ROAD_WIDTH * wide / 2);
-            sides.push(side.clone());
-          }
-          const spots = [];
-          const wantStones = cam.alt < R * 0.045;
-          const lanes = [];
-          const laneCols = [];
-          for (let i = 0; i < pts.length; i++) {
-            const row = [];
-            const rowCol = [];
-            const wobble = 0.82 + ih3(tu * 131 + i, tv * 197, 7, 79) * 0.36;
-            for (let ln = 0; ln <= ROAD_LANES; ln++) {
-              const t = ln / ROAD_LANES;
-              const off = (t - 0.5) * 2 * wobble;
-              const raw = pts[i].clone().addScaledVector(sides[i], off);
-              const up2 = raw.clone().normalize();
-              raw.addScaledVector(up2, ih3(tu + ln, tv + i, 11, 83) * 0.22);
-              row.push(raw);
-              const isEdge = ln === 0 || ln === ROAD_LANES;
-              const stone = PEBBLE_TONES[Math.floor(ih3(tu * 7 + i, tv * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
-              const col = new Color(isEdge ? SHOULDER_TONE : stone);
-              if (isCut) col.lerp(CUT_GREY, 0.72).multiplyScalar(0.72);
-              else if (!isFed) col.lerp(CUT_GREY, 0.35).multiplyScalar(0.86);
-              else if (isTrunk) col.multiplyScalar(1.1);
-              col.multiplyScalar(0.88 + ih3(tu + i, tv + ln, 23, 97) * 0.26);
-              rowCol.push(col);
-            }
-            lanes.push(row);
-            laneCols.push(rowCol);
-          }
-          if (wantStones) {
-            for (let i = 0; i < pts.length && pebbleSpots.length < PEBBLE_MAX; i++) {
-              for (let pc = 0; pc < 14; pc++) {
-                if (pebbleSpots.length >= PEBBLE_MAX) break;
-                if (ih3(tu * 977 + i, tv * 613 + pc, 31, 101) > 0.985) continue;
-                const lat = ih3(tu + i, tv + pc, 37, 103) * 2.4 - 1.2;
-                const sp = pts[i].clone().addScaledVector(sides[i], lat);
-                if (sp.distanceTo(focus) > stoneRange) continue;
-                sp.addScaledVector(sp.clone().normalize(), 0.26 + ih3(tu, tv + i, 41, 107) * 0.12);
-                pebbleSpots.push({
-                  p: sp,
-                  s: 0.34 + ih3(tu + pc, tv + i, 43, 109) * 0.42,
-                  t: ih3(tu, tv, i + pc, 113)
-                });
-              }
-            }
-          }
-          for (let i = 0; i < lanes.length - 1; i++) {
-            for (let ln = 0; ln < ROAD_LANES; ln++) {
-              const a2 = lanes[i][ln];
-              const b = lanes[i][ln + 1];
-              const c = lanes[i + 1][ln + 1];
-              const d = lanes[i + 1][ln];
-              const ca = laneCols[i][ln];
-              const cb = laneCols[i][ln + 1];
-              const cc = laneCols[i + 1][ln + 1];
-              const cd = laneCols[i + 1][ln];
-              for (const [v, col] of [[a2, ca], [b, cb], [c, cc], [a2, ca], [c, cc], [d, cd]]) {
-                positions.push(v.x, v.y, v.z);
-                colours.push(col.r, col.g, col.b);
-              }
-            }
+        }
+      }
+      for (let i = 0; i < lanes.length - 1; i++) {
+        for (let ln = 0; ln < ROAD_LANES; ln++) {
+          const a = lanes[i][ln];
+          const b = lanes[i][ln + 1];
+          const c = lanes[i + 1][ln + 1];
+          const d = lanes[i + 1][ln];
+          const ca = laneCols[i][ln];
+          const cb = laneCols[i][ln + 1];
+          const cc = laneCols[i + 1][ln + 1];
+          const cd = laneCols[i + 1][ln];
+          for (const [v, col] of [[a, ca], [b, cb], [c, cc], [a, ca], [c, cc], [d, cd]]) {
+            positions.push(v.x, v.y, v.z);
+            colours.push(col.r, col.g, col.b);
           }
         }
       }
     }
     roadStats = {
-      roads: net.edges.size,
+      roads: roadCount,
       trunk: trunkCount,
       cut: cutCount,
-      supplied: net.nodes.length ? Math.round(supply.fed.size / net.nodes.length * 100) : 0
+      supplied: roadCount ? Math.round(fedCount / roadCount * 100) : 0
     };
     clearRoads();
     if (pebbleSpots.length) {
@@ -32069,27 +32896,29 @@
     const moved = Math.hypot(e.clientX - lastX, e.clientY - lastY);
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
-    if (moved < 6 && roadEdgeMid.size) {
-      const pv = new Vector3();
-      let bestKey = null;
-      let bestPx = 22;
-      for (const [key, mid] of roadEdgeMid) {
-        pv.copy(mid).project(camera);
-        if (pv.z > 1) continue;
-        const sx = (pv.x * 0.5 + 0.5) * canvas.clientWidth;
-        const sy = (-pv.y * 0.5 + 0.5) * canvas.clientHeight;
-        const d = Math.hypot(sx - e.clientX, sy - e.clientY);
-        if (d < bestPx) {
-          bestPx = d;
-          bestKey = key;
+    if (moved < 6) {
+      if (world && world.click(e.clientX, e.clientY)) return;
+      if (roadEdgeMid.size) {
+        const pv = new Vector3();
+        let best = null;
+        let bestPx = 22;
+        for (const mid of roadEdgeMid.values()) {
+          pv.copy(mid.p).project(camera);
+          if (pv.z > 1) continue;
+          const sx = (pv.x * 0.5 + 0.5) * canvas.clientWidth;
+          const sy = (-pv.y * 0.5 + 0.5) * canvas.clientHeight;
+          const d = Math.hypot(sx - e.clientX, sy - e.clientY);
+          if (d < bestPx) {
+            bestPx = d;
+            best = mid;
+          }
         }
-      }
-      if (bestKey) {
-        if (cutEdges.has(bestKey)) cutEdges.delete(bestKey);
-        else cutEdges.add(bestKey);
-        dirty = true;
-        syncCastles();
-        report();
+        if (best && world) {
+          world.toggleCutKey(best.key);
+          dirty = true;
+          syncCastles();
+          report();
+        }
       }
     }
   });
@@ -32159,13 +32988,14 @@
     aim.lat += dNorth / R;
   }, { passive: false });
   addEventListener("keydown", (e) => {
+    if (world && world.key(e.key)) return;
     if (e.key === "r" || e.key === "R") {
-      if (cutEdges.size) {
-        cutEdges.clear();
-        dirty = true;
-        syncCastles();
-        report();
+      for (const mid of roadEdgeMid.values()) {
+        if (mid.cut) world?.toggleCutKey(mid.key);
       }
+      dirty = true;
+      syncCastles();
+      report();
       return;
     }
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
@@ -32212,8 +33042,10 @@
       return worst;
     },
     castleGroup,
-    roadMidpoints: (trunkOnly = false) => Array.from(roadEdgeMid.entries()).filter(([k]) => !trunkOnly || roadEdgeTier.get(k) === 1).map(([, v]) => ({ x: v.x, y: v.y, z: v.z })),
-    roadState: () => ({ ...roadStats, cut: [...cutEdges] }),
+    roadMidpoints: (trunkOnly = false) => Array.from(roadEdgeMid.values()).filter((v) => !trunkOnly || v.tier === 1).map((v) => ({ x: v.p.x, y: v.p.y, z: v.p.z })),
+    roadState: () => ({ ...roadStats }),
+    world: () => world ? world.stats() : null,
+    worldApi: () => world,
     stats: () => ({
       seats: lastSeats,
       dbg: `count=${beacons ? beacons.count : -1} visible=${beacons ? beacons.visible : "x"} far=${Math.round(R * 0.3)}`,
@@ -32313,6 +33145,29 @@
   };
   window.__globe = api;
   if (hud) hud.addEventListener("click", report);
+  if (hud) hud.textContent = `forging the world from seed ${SEED}\u2026`;
+  setTimeout(() => {
+    const t0 = performance.now();
+    world = createWorld({
+      R,
+      TERR_PER_FACE,
+      RELIEF,
+      SEED,
+      seatOf: seatCached,
+      SPAWN_DIR,
+      castleGroup,
+      camera,
+      canvas,
+      log: (line) => {
+        console.log("[realms]", line);
+      }
+    });
+    window.__world = world;
+    console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms`);
+    syncCastles();
+    markDirty();
+  }, 250);
+  var worldClock = 0;
   var lastT = performance.now();
   renderer.setAnimationLoop(() => {
     const now2 = performance.now();
@@ -32333,6 +33188,13 @@
       buildTree();
       syncCastles();
       markDirty();
+    }
+    worldClock += dt;
+    if (world && worldClock >= 0.05) {
+      world.tick(worldClock);
+      world.render();
+      worldClock = 0;
+      dirty = true;
     }
     if (dirty) {
       renderer.render(scene, camera);
