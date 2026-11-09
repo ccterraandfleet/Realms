@@ -31370,7 +31370,8 @@
   var MAX_ALT = R * 3.2;
   var carriedNorth = new Vector3(0, 1, 0);
   function latCos(lat) {
-    return Math.max(0.35, Math.cos(lat));
+    const c = Math.cos(lat);
+    return (c < 0 ? -1 : 1) * Math.max(0.35, Math.abs(c));
   }
   var LOD_FREEZE_ALT = 4200;
   var frozeHigh = false;
@@ -31571,7 +31572,7 @@
     const fine = aim.alt < 60 ? 0.35 : 1;
     const upp = unitsPerPixel(aim.alt) * fine;
     aim.lon -= dx * upp / (R * latCos(aim.lat));
-    aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dy * upp / R));
+    aim.lat += dy * upp / R;
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -31590,7 +31591,7 @@
     const dEast = px2 * (oldUpp - newUpp);
     const dNorth = -py2 * (oldUpp - newUpp);
     aim.lon += dEast / (R * latCos(aim.lat));
-    aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dNorth / R));
+    aim.lat += dNorth / R;
   }, { passive: false });
   addEventListener("keydown", (e) => {
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
