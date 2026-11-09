@@ -31518,6 +31518,7 @@
     const headGeo = new SphereGeometry(0.155, 6, 4);
     const helmGeo = new ConeGeometry(0.2, 0.26, 6);
     const spearGeo = new BoxGeometry(0.045, 1.65, 0.045);
+    const shieldGeo = new BoxGeometry(0.52, 0.58, 0.09);
     const shadowGeo = new CircleGeometry(SOL_SPACING * 3.2, 16);
     const poleGeo = new BoxGeometry(0.2, 4.4, 0.2);
     const clothGeo = new PlaneGeometry(2.5, 1.45);
@@ -31535,6 +31536,11 @@
     const headMesh = new InstancedMesh(headGeo, skinMat, HOST_MAX * SOLDIERS_PER_HOST);
     const helmMesh = new InstancedMesh(helmGeo, helmMat, HOST_MAX * SOLDIERS_PER_HOST);
     const spearMesh = new InstancedMesh(spearGeo, spearMat, HOST_MAX * SOLDIERS_PER_HOST);
+    const shieldMesh = new InstancedMesh(
+      shieldGeo,
+      new MeshStandardMaterial({ color: 16777215, roughness: 0.7 }),
+      HOST_MAX * SOLDIERS_PER_HOST
+    );
     const shadowMesh = new InstancedMesh(
       shadowGeo,
       new MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.24, depthWrite: false }),
@@ -31575,7 +31581,7 @@
       new MeshBasicMaterial({ map: crownTex, transparent: true, alphaTest: 0.45, depthWrite: false, side: DoubleSide }),
       HOST_MAX
     );
-    const armyParts = [legsMesh, tunicMesh, headMesh, helmMesh, spearMesh, shadowMesh, poleMesh, clothMesh, crownMesh];
+    const armyParts = [legsMesh, tunicMesh, headMesh, helmMesh, spearMesh, shieldMesh, shadowMesh, poleMesh, clothMesh, crownMesh];
     for (const m of armyParts) {
       m.frustumCulled = false;
       m.count = 0;
@@ -31602,7 +31608,7 @@
     const q4 = new Quaternion();
     const bodyCount = (bodies, shadows, banners) => {
       const on = armiesOn;
-      legsMesh.count = tunicMesh.count = headMesh.count = helmMesh.count = spearMesh.count = on ? bodies : 0;
+      legsMesh.count = tunicMesh.count = headMesh.count = helmMesh.count = spearMesh.count = shieldMesh.count = on ? bodies : 0;
       shadowMesh.count = on ? shadows : 0;
       poleMesh.count = clothMesh.count = crownMesh.count = on ? banners : 0;
     };
@@ -31651,6 +31657,22 @@
     let beaconOn = true;
     let armiesOn = true;
     let rebuildAt = 0;
+    function hostPoint(h, out) {
+      const a = nodes2.get(h.path[h.seg]);
+      const b = h.to ? nodes2.get(h.to) : null;
+      const hop = edges.get(edgeKeyOf(h.path[h.seg], h.to ?? h.path[h.seg]));
+      if (hop && b) {
+        const ea = nodes2.get(hop.a), eb = nodes2.get(hop.b);
+        if (ea && eb) {
+          const seed = (ea.tu * 7919 + ea.tv * 104729 + eb.tu * 1299709 + eb.tv * 15485863) % 1e5;
+          const t = h.path[h.seg] === hop.a ? h.prog : 1 - h.prog;
+          return o.roadPoint(ea.dir, eb.dir, seed, t, out);
+        }
+      }
+      if (!a) return out.set(0, 0, 0);
+      const hh = b ? a.h + (b.h - a.h) * h.prog : a.h;
+      return out.copy(a.dir).lerp(b ? b.dir : a.dir, h.prog).normalize().multiplyScalar(o.R + Math.max(0, hh) * o.RELIEF * o.R);
+    }
     function render() {
       const nowMs = performance.now();
       if (dirtyTerritory && nowMs - rebuildAt > 400) {
@@ -31670,14 +31692,16 @@
       const right = new Vector3();
       const basis = new Matrix4();
       const footDir = new Vector3();
+      const hereThrowaway = new Vector3();
       for (const h of hosts) {
         if (shadows >= HOST_MAX) break;
         const a = nodes2.get(h.path[h.seg]);
         if (!a) continue;
         const b = h.to ? nodes2.get(h.to) : null;
-        const here = a.dir.clone().lerp(b ? b.dir : a.dir, h.prog).normalize();
-        const hh = b ? a.h + (b.h - a.h) * h.prog : a.h;
-        const radius = o.R + Math.max(0, hh) * o.RELIEF * o.R;
+        hostPoint(h, hereThrowaway);
+        const here = hereThrowaway.clone();
+        const radius = here.length();
+        here.normalize();
         if (b) fwd.copy(b.dir).sub(a.dir).normalize();
         else fwd.copy(here).cross(UP).normalize();
         fwd.addScaledVector(here, -fwd.dot(here));
@@ -31691,14 +31715,19 @@
         v4.copy(here).multiplyScalar(radius + 0.5);
         m4.compose(v4, q4, s4);
         shadowMesh.setMatrixAt(shadows++, m4);
+        const gait = h.to ? worldTime * 7.5 : 0;
         for (let r = 0; r < SOL_RANKS; r++) {
           for (let c = 0; c < SOL_COLS; c++) {
             if (bodies >= HOST_MAX * SOLDIERS_PER_HOST) break;
-            const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.22 * formScale;
+            const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.18 * formScale;
             const ox = (c - (SOL_COLS - 1) / 2) * rankGap + jitter;
             const oz = ((SOL_RANKS - 1) / 2 - r) * rankGap + jitter * 0.7;
-            footDir.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
+            const phase = gait + (r * 1.9 + c * 2.7);
+            const bob = Math.sin(phase) * 0.09 * formScale;
+            const step = Math.cos(phase) * 0.07 * formScale;
+            footDir.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz + step);
             footDir.normalize();
+            footDir.multiplyScalar(1 + bob / radius);
             v4.copy(footDir).multiplyScalar(radius + 0.22 * formScale);
             m4.compose(v4, q4, s4);
             legsMesh.setMatrixAt(bodies, m4);
@@ -31716,6 +31745,11 @@
             v4.copy(footDir).multiplyScalar(radius + 0.82 * formScale).addScaledVector(right, 0.34 * formScale);
             m4.compose(v4, q4, s4);
             spearMesh.setMatrixAt(bodies, m4);
+            v4.copy(footDir).multiplyScalar(radius + 0.9 * formScale).addScaledVector(right, -0.3 * formScale).addScaledVector(fwd, 0.16 * formScale);
+            m4.compose(v4, q4, s4);
+            shieldMesh.setMatrixAt(bodies, m4);
+            col4.setHex(shade).multiplyScalar(0.85);
+            shieldMesh.setColorAt(bodies, col4);
             bodies++;
           }
         }
@@ -31777,37 +31811,22 @@
     }
     const panel = document.createElement("div");
     panel.id = "realms-panel";
-    panel.style.cssText = [
-      "position:absolute",
-      "left:14px",
-      "bottom:150px",
-      "z-index:9",
-      "font:12px/1.45 ui-monospace,Menlo,Consolas,monospace",
-      "color:#e9eef2",
-      "background:rgba(12,18,22,0.82)",
-      "border:1px solid rgba(255,255,255,0.14)",
-      "border-radius:8px",
-      "padding:10px 12px",
-      "max-width:330px",
-      "white-space:pre",
-      "pointer-events:none",
-      "text-shadow:0 1px 2px rgba(0,0,0,0.6)"
-    ].join(";");
     document.body.appendChild(panel);
     const homeBtn = document.createElement("button");
     homeBtn.textContent = "\u2302 Home (H)";
     homeBtn.style.cssText = [
-      "position:absolute",
+      "position:fixed",
       "left:14px",
-      "bottom:96px",
+      "bottom:112px",
       "z-index:10",
       "pointer-events:auto",
-      "font:12px/1 ui-monospace,monospace",
-      "color:#eaf4ff",
-      "background:rgba(28,52,80,0.92)",
-      "border:1px solid rgba(140,200,255,0.55)",
-      "border-radius:7px",
-      "padding:8px 11px",
+      "font:11px/1 -apple-system,system-ui,Roboto,sans-serif",
+      "letter-spacing:0.06em",
+      "color:#dceaf8",
+      "background:rgba(30,48,70,0.9)",
+      "border:1px solid rgba(140,200,255,0.35)",
+      "border-radius:8px",
+      "padding:7px 10px",
       "cursor:pointer"
     ].join(";");
     homeBtn.addEventListener("click", () => {
@@ -31821,6 +31840,41 @@
     };
     let panelUpdateAt = 0;
     const hex = (c) => `#${c.toString(16).padStart(6, "0")}`;
+    const css = document.createElement("style");
+    css.textContent = `
+    #realms-panel {
+      position:absolute; left:14px; bottom:150px; z-index:9; pointer-events:none;
+      font:12px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      color:#e8eef6; width:286px; padding:11px 13px 10px;
+      background:linear-gradient(160deg, rgba(18,26,36,0.93), rgba(12,18,26,0.90));
+      border:1px solid rgba(255,255,255,0.10); border-radius:11px;
+      box-shadow:0 8px 26px rgba(0,0,0,0.42); backdrop-filter:blur(3px);
+    }
+    #realms-panel .rh { display:flex; align-items:baseline; justify-content:space-between;
+      margin-bottom:9px; letter-spacing:0.14em; font-size:10px; color:#9fb4c9; }
+    #realms-panel .rh b { color:#f3f7fb; letter-spacing:0.22em; font-weight:600; }
+    #realms-panel .chips { display:grid; grid-template-columns:1fr 1fr; gap:5px 8px; margin-bottom:9px; }
+    #realms-panel .chip { display:flex; align-items:center; justify-content:space-between;
+      background:rgba(255,255,255,0.055); border-radius:7px; padding:5px 8px; }
+    #realms-panel .chip span { color:#9fb4c9; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; }
+    #realms-panel .chip b { font-variant-numeric:tabular-nums; font-weight:600; color:#f6f9fc; }
+    #realms-panel .row { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
+    #realms-panel .row span { color:#9fb4c9; }
+    #realms-panel .row b { font-weight:600; font-variant-numeric:tabular-nums; }
+    #realms-panel .bar { height:4px; border-radius:3px; background:rgba(255,255,255,0.10); margin:5px 0 7px; overflow:hidden; }
+    #realms-panel .bar i { display:block; height:100%; background:#5fb0e8; }
+    #realms-panel .log { margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,0.09);
+      color:#c8d6e4; min-height:16px; }
+    #realms-panel .keys { margin-top:7px; color:#7f93a8; font-size:10.5px; line-height:1.5; }
+    #realms-panel .tag { display:inline-block; padding:1px 6px; border-radius:5px; font-size:10px;
+      letter-spacing:0.05em; text-transform:uppercase; }
+  `;
+    if (!document.getElementById("realms-css")) {
+      css.id = "realms-css";
+      document.head.appendChild(css);
+    }
+    const esc = (v) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const nf = (v) => Math.floor(v).toLocaleString("en-US");
     function paint() {
       const me = realms[0];
       const mine = ownedBy(0);
@@ -31828,27 +31882,32 @@
       const sel = selected ? nodes2.get(selected) : null;
       const myHosts = hosts.filter((h) => h.owner === 0 && !h.routed);
       const men = myHosts.reduce((s, h) => s + h.men, 0);
-      const lines = [
-        `${me.name}: ${mine.length} castle${mine.length === 1 ? "" : "s"} \xB7 ${men} men afield`,
-        `grain ${Math.floor(me.res.grain)}  timber ${Math.floor(me.res.timber)}  ore ${Math.floor(me.res.ore)}  gold ${Math.floor(me.res.gold)}`
-      ];
+      const marches = myHosts.filter((h) => h.to !== null).length;
+      let html = `<div class="rh"><b>REALMS</b><span>${esc(BUILD_TAG || "live")}</span></div>`;
+      html += `<div class="chips">
+      <div class="chip"><span>Grain</span><b>${nf(me.res.grain)}</b></div>
+      <div class="chip"><span>Timber</span><b>${nf(me.res.timber)}</b></div>
+      <div class="chip"><span>Ore</span><b>${nf(me.res.ore)}</b></div>
+      <div class="chip"><span>Gold</span><b>${nf(me.res.gold)}</b></div>
+    </div>`;
+      html += `<div class="row"><span>Holdings</span><b>${mine.length} keep${mine.length === 1 ? "" : "s"}</b></div>`;
+      html += `<div class="row"><span>Army</span><b>${nf(men)} men${marches ? ` \xB7 ${marches} marching` : ""}</b></div>`;
       if (cap) {
         const capFed = (incident.get(cap.key) ?? []).some((ek) => fedFor(0).has(ek));
-        lines.push(`capital lvl ${cap.level} \xB7 army cap ${ARMY_CAP[Math.min(8, cap.level) - 1]} \xB7 ${capFed ? "supplied" : "CUT OFF"}`);
+        html += `<div class="row"><span>Capital</span><b>lvl ${cap.level} \xB7 cap ${nf(ARMY_CAP[Math.min(8, cap.level) - 1])}</b></div>`;
+        html += `<div class="row"><span>Supply</span><b style="color:${capFed ? "#7fd6a2" : "#ef8080"}">${capFed ? "connected" : "CUT OFF"}</b></div>`;
       }
       if (sel) {
+        const isMine = sel.owner === 0;
         const owner = sel.owner >= 0 ? realms[sel.owner].name : "unclaimed";
-        const dist = Math.round(sel.dir.angleTo(realms[0].home) * o.R);
-        lines.push(`selected ${label(sel)} (${owner}) \xB7 ${dist} units from home`);
-        lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
-      } else {
-        lines.push("double-click a keep for orders: attack, trade, blockade road, build road");
+        const tagColour = isMine ? "#5fa8e8" : sel.owner < 0 ? "#8d9aa8" : "#d9695a";
+        html += `<div class="bar"><i style="width:${Math.max(3, Math.min(100, sel.morale * 100)).toFixed(0)}%;background:${tagColour}"></i></div>`;
+        html += `<div class="row"><span>Selected</span><b><span class="tag" style="background:${tagColour}22;color:${tagColour}">${esc(owner)}</span> ${esc(label(sel))}</b></div>`;
+        html += `<div class="row"><span>Level ${sel.level} \xB7 morale</span><b>${(sel.morale * 100).toFixed(0)}%</b></div>`;
       }
-      lines.push(`\u2014 ${lastLog}`);
-      if (BUILD_TAG) lines.push(`build ${BUILD_TAG}`);
-      lines.push("DOUBLE-CLICK a keep for orders \xB7 H home \xB7 1-9 castles \xB7 F follow army");
-      lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause");
-      panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
+      if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
+      html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
+      panel.innerHTML = html;
     }
     function projectToScreen(p) {
       const v = p.clone().project(o.camera);
@@ -32129,6 +32188,13 @@
       actForTest: (verb, key2) => act(verb, key2),
       tradeCount: () => tradeRoutes.size,
       edgeCount: () => edges.size,
+      hostPointFor: (id) => {
+        const h = hosts.find((x) => x.id === id);
+        if (!h) return null;
+        const v = new Vector3();
+        hostPoint(h, v);
+        return [v.x, v.y, v.z];
+      },
       beacon: (on) => {
         beaconOn = on;
       },
@@ -32335,7 +32401,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 05:48";
+  var BUILD = "2026-11-09 06:02";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -33080,6 +33146,18 @@
   }
   var ROAD_WIDTH = 3.6;
   var ROAD_LIFT = 0.75;
+  function roadPoint(a, b, seed, t, out) {
+    const s1 = seed;
+    const s2 = seed % 9773;
+    const swayAmt = (ih3(s1, s2, 5, 73) - 0.5) * 0.08;
+    const lateral = new Vector3().crossVectors(a, b);
+    if (lateral.lengthSq() < 1e-12) lateral.set(0, 1, 0);
+    lateral.normalize();
+    out.copy(a).lerp(b, t).addScaledVector(lateral, Math.sin(Math.PI * t) * swayAmt).normalize();
+    const h = Math.max(sample(out, false).h, SEA + 4e-3);
+    out.multiplyScalar(R + h * RELIEF * R + ROAD_LIFT);
+    return out;
+  }
   var PEBBLE_TONES = [11049860, 10260345, 11774100, 9339505, 12563874, 8878953];
   var SHOULDER_TONE = 8022354;
   var ROAD_TINT = 13218959;
@@ -33781,6 +33859,8 @@
           console.log("[realms]", line);
         },
         build: BUILD,
+        terrainH: (dir) => sample(dir, false).h,
+        roadPoint: (a, b, seed, t, out) => roadPoint(a, b, seed, t, out),
         flyToDir: (dir, alt) => {
           aim.lat = Math.asin(Math.max(-1, Math.min(1, dir.y)));
           aim.lon = Math.atan2(dir.z, dir.x);
