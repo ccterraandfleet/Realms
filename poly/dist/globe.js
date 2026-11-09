@@ -31368,7 +31368,7 @@
     azim: Number(params.get("azim") ?? 0)
   };
   var aim = { lat: cam.lat, lon: cam.lon, alt: cam.alt };
-  var MIN_ALT = 20;
+  var MIN_ALT = 30;
   var MAX_ALT = R * 3.2;
   var carriedNorth = new Vector3(0, 1, 0);
   var _dragD = new Vector3();
@@ -31385,9 +31385,9 @@
     return viewHeight / Math.max(1, innerHeight);
   }
   function tiltFor(alt) {
-    const t = Math.log(Math.max(1, alt / 14)) / Math.log(1400 / 14);
+    const t = Math.log(Math.max(1, alt / 20)) / Math.log(1400 / 20);
     const k = Math.max(0, Math.min(1, t));
-    return 0.95 - 0.33 * (k * k * (3 - 2 * k));
+    return 0.4 + 0.22 * (k * k * (3 - 2 * k));
   }
   var up = new Vector3();
   var north = new Vector3();
