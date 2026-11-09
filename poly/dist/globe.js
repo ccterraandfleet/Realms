@@ -32401,7 +32401,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 06:47";
+  var BUILD = "2026-11-09 06:58";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -33192,7 +33192,6 @@
     out.multiplyScalar(R + h * RELIEF * R + ROAD_LIFT);
     return out;
   }
-  var PEBBLE_TONES = [11043151, 9925183, 11964508, 8807222, 12622438, 8215603];
   var ROAD_TINT = 11569746;
   var ROAD_LANES = 4;
   var PEBBLE_MAX = 3e3;
@@ -33210,14 +33209,14 @@
   var roadMesh = null;
   var COBBLE_TILE = 2;
   var COBBLE_PALETTE = [
-    "#8f8474",
-    "#9a8f7c",
-    "#847a6b",
-    "#a2967f",
-    "#79705f",
-    "#8a7f6d",
-    "#b0a48b",
-    "#6f6656"
+    "#b5aa96",
+    "#c0b5a0",
+    "#a89d89",
+    "#c8bda6",
+    "#9b917d",
+    "#b0a58f",
+    "#d2c7ae",
+    "#8f8676"
   ];
   var cobbleTex = null;
   function cobbleTexture() {
@@ -33226,7 +33225,7 @@
     const cv = document.createElement("canvas");
     cv.width = cv.height = S;
     const g = cv.getContext("2d");
-    g.fillStyle = "#3f3629";
+    g.fillStyle = "#6d5c47";
     g.fillRect(0, 0, S, S);
     let seed = 20261109;
     const rnd = () => (seed = seed * 1664525 + 1013904223 >>> 0) / 4294967296;
@@ -33273,6 +33272,7 @@
     polygonOffsetFactor: -4,
     polygonOffsetUnits: -8
   });
+  if (params.get("roadtest")) roadMat.color.setHex(16711935);
   function clearRoads() {
     if (pebbleMesh) pebbleMesh.count = 0;
     if (!roadMesh) return;
@@ -33391,9 +33391,8 @@
           raw.addScaledVector(up2, 0.06 + ih3(s1 + ln, s2 + i, 11, 83) * 0.05);
           row.push(raw);
           const isEdge = ln === 0 || ln === ROAD_LANES;
-          const stone = PEBBLE_TONES[Math.floor(ih3(s1 * 7 + i, s2 * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
-          const col = new Color(stone);
-          if (isEdge) col.multiplyScalar(0.82);
+          const col = new Color(1, 1, 1);
+          if (isEdge) col.multiplyScalar(0.74);
           if (isCut) col.lerp(CUT_GREY, 0.72).multiplyScalar(0.72);
           else if (!isFed) col.lerp(CUT_GREY, 0.35).multiplyScalar(0.86);
           else if (isTrunk) col.multiplyScalar(1.1);
@@ -33972,6 +33971,58 @@
       } else if (which === "roads" && roadMesh) {
         roadMesh.visible = on;
       }
+    },
+    /** Read back the cobble tile itself: a blank canvas renders as a black road. */
+    cobbleSample: () => {
+      const img = roadMat.map && roadMat.map.image;
+      if (!img || !img.getContext) return { ok: false };
+      const c = img.getContext("2d");
+      const d = c.getImageData(0, 0, img.width, img.height).data;
+      let r = 0, g = 0, b = 0, a = 0, n = 0, distinct = /* @__PURE__ */ new Set();
+      for (let i = 0; i < d.length; i += 4 * 37) {
+        r += d[i];
+        g += d[i + 1];
+        b += d[i + 2];
+        a += d[i + 3];
+        n++;
+        distinct.add(d[i] >> 4 << 8 | d[i + 1] >> 4 << 4 | d[i + 2] >> 4);
+      }
+      return {
+        ok: true,
+        size: [img.width, img.height],
+        mean: [Math.round(r / n), Math.round(g / n), Math.round(b / n)],
+        alpha: Math.round(a / n),
+        distinct: distinct.size
+      };
+    },
+    /** What the road mesh actually contains, so "built" can be told apart from "rendered". */
+    roadMeshInfo: () => {
+      if (!roadMesh) return { exists: false };
+      const g = roadMesh.geometry;
+      const pos = g.getAttribute("position");
+      g.computeBoundingSphere();
+      const bs = g.boundingSphere;
+      const mat = roadMesh.material;
+      return {
+        exists: true,
+        verts: pos ? pos.count : 0,
+        hasUV: !!g.getAttribute("uv"),
+        visible: roadMesh.visible,
+        parentVisible: roadMesh.parent?.visible ?? null,
+        centre: bs ? [+bs.center.x.toFixed(1), +bs.center.y.toFixed(1), +bs.center.z.toFixed(1)] : null,
+        radius: bs ? +bs.radius.toFixed(1) : null,
+        matColour: "#" + mat.color.getHexString(),
+        hasMap: !!mat.map,
+        camDist: +camera.position.length().toFixed(1),
+        vertsLocal: pos ? (() => {
+          let near = 0;
+          for (let i = 0; i < pos.count; i += 97) {
+            const d = Math.hypot(pos.getX(i) - camera.position.x, pos.getY(i) - camera.position.y, pos.getZ(i) - camera.position.z);
+            if (d < 400) near++;
+          }
+          return near;
+        })() : 0
+      };
     },
     raycastPixel: (px2, py2) => {
       const ndc = new Vector2(
