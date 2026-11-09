@@ -31088,6 +31088,33 @@
       if (!n) return "?";
       return `cell ${n.tu},${n.tv} of face ${n.face}`;
     }
+    const claimByHost = /* @__PURE__ */ new Map();
+    function resolveClaims() {
+      if (!claimByHost.size) return;
+      for (const [hostId, key2] of [...claimByHost]) {
+        const h = hosts.find((x) => x.id === hostId);
+        const n = nodes2.get(key2);
+        if (!h || h.routed || !n) {
+          claimByHost.delete(hostId);
+          continue;
+        }
+        if (n.owner === 0) {
+          claimByHost.delete(hostId);
+          continue;
+        }
+        if (n.owner > 0) {
+          claimByHost.delete(hostId);
+          continue;
+        }
+        if (h.to !== null || h.path[h.seg] !== key2) continue;
+        n.owner = 0;
+        n.level = 1;
+        n.morale = 1;
+        dirtyTerritory = true;
+        say(`${label(n)} taken by your column`);
+        claimByHost.delete(hostId);
+      }
+    }
     function tickHosts(dt) {
       for (const h of hosts) {
         if (h.to === null) continue;
@@ -31643,11 +31670,11 @@
         lines.push(`selected ${label(sel)} (${owner}) \xB7 ${dist} units from home`);
         lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
       } else {
-        lines.push("click an unclaimed keep beside your roads to claim it");
+        lines.push("click an unclaimed keep beside your roads: your nearest idle army marches out and takes it");
       }
       lines.push(`\u2014 ${lastLog}`);
       if (BUILD_TAG) lines.push(`build ${BUILD_TAG}`);
-      lines.push("H home \xB7 1-9 your castles \xB7 F follow army \xB7 click a road to cut it");
+      lines.push("H home \xB7 1-9 your castles \xB7 F follow army \xB7 SHIFT-click a road to cut it");
       lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause");
       panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
     }
@@ -31659,19 +31686,24 @@
         z: v.z
       };
     }
+    const _pk = new Vector3();
     function pickKeep(x, y) {
       const camDir2 = o.camera.position.clone().normalize();
       let best = null;
-      let bestPx = 26;
+      let bestScore = Infinity;
       for (const n of nodes2.values()) {
-        if (n.owner < 0 && !adjacentToRealm(n, 0)) continue;
-        const ang = n.dir.angleTo(camDir2);
-        if (ang > 0.35) continue;
+        if (n.dir.angleTo(camDir2) > 0.4) continue;
         const p = projectToScreen(n.pos);
         if (p.z > 1) continue;
+        _pk.copy(n.dir).multiplyScalar(14);
+        const pTop = projectToScreen(_pk.add(n.pos));
+        const keepPx = Math.max(6, Math.hypot(pTop.x - p.x, pTop.y - p.y));
+        const radius = Math.max(30, Math.min(220, keepPx * 1.15));
         const d = Math.hypot(p.x - x, p.y - y);
-        if (d < bestPx) {
-          bestPx = d;
+        if (d > radius) continue;
+        const score = d / radius;
+        if (score < bestScore) {
+          bestScore = score;
           best = n;
         }
       }
@@ -31680,26 +31712,46 @@
     function click(x, y) {
       const n = pickKeep(x, y);
       if (!n) return false;
+      const reserve = hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null).sort((a, b) => {
+        const da = nodes2.get(a.path[a.seg])?.dir.angleTo(n.dir) ?? 9;
+        const db = nodes2.get(b.path[b.seg])?.dir.angleTo(n.dir) ?? 9;
+        return da - db || b.men - a.men;
+      })[0] ?? null;
       if (n.owner === 0) {
         selected = n.key;
-        say(`selected ${label(n)}`);
+        say(`selected ${label(n)} \xB7 M muster \xB7 click elsewhere to move an army here`);
         return true;
       }
       if (n.owner < 0) {
-        if (claimNode(n, 0)) {
+        if (!adjacentToRealm(n, 0)) {
           selected = n.key;
-          say(`claimed ${label(n)}`);
+          say("out of reach: claim a keep that touches your roads first");
+          return true;
         }
-        return true;
-      }
-      const mine = hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null);
-      if (!mine.length) {
-        say("no host in reserve to send");
+        const me = realms[0];
+        if (me.res.grain < CLAIM_GRAIN || me.res.gold < CLAIM_GOLD) {
+          selected = n.key;
+          say(`claiming needs ${CLAIM_GRAIN} grain and ${CLAIM_GOLD} gold`);
+          return true;
+        }
+        if (!reserve) {
+          selected = n.key;
+          say("no army to send: select a castle and press M to muster first");
+          return true;
+        }
+        me.res.grain -= CLAIM_GRAIN;
+        me.res.gold -= CLAIM_GOLD;
+        claimByHost.set(reserve.id, n.key);
+        if (!orderMarch(reserve, n.key)) claimByHost.delete(reserve.id);
         selected = n.key;
         return true;
       }
-      const host = mine.sort((a, b) => b.men - a.men)[0];
-      orderMarch(host, n.key);
+      if (!reserve) {
+        say("no host in reserve: press M at one of your castles first");
+        selected = n.key;
+        return true;
+      }
+      orderMarch(reserve, n.key);
       selected = n.key;
       return true;
     }
@@ -31804,6 +31856,7 @@
       worldTime += dt;
       tickEconomy(dt);
       tickHosts(dt);
+      resolveClaims();
       tickCombat(dt);
       tickSiege(dt);
       tickAI(dt);
@@ -32075,7 +32128,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 05:14";
+  var BUILD = "2026-11-09 05:31";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32899,7 +32952,7 @@
       if (isCut) cutCount++;
       if (isFed) fedCount++;
       pairs++;
-      wide = wideBase * (isTrunk ? 1.35 : 1);
+      wide = wideBase * (isTrunk ? 1.6 : 0.85);
       if (isCut) wide *= 0.8;
       tint.setHex(ROAD_TINT);
       roadEdgeMid.set(e.key, { p: e.mid, key: e.key, tier: e.tier, cut: isCut });
@@ -32908,7 +32961,7 @@
       sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.08);
       const pts = [];
       const sides = [];
-      for (let i = 0; i <= K; i++) {
+      for (let i = -1; i <= K + 1; i++) {
         const t = i / K;
         dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
         const lateral = new Vector3().crossVectors(chord, dir).normalize();
@@ -33245,6 +33298,7 @@
     canvas.releasePointerCapture(e.pointerId);
     if (moved < 6) {
       if (world && world.click(e.clientX, e.clientY)) return;
+      if (!e.shiftKey) return;
       if (roadEdgeMid.size) {
         const pv = new Vector3();
         let best = null;
