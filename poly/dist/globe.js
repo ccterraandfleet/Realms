@@ -30921,6 +30921,29 @@
     const plots = /* @__PURE__ */ new Map();
     const PLOT_MAX = 3;
     const PLOT_GAIN = 0.35;
+    const settlements = /* @__PURE__ */ new Map();
+    const POP_START = 10;
+    const POP_BASE = 14;
+    const POP_PER_LEVEL = 9;
+    const POP_EAT = 45e-4;
+    const POP_GROW = 0.3;
+    const POP_STARVE = 0.55;
+    const WORKERS_PER_PLOT = 5;
+    const popCapFor = (n) => POP_BASE + POP_PER_LEVEL * (n.level - 1);
+    const popOf = (key2) => settlements.get(key2)?.pop ?? POP_START;
+    function setPop(key2, v) {
+      settlements.set(key2, { pop: Math.max(0, v) });
+    }
+    const plotLevelsOf = (key2) => {
+      const p = plotsOf(key2);
+      return p.fields + p.woodlot + p.quarry;
+    };
+    function staffingOf(n) {
+      const need = WORKERS_PER_PLOT * plotLevelsOf(n.key);
+      if (need <= 0) return 1;
+      const free = Math.max(0, popOf(n.key) - n.garrison);
+      return Math.min(1, free / need);
+    }
     const emptyPlots = () => ({ fields: 0, woodlot: 0, quarry: 0 });
     const plotsOf = (key2) => plots.get(key2) ?? emptyPlots();
     function plotCost(level) {
@@ -31144,6 +31167,7 @@
       me.res.ore -= cost.ore;
       me.res.gold -= cost.gold;
       plots.set(key2, { ...pl, [track]: lvl + 1 });
+      dirtyTerritory = true;
       say(`${track} at ${label(n)} worked to level ${lvl + 1} (+${Math.round(PLOT_GAIN * (lvl + 1) * 100)}% ${track === "fields" ? "grain" : track === "woodlot" ? "timber" : "ore"} here)`);
     }
     function nearestGarrison(target2) {
@@ -31344,9 +31368,10 @@
       for (const n of ownedBy(realmId)) {
         const mult = 1 + 0.3 * (n.level - 1);
         const pl = realmId === 0 ? plotsOf(n.key) : emptyPlots();
-        out.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields);
-        out.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot);
-        out.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry);
+        const staff = staffingOf(n);
+        out.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields * staff);
+        out.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot * staff);
+        out.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry * staff);
         out.gold += 0.25 * mult;
       }
       out.grain *= eco;
@@ -31366,9 +31391,10 @@
         for (const n of mine) {
           const mult = 1 + 0.3 * (n.level - 1);
           const pl = r.id === 0 ? plotsOf(n.key) : emptyPlots();
-          add.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields);
-          add.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot);
-          add.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry);
+          const staff = staffingOf(n);
+          add.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields * staff);
+          add.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot * staff);
+          add.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry * staff);
           add.gold += 0.25 * mult;
         }
         add.grain *= eco;
@@ -31379,6 +31405,22 @@
         r.res.timber += add.timber * dt;
         r.res.ore += add.ore * dt;
         r.res.gold += add.gold * dt;
+      }
+      for (const r of realms) {
+        if (!r.alive) continue;
+        for (const n of ownedBy(r.id)) {
+          let pop = popOf(n.key);
+          const cap = popCapFor(n);
+          const need = pop * POP_EAT * dt;
+          if (r.res.grain >= need) {
+            r.res.grain -= need;
+            if (pop < cap) pop = Math.min(cap, pop + POP_GROW * dt);
+          } else {
+            r.res.grain = 0;
+            pop = Math.max(0, pop - POP_STARVE * dt);
+          }
+          setPop(n.key, pop);
+        }
       }
     }
     function pathBetween(from, to) {
@@ -31596,8 +31638,17 @@
         say("not enough stores to muster");
         return false;
       }
-      const toRaise = Math.min(raise, room);
+      const available = Math.floor(popOf(n.key));
+      if (available <= 0) {
+        say(`no people at ${label(n)} to take up arms \xB7 a keep grows people when it is fed`);
+        return false;
+      }
+      const toRaise = Math.min(raise, room, available);
+      if (toRaise < Math.min(raise, room)) {
+        say(`only ${available} people live at ${label(n)} \xB7 raising ${toRaise} (the rest stay on the land)`);
+      }
       if (toRaise <= 0) return false;
+      setPop(n.key, popOf(n.key) - toRaise);
       const share = toRaise / raise;
       r.res.grain -= MUSTER_COST.grain * share;
       r.res.gold -= MUSTER_COST.gold * share;
@@ -31878,6 +31929,7 @@
       ownersChanged();
       n.level = 1;
       n.morale = 1;
+      if (!settlements.has(n.key)) setPop(n.key, POP_START);
       dirtyTerritory = true;
       return true;
     }
@@ -31931,9 +31983,11 @@
     let lastSaveNote = "not saved yet";
     function serialize() {
       const owned = [];
+      const people = [];
       for (const n of nodes2.values()) {
         if (n.owner < 0) continue;
         const pl = plotsOf(n.key);
+        people.push([n.key, Math.round(popOf(n.key))]);
         owned.push([n.key, n.owner, n.level, n.garrison, +n.morale.toFixed(3), pl.fields, pl.woodlot, pl.quarry]);
       }
       return {
@@ -31944,6 +31998,7 @@
         nodes: owned,
         realms: realms.map((r) => ({ id: r.id, alive: r.alive, hearth: r.hearth, capital: r.capital, res: { ...r.res } })),
         hosts: hosts.map((h) => ({ ...h, path: h.path.slice() })),
+        people,
         trade: [...tradeRoutes]
       };
     }
@@ -32019,6 +32074,8 @@
         r.capital = rs.capital;
         r.res = { ...rs.res };
       }
+      settlements.clear();
+      for (const [key2, pop] of b.people ?? []) if (nodes2.has(key2)) setPop(key2, pop);
       for (const h of b.hosts) hosts.push({ ...h, path: h.path.slice() });
       for (const t of b.trade) tradeRoutes.add(t);
       worldTime = b.t;
@@ -32204,6 +32261,25 @@
     territoryRim.frustumCulled = false;
     territoryRim.visible = false;
     o.castleGroup.add(territoryRim);
+    const PLOT_DRAW_MAX = 1200;
+    const plotMesh = new InstancedMesh(
+      new BoxGeometry(1, 1, 1),
+      new MeshStandardMaterial({ roughness: 0.94, metalness: 0.02 }),
+      PLOT_DRAW_MAX
+    );
+    plotMesh.frustumCulled = false;
+    plotMesh.visible = false;
+    plotMesh.instanceColor = null;
+    o.castleGroup.add(plotMesh);
+    const plotColours = { fields: 10335569, woodlot: 8149557, quarry: 9146261 };
+    const hash01 = (str, i) => {
+      let h = 2166136261 ^ i;
+      for (let k = 0; k < str.length; k++) {
+        h ^= str.charCodeAt(k);
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0) % 1e5 / 1e5;
+    };
     const m4 = new Matrix4();
     const q4 = new Quaternion();
     const bodyCount = (bodies, shadows, banners) => {
@@ -32244,6 +32320,46 @@
         territoryRim.setColorAt(n, col4);
         n++;
       }
+      let pn = 0;
+      const t1 = new Vector3();
+      const t2 = new Vector3();
+      const pos = new Vector3();
+      const qUp = new Quaternion();
+      const scaleV = new Vector3();
+      const cTmp = new Color();
+      for (const node of nodes2.values()) {
+        if (node.owner !== 0 || pn >= PLOT_DRAW_MAX) continue;
+        const pl = plotsOf(node.key);
+        if (!pl.fields && !pl.woodlot && !pl.quarry) continue;
+        t1.set(0, 1, 0).cross(node.dir);
+        if (t1.lengthSq() < 1e-6) t1.set(1, 0, 0);
+        t1.normalize();
+        t2.copy(node.dir).cross(t1).normalize();
+        const ground = surfaceR(node);
+        qUp.setFromUnitVectors(UP, node.dir);
+        let idx = 0;
+        for (const [track, lv] of [["fields", pl.fields], ["woodlot", pl.woodlot], ["quarry", pl.quarry]]) {
+          for (let i = 0; i < lv; i++) {
+            const a = hash01(node.key, idx) * Math.PI * 2;
+            const rad = 12 + hash01(node.key, idx + 97) * 7;
+            pos.copy(node.dir).multiplyScalar(ground + 1.2).addScaledVector(t1, Math.cos(a) * rad).addScaledVector(t2, Math.sin(a) * rad);
+            const w = track === "fields" ? 6.4 : track === "woodlot" ? 3.6 : 5.2;
+            const hgt = track === "fields" ? 0.9 : track === "woodlot" ? 3 : 1.9;
+            scaleV.set(w, hgt, track === "fields" ? 4.2 : w);
+            m4.compose(pos, qUp, scaleV);
+            plotMesh.setMatrixAt(pn, m4);
+            cTmp.setHex(plotColours[track]);
+            plotMesh.setColorAt(pn, cTmp);
+            pn++;
+            idx++;
+            if (pn >= PLOT_DRAW_MAX) break;
+          }
+        }
+      }
+      plotMesh.count = pn;
+      plotMesh.visible = pn > 0;
+      plotMesh.instanceMatrix.needsUpdate = true;
+      if (plotMesh.instanceColor) plotMesh.instanceColor.needsUpdate = true;
       territory.count = n;
       territory.visible = n > 0;
       territoryRim.count = n;
@@ -32605,13 +32721,25 @@
       const myGround = ownedBy(0);
       const firstHost = hosts.some((h) => h.owner === 0 && !h.routed);
       const capNode = realms[0].capital ? nodes2.get(realms[0].capital) : null;
+      const totalPop = myGround.reduce((s2, k) => s2 + popOf(k.key), 0);
+      const totalPlots = myGround.reduce((s2, k) => s2 + plotLevelsOf(k.key), 0);
+      const workersShort = totalPlots * WORKERS_PER_PLOT - Math.floor(totalPop);
+      const grainRate = incomeRate().grain - totalPop * POP_EAT;
       let objective = "claim a keep beside your roads (click it)";
-      if (myGround.length > 1) objective = "muster a levy at your capital (M)";
-      if (firstHost) objective = "double-click a keep to order it taken";
-      if (myGround.length > 3) objective = `raise your capital to level ${HEARTH_MIN_LEVEL} (U), then raise the Hearth`;
-      if (realms[0].hearth) objective = "take a rival keep: cut its roads, then march";
-      if (capNode && capNode.level < HEARTH_MIN_LEVEL && myGround.length > 3) objective = `upgrade the capital to level ${HEARTH_MIN_LEVEL} (U), then raise the Hearth`;
+      if (myGround.length >= 1 && totalPlots === 0) objective = "build your first plot: double-click your keep, pick Fields";
+      if (totalPlots > 0 && workersShort > 0) objective = `staff your plots: ${Math.max(0, Math.floor(totalPop))} people for ${totalPlots * WORKERS_PER_PLOT} jobs, keep is fed so they grow`;
+      if (totalPlots > 0 && workersShort <= 0 && grainRate > 0.15) objective = "your farm is working \xB7 upgrade the keep to grow more people (U)";
+      if (capNode && capNode.level >= HEARTH_MIN_LEVEL && !realms[0].hearth) objective = "raise the Hearth: that is the moment you stop farming and start raiding";
+      if (realms[0].hearth && !firstHost) objective = "muster household troops (M) - they come out of your population";
+      if (realms[0].hearth && firstHost) objective = "raid: cut a rival's road, then march on the keep";
       html += `<div class="row"><span>Next</span><b style="color:#9fd7ff">${objective}</b></div>`;
+      const fedCap = myGround.reduce((s2, k) => s2 + popCapFor(k), 0);
+      const eatRate = totalPop * POP_EAT;
+      html += `<div class="row"><span>People</span><b>${Math.floor(totalPop)} of ${fedCap}` + (grainRate < 0 ? ` <span style="color:#ffb3a0">\xB7 eating ${nf(eatRate)}/s, larder falling</span>` : ` <span style="color:#9fe0a8">\xB7 surplus ${nf(grainRate)} grain/s</span>`) + `</b></div>`;
+      const staffed = myGround.map((k) => ({ n: k, st: staffingOf(k) })).filter((x) => plotLevelsOf(x.n.key) > 0);
+      if (staffed.length) {
+        html += `<div class="row"><span>Plots</span><b>${totalPlots} built \xB7 ` + staffed.map((x) => `${Math.round(x.st * 100)}% worked`).join(" \xB7 ") + `</b></div>`;
+      }
       html += `<div class="row"><span>World</span><b>${lastSaveNote.includes("failed") ? "save failing" : "saved \xB7 S to save, Shift+S to reset"}</b></div>`;
       if (ADMIN) html += `<div class="row"><span>Mode</span><b style="color:#8fd0ff">creative \xB7 unlimited stores</b></div>`;
       html += `<div class="row"><span>Hearth</span><b style="color:${me.hearth ? "#7fd6a2" : "#e8c66a"}">${me.hearth ? "raised \xB7 household" : "not raised \xB7 levies only"}</b></div>`;
@@ -33209,6 +33337,17 @@
       })),
       wealth: () => ({ ...realms[0].res }),
       lastLog: () => lastLog,
+      popOf: (k) => popOf(k),
+      popCap: (k) => {
+        const n = nodes2.get(k);
+        return n ? popCapFor(n) : 0;
+      },
+      staffing: (k) => {
+        const n = nodes2.get(k);
+        return n ? staffingOf(n) : 0;
+      },
+      plotBuildings: () => plotMesh.count,
+      totalPop: () => ownedBy(0).reduce((s2, k) => s2 + popOf(k.key), 0),
       garrisonDrawn: () => garrisonFormations().length,
       garrisonMen: () => garrisonFormations().reduce((s, h) => s + h.men, 0),
       incomeRate: (id) => incomeRate(id ?? 0),
@@ -33446,7 +33585,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 18:48";
+  var BUILD = "2026-11-09 18:54";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
