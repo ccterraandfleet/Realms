@@ -32699,7 +32699,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 15:24";
+  var BUILD = "2026-11-09 15:34";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32833,7 +32833,7 @@
   var CAPTURE = params.get("capture") === "1";
   var renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: CAPTURE });
   var SCALE_PIN = Number(params.get("scale") ?? 0);
-  var qualityScale = SCALE_PIN > 0 ? SCALE_PIN : Math.min(1, Number(params.get("dpr") ?? 1));
+  var qualityScale = SCALE_PIN > 0 ? SCALE_PIN : Math.min(0.9, Number(params.get("dpr") ?? 1));
   renderer.setPixelRatio(qualityScale);
   renderer.debug.checkShaderErrors = new URLSearchParams(location.search).get("shaderdebug") === "1";
   renderer.setSize(innerWidth, innerHeight, false);
@@ -33640,7 +33640,7 @@
   var roadEdgeMid = /* @__PURE__ */ new Map();
   var world = null;
   var roadStats = { roads: 0, trunk: 0, cut: 0, supplied: 0 };
-  function syncRoads(face, cu, cv, reach0) {
+  function* syncRoadsJob(face, cu, cv, reach0) {
     if (cam.alt > R * 0.3) {
       clearRoads();
       return;
@@ -33672,7 +33672,12 @@
     const cellAng = Math.PI / 2 / TERR_PER_FACE;
     const maxAngle = Math.min(1.2, (reach + 0.6) * cellAng * 1.15);
     const view = world ? world.edgesInView(up.clone().normalize(), maxAngle) : [];
+    let sliceAt = performance.now();
     for (const e of view) {
+      if (performance.now() - sliceAt > 5) {
+        yield;
+        sliceAt = performance.now();
+      }
       if (pairs >= 1400) break;
       const s1 = e.seed;
       const s2 = e.seed % 9773;
@@ -33899,6 +33904,24 @@
   var centreCache = /* @__PURE__ */ new Map();
   var terrainVersion = 0;
   var cameraMoving = false;
+  var roadJob = null;
+  function startRoadJob(face, cu, cv, reach) {
+    roadJob = syncRoadsJob(face, cu, cv, reach);
+    lastRoadBuild = performance.now();
+  }
+  function pumpRoadJob(budgetMs) {
+    if (!roadJob) return false;
+    const t0 = performance.now();
+    for (; ; ) {
+      const step = roadJob.next();
+      if (step.done) {
+        roadJob = null;
+        lastRoadBuild = performance.now();
+        return false;
+      }
+      if (performance.now() - t0 > budgetMs) return true;
+    }
+  }
   var SYNC_INTERVAL_MS = 260;
   var NOSYNC_GATE = params.get("nosyncgate") === "1";
   function syncCastles(force = false) {
@@ -33949,12 +33972,7 @@
     lastSeats = seats.length;
     mark("seats");
     const roadsDue = force || !cameraMoving && performance.now() - lastRoadBuild > 250;
-    if (roadsDue) {
-      stageMark = performance.now();
-      syncRoads(face, cu, cv, reach);
-      lastRoadBuild = performance.now();
-      mark("syncRoads");
-    }
+    if (roadsDue) startRoadJob(face, cu, cv, reach);
     if (near) {
       lastTier = "detail";
       if (beacons) beacons.count = 0;
@@ -34338,6 +34356,8 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
       Object.assign(aim, v);
     },
     cam: () => ({ ...cam }),
+    roadPending: () => !!roadJob,
+    roadStats: () => ({ ...roadStats }),
     stalls: () => stallLog.slice(),
     clearStalls: () => {
       stallLog.length = 0;
@@ -34600,8 +34620,12 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
         }
       });
       window.__world = world;
+      if (hud) hud.textContent = `generating planet ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`;
       console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`);
       syncCastles();
+      tMark = performance.now();
+      renderer.compile(scene, camera);
+      console.log(`[realms] shaders compiled in ${Math.round(performance.now() - tMark)} ms`);
       markDirty();
     } catch (err) {
       const msg = err instanceof Error ? `${err.message}` : String(err);
@@ -34686,6 +34710,12 @@ build ${BUILD}`;
     if (buildBacklog > 0 && !dirty) {
       buildTree();
       syncCastles();
+      markDirty();
+    }
+    if (roadJob) {
+      tMark = performance.now();
+      pumpRoadJob(emaWork > 12 ? 3 : 9);
+      push(fUpdate, performance.now() - tMark);
       markDirty();
     }
     worldClock += dt;
