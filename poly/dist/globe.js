@@ -32608,6 +32608,39 @@
   var nodes = /* @__PURE__ */ new Map();
   var nodeGroup = new Group();
   scene.add(nodeGroup);
+  var _rayOrigin = new Vector3();
+  var _rayDir = new Vector3();
+  var _ray2 = new Raycaster();
+  var _terrainMeshes = [];
+  function terrainMeshes() {
+    _terrainMeshes.length = 0;
+    scene.traverse((o) => {
+      if (o.userData && o.userData.terrain) _terrainMeshes.push(o);
+    });
+    return _terrainMeshes;
+  }
+  function drawnRadiusAt(dir) {
+    const meshes = terrainMeshes();
+    if (!meshes.length) return NaN;
+    _rayOrigin.copy(dir).multiplyScalar(R * 1.25);
+    _rayDir.copy(dir).negate();
+    _ray2.set(_rayOrigin, _rayDir);
+    _ray2.far = R * 0.5;
+    const hits = _ray2.intersectObjects(meshes, false);
+    if (!hits.length) return NaN;
+    return R * 1.25 - hits[0].distance;
+  }
+  function meshHeightAt(dir) {
+    const meshes = terrainMeshes();
+    if (!meshes.length) return NaN;
+    _rayOrigin.copy(dir).multiplyScalar(R * 1.6);
+    _rayDir.copy(dir).negate();
+    _ray2.set(_rayOrigin, _rayDir);
+    _ray2.far = R * 0.75;
+    const hits = _ray2.intersectObjects(meshes, false);
+    if (!hits.length) return NaN;
+    return R * 1.6 - hits[0].distance;
+  }
   var castles = /* @__PURE__ */ new Map();
   var castleGroup = new Group();
   scene.add(castleGroup);
@@ -32666,6 +32699,7 @@
     geo.setAttribute("color", new Float32BufferAttribute(colors, 3));
     geo.computeVertexNormals();
     const mesh = new Mesh(geo, groundMat);
+    mesh.userData.terrain = true;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     let trees = null;
@@ -33067,8 +33101,8 @@
     camera.position.copy(camPos);
     camera.up.copy(north);
     camera.lookAt(target);
-    camera.near = Math.max(0.05, cam.alt * 4e-3);
-    camera.far = Math.max(9e3, cam.alt * 8);
+    camera.near = Math.max(0.35, Math.min(600, cam.alt * 0.3));
+    camera.far = Math.max(1200, cam.alt * 4 + 900);
     fog.near = Math.max(6, cam.alt * 2.2);
     fog.far = Math.max(260, cam.alt * 12);
     camera.updateProjectionMatrix();
@@ -33145,7 +33179,7 @@
     return dir.angleTo(SPAWN_DIR) < YOUR_REACH ? FACTION_YOU : FACTION_ENEMY;
   }
   var ROAD_WIDTH = 3.6;
-  var ROAD_LIFT = 0.75;
+  var ROAD_LIFT = Number(params.get("lift") ?? 1.8);
   function roadPoint(a, b, seed, t, out) {
     const s1 = seed;
     const s2 = seed % 9773;
@@ -33158,9 +33192,9 @@
     out.multiplyScalar(R + h * RELIEF * R + ROAD_LIFT);
     return out;
   }
-  var PEBBLE_TONES = [11049860, 10260345, 11774100, 9339505, 12563874, 8878953];
-  var SHOULDER_TONE = 8022354;
-  var ROAD_TINT = 13218959;
+  var PEBBLE_TONES = [11043151, 9925183, 11964508, 8807222, 12622438, 8215603];
+  var SHOULDER_TONE = 7165756;
+  var ROAD_TINT = 11569746;
   var ROAD_LANES = 4;
   var PEBBLE_MAX = 3e3;
   var STONE_PROBE = params.get("stones") === "white";
@@ -33175,11 +33209,16 @@
     emissiveIntensity: 0
   });
   var roadMesh = null;
-  var roadMat = new MeshStandardMaterial({
+  var roadMat = new MeshBasicMaterial({
     vertexColors: true,
-    roughness: 0.95,
-    metalness: 0,
-    side: DoubleSide
+    side: DoubleSide,
+    // A road is a decal on a curved, faceted planet at 2,000 units radius, and the depth buffer does
+    // not have the precision to separate it from the ground it lies on: the measured cross-section
+    // was road, then a green middle, then road again, and no amount of lift changed it. Biasing the
+    // ribbon toward the camera makes the road win every tie, which is what a decal should do.
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -8
   });
   function clearRoads() {
     if (pebbleMesh) pebbleMesh.count = 0;
@@ -33252,9 +33291,19 @@
         dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
         const lateral = new Vector3().crossVectors(chord, dir).normalize();
         let h = sample(dir, false).h;
-        for (const off of [-1, -0.5, 0.5, 1]) {
-          const probe = dir.clone().addScaledVector(lateral, off * halfRoad / R).normalize();
+        const across = halfRoad + 0.6;
+        for (const u of [-1, -0.5, 0, 0.5, 1]) {
+          const probe = dir.clone().addScaledVector(lateral, u * across / R).normalize();
           h = Math.max(h, sample(probe, false).h);
+        }
+        if (cam.alt < 260) {
+          const drawn = drawnRadiusAt(dir);
+          if (isFinite(drawn)) {
+            const drawnH = (drawn - R) / (RELIEF * R);
+            h = Math.max(h, drawnH);
+          } else {
+            h += 0.035;
+          }
         }
         h = Math.max(h, SEA + 4e-3);
         pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + ROAD_LIFT));
@@ -33837,6 +33886,43 @@
     sample: (lat, lon) => {
       const d = new Vector3(Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)).normalize();
       return sample(d);
+    },
+    terrainH: (dir) => sample(dir, false).h,
+    meshHeightAt: (dir) => meshHeightAt(dir),
+    roadTopAt: (a, b, seed, t) => roadPoint(a, b, seed, t, new Vector3()).length(),
+    /** What is actually drawn at a pixel, nearest first. Used to find what covers a road. */
+    /** Toggle a layer so a measurement can isolate it. */
+    hideLayer: (which, on) => {
+      if (which === "terrain") {
+        scene.traverse((o) => {
+          if (o.userData && o.userData.terrain) o.visible = on;
+        });
+        if (sea) sea.visible = on;
+      } else if (which === "roads" && roadMesh) {
+        roadMesh.visible = on;
+      }
+    },
+    raycastPixel: (px2, py2) => {
+      const ndc = new Vector2(
+        px2 / (canvas.clientWidth || 1) * 2 - 1,
+        -(py2 / (canvas.clientHeight || 1) * 2 - 1)
+      );
+      const rc = new Raycaster();
+      rc.setFromCamera(ndc, camera);
+      const hits = rc.intersectObjects(scene.children, true);
+      return hits.slice(0, 6).map((h) => {
+        const mesh = h.object;
+        const mat = mesh.material;
+        return {
+          dist: +h.distance.toFixed(1),
+          kind: h.object.type,
+          instanced: h.object.isInstancedMesh === true,
+          mat: mat ? mat.type : "none",
+          colour: mat && mat.color ? "#" + mat.color.getHexString() : "",
+          vertexColours: !!(mat && mat.vertexColors),
+          terrain: !!h.object.userData?.terrain
+        };
+      });
     }
   };
   window.__globe = api;
@@ -33860,6 +33946,13 @@
         },
         build: BUILD,
         terrainH: (dir) => sample(dir, false).h,
+        meshHeightAt: (dir) => meshHeightAt(dir),
+        /** Radius of the ribbon surface at a station, for measuring whether the road is buried. */
+        roadTopAt: (a, b, seed, t) => {
+          const v = new Vector3();
+          roadPoint(a, b, seed, t, v);
+          return v.length();
+        },
         roadPoint: (a, b, seed, t, out) => roadPoint(a, b, seed, t, out),
         flyToDir: (dir, alt) => {
           aim.lat = Math.asin(Math.max(-1, Math.min(1, dir.y)));
