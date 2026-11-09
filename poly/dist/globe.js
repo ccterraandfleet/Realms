@@ -32139,6 +32139,7 @@
       cartWheels.instanceMatrix.needsUpdate = true;
       if (cartCanopy.instanceColor) cartCanopy.instanceColor.needsUpdate = true;
     }
+    let lastArmyDraw = { hosts: 0, bodies: 0, banners: 0 };
     function render() {
       const nowMs = performance.now();
       if (dirtyTerritory && nowMs - rebuildAt > 400) {
@@ -32152,6 +32153,8 @@
       const altForHosts = Math.max(0, o.camera.position.length() - o.R);
       const formScale = Math.max(0.85, Math.min(4, altForHosts / 130));
       const rankGap = SOL_SPACING * formScale;
+      let hostCount = 0;
+      let nearest = 1e9;
       let bodies = 0;
       let shadows = 0;
       let banners = 0;
@@ -32162,12 +32165,14 @@
       const hereThrowaway = new Vector3();
       for (const h of hosts) {
         if (shadows >= HOST_MAX) break;
+        hostCount++;
         const a = nodes2.get(h.path[h.seg]);
         if (!a) continue;
         const b = h.to ? nodes2.get(h.to) : null;
         hostPoint(h, hereThrowaway);
         const here = hereThrowaway.clone();
         const radius = here.length();
+        const distToHost = o.camera.position.distanceTo(here);
         here.normalize();
         if (b) fwd.copy(b.dir).sub(a.dir).normalize();
         else fwd.copy(here).cross(UP).normalize();
@@ -32182,10 +32187,15 @@
         v4.copy(here).multiplyScalar(radius + 0.5);
         m4.compose(v4, q4, s4);
         shadowMesh.setMatrixAt(shadows++, m4);
+        const menDrawn = distToHost < 260 ? SOLDIERS_PER_HOST : distToHost < 900 ? 6 : 1;
+        if (distToHost < nearest) nearest = distToHost;
+        let drawn = 0;
         const gait = h.to ? worldTime * 7.5 : 0;
-        for (let r = 0; r < SOL_RANKS; r++) {
+        for (let r = 0; r < SOL_RANKS && drawn < menDrawn; r++) {
           for (let c = 0; c < SOL_COLS; c++) {
             if (bodies >= HOST_MAX * SOLDIERS_PER_HOST) break;
+            if (drawn >= menDrawn) break;
+            drawn++;
             const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.18 * formScale;
             const ox = (c - (SOL_COLS - 1) / 2) * rankGap + jitter;
             const oz = ((SOL_RANKS - 1) / 2 - r) * rankGap + jitter * 0.7;
@@ -32236,6 +32246,7 @@
         banners++;
       }
       bodyCount(bodies, shadows, banners);
+      lastArmyDraw = { hosts: hostCount, bodies, banners, nearest };
       for (const m of armyParts) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -32726,6 +32737,7 @@
         for (const m of cartParts) m.visible = on;
       },
       edgeCount: () => edges.size,
+      armyDraw: () => lastArmyDraw,
       hostPointFor: (id) => {
         const h = hosts.find((x) => x.id === id);
         if (!h) return null;
@@ -32942,7 +32954,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 17:11";
+  var BUILD = "2026-11-09 17:18";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
@@ -33540,7 +33552,7 @@
     g.position.set(x, 0, z);
     return g;
   }
-  function buildCastle(scale, roof) {
+  function buildCastle(scale, roof, variant = 0) {
     const g = new Group();
     const A = 6.2 * scale;
     const wallH = 2.1 * scale;
@@ -33574,47 +33586,136 @@
         ));
       }
     }
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-      g.add(tower(1.25 * scale, 4.4 * scale, roof, sx * A, sz * A));
-    }
-    const keepH = 9.2 * scale;
-    g.add(box(4.6 * scale, keepH, 4.6 * scale, stoneMat, 0, keepH / 2, 0));
-    for (const [fx, fz, rot] of [[0, 1, 0], [0, -1, 0], [1, 0, Math.PI / 2], [-1, 0, Math.PI / 2]]) {
-      for (const wy of [0.42, 0.72]) {
-        const win = box(
-          0.34 * scale,
-          1.1 * scale,
-          0.1 * scale,
-          windowMat,
-          fx * 2.32 * scale,
-          keepH * wy,
-          fz * 2.32 * scale
-        );
-        win.rotation.y = rot;
-        g.add(win);
+    if (variant === 0) {
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        g.add(tower(1.25 * scale, 4.4 * scale, roof, sx * A, sz * A));
       }
+    } else {
+      g.add(tower(1.05 * scale, 3.2 * scale, roof, -A, -A));
+      g.add(tower(1.05 * scale, 3.2 * scale, roof, A, -A));
     }
-    const keepRoof = new Mesh(new ConeGeometry(3.6 * scale, 4.4 * scale, 8), roof);
-    keepRoof.position.y = keepH + 2.2 * scale;
-    keepRoof.rotation.y = Math.PI / 8;
-    keepRoof.castShadow = true;
-    g.add(keepRoof);
-    for (let i = 0; i < 8; i++) {
-      const a = i / 8 * Math.PI * 2;
-      const merlon = box(
-        0.7 * scale,
-        0.5 * scale,
-        0.42 * scale,
-        stoneDarkMat,
-        Math.cos(a) * 2.5 * scale,
-        keepH + 0.2 * scale,
-        Math.sin(a) * 2.5 * scale
-      );
-      merlon.rotation.y = -a;
-      g.add(merlon);
+    if (variant === 1) {
+      const drumH = 13.5 * scale;
+      const drum = new Mesh(new CylinderGeometry(3 * scale, 3.5 * scale, drumH, 14), stoneMat);
+      drum.position.y = drumH / 2;
+      drum.castShadow = true;
+      drum.receiveShadow = true;
+      g.add(drum);
+      g.add(new Mesh(new CylinderGeometry(3.25 * scale, 3.25 * scale, 0.55 * scale, 14), stoneDarkMat).translateY(drumH - 0.4 * scale));
+      const drumRoof = new Mesh(new ConeGeometry(3.9 * scale, 6.2 * scale, 14), roof);
+      drumRoof.position.y = drumH + 2.5 * scale;
+      drumRoof.castShadow = true;
+      g.add(drumRoof);
+      for (let i = 0; i < 7; i++) {
+        const a = i / 7 * Math.PI * 2;
+        for (const wy of [0.3, 0.58, 0.8]) {
+          const w = box(
+            0.3 * scale,
+            1 * scale,
+            0.3 * scale,
+            windowMat,
+            Math.cos(a) * 3.15 * scale,
+            drumH * wy,
+            Math.sin(a) * 3.15 * scale
+          );
+          w.rotation.y = -a;
+          g.add(w);
+        }
+      }
+      const st = new Mesh(new CylinderGeometry(1.15 * scale, 1.25 * scale, 11 * scale, 10), stoneMat);
+      st.position.set(3.35 * scale, 5.5 * scale, 0.6 * scale);
+      st.castShadow = true;
+      g.add(st);
+      const stRoof = new Mesh(new ConeGeometry(1.5 * scale, 2.6 * scale, 10), roof);
+      stRoof.position.set(3.35 * scale, 12.3 * scale, 0.6 * scale);
+      g.add(stRoof);
+      g.add(box(0.09 * scale, 3 * scale, 0.09 * scale, woodMat, 0, drumH + 5 * scale, 0));
+      g.add(box(1.3 * scale, 0.75 * scale, 0.05 * scale, goldMat, 0.68 * scale, drumH + 5.9 * scale, 0));
+    } else if (variant === 2) {
+      const hallW = 9.6 * scale;
+      const hallD = 5.8 * scale;
+      const hallH = 5.6 * scale;
+      g.add(box(hallW, hallH, hallD, stoneMat, 0, hallH / 2, 0));
+      const gable = new Mesh(new CylinderGeometry(hallD * 0.62, hallD * 0.62, hallW, 3), roof);
+      gable.rotation.z = Math.PI / 2;
+      gable.rotation.y = Math.PI / 2;
+      gable.position.y = hallH + hallD * 0.28;
+      gable.castShadow = true;
+      g.add(gable);
+      for (let i = -1; i <= 1; i++) {
+        g.add(box(0.9 * scale, 1.3 * scale, 0.12 * scale, windowMat, i * 2.6 * scale, 3.1 * scale, hallD / 2 + 0.02));
+        g.add(box(0.9 * scale, 1.3 * scale, 0.12 * scale, windowMat, i * 2.6 * scale, 3.1 * scale, -hallD / 2 - 0.02));
+      }
+      const twrH = 11.5 * scale;
+      g.add(box(3.6 * scale, twrH, 3.6 * scale, stoneMat, hallW / 2 - 0.6 * scale, twrH / 2, 0));
+      for (let i = 0; i < 4; i++) {
+        const a = i / 4 * Math.PI * 2 + Math.PI / 4;
+        g.add(box(
+          0.85 * scale,
+          0.6 * scale,
+          0.85 * scale,
+          stoneDarkMat,
+          hallW / 2 - 0.6 * scale + Math.cos(a) * 1.65 * scale,
+          twrH + 0.25 * scale,
+          Math.sin(a) * 1.65 * scale
+        ));
+      }
+      const twrRoof = new Mesh(new ConeGeometry(2.9 * scale, 3.6 * scale, 4), roof);
+      twrRoof.position.set(hallW / 2 - 0.6 * scale, twrH + 2 * scale, 0);
+      twrRoof.rotation.y = Math.PI / 4;
+      twrRoof.castShadow = true;
+      g.add(twrRoof);
+      g.add(box(0.09 * scale, 2.8 * scale, 0.09 * scale, woodMat, hallW / 2 - 0.6 * scale, twrH + 4.2 * scale, 0));
+      g.add(box(
+        1.25 * scale,
+        0.72 * scale,
+        0.05 * scale,
+        goldMat,
+        hallW / 2 - 0.6 * scale + 0.66 * scale,
+        twrH + 4.9 * scale,
+        0
+      ));
+      g.add(box(0.8 * scale, 2.2 * scale, 0.8 * scale, stoneDarkMat, -2.4 * scale, hallH + 2.4 * scale, -0.8 * scale));
+    } else {
+      const keepH = 9.2 * scale;
+      g.add(box(4.6 * scale, keepH, 4.6 * scale, stoneMat, 0, keepH / 2, 0));
+      for (const [fx, fz, rot] of [[0, 1, 0], [0, -1, 0], [1, 0, Math.PI / 2], [-1, 0, Math.PI / 2]]) {
+        for (const wy of [0.42, 0.72]) {
+          const win = box(
+            0.34 * scale,
+            1.1 * scale,
+            0.1 * scale,
+            windowMat,
+            fx * 2.32 * scale,
+            keepH * wy,
+            fz * 2.32 * scale
+          );
+          win.rotation.y = rot;
+          g.add(win);
+        }
+      }
+      const keepRoof = new Mesh(new ConeGeometry(3.6 * scale, 4.4 * scale, 8), roof);
+      keepRoof.position.y = keepH + 2.2 * scale;
+      keepRoof.rotation.y = Math.PI / 8;
+      keepRoof.castShadow = true;
+      g.add(keepRoof);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * Math.PI * 2;
+        const merlon = box(
+          0.7 * scale,
+          0.5 * scale,
+          0.42 * scale,
+          stoneDarkMat,
+          Math.cos(a) * 2.5 * scale,
+          keepH + 0.2 * scale,
+          Math.sin(a) * 2.5 * scale
+        );
+        merlon.rotation.y = -a;
+        g.add(merlon);
+      }
+      g.add(box(0.09 * scale, 2.4 * scale, 0.09 * scale, woodMat, 0, keepH + 4.2 * scale, 0));
+      g.add(box(1.2 * scale, 0.7 * scale, 0.05 * scale, goldMat, 0.62 * scale, keepH + 5 * scale, 0));
     }
-    g.add(box(0.09 * scale, 2.4 * scale, 0.09 * scale, woodMat, 0, keepH + 4.2 * scale, 0));
-    g.add(box(1.2 * scale, 0.7 * scale, 0.05 * scale, goldMat, 0.62 * scale, keepH + 5 * scale, 0));
     g.add(tower(0.95 * scale, 3.3 * scale, roof, -1.5 * scale, A + 0.2 * scale));
     g.add(tower(0.95 * scale, 3.3 * scale, roof, 1.5 * scale, A + 0.2 * scale));
     g.add(box(2.3 * scale, 2 * scale, 0.5 * scale, woodMat, 0, 1 * scale, A + 0.2 * scale));
@@ -34403,7 +34504,11 @@
         const cb0 = performance.now();
         const owner = seatOwner(s.key, s.dir);
         const roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
-        const g = mergeGroup(buildCastle(1.15, roof));
+        let kh = 7;
+        for (let ci = 0; ci < s.key.length; ci++) kh = (kh * 31 + s.key.charCodeAt(ci)) % 100003;
+        const variant = kh % 3;
+        const g = mergeGroup(buildCastle(1.15, roof, variant));
+        g.userData.variant = variant;
         g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
@@ -34426,6 +34531,18 @@
     clearDetail();
     ensureBeacons();
     fillBeacons(seats);
+  }
+  function keepInfo() {
+    const byVariant = { 0: 0, 1: 0, 2: 0 };
+    const heights = [];
+    for (const g of castles.values()) {
+      const v = g.userData.variant ?? 0;
+      byVariant[v] = (byVariant[v] ?? 0) + 1;
+      const bb = new Box3().setFromObject(g);
+      heights.push(+(bb.max.y - bb.min.y).toFixed(1));
+    }
+    heights.sort((a, b) => a - b);
+    return { keeps: castles.size, byVariant, heightMedian: heights[heights.length >> 1] ?? 0, heightRange: [heights[0] ?? 0, heights[heights.length - 1] ?? 0] };
   }
   function faceOf(d) {
     const ax = Math.abs(d.x);
@@ -34686,6 +34803,9 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
   markDirty();
   var api = {
     THREE: three_module_exports,
+    scene,
+    camera,
+    keepInfo,
     get aim() {
       return aim;
     },
