@@ -30647,6 +30647,14 @@
   }
 
   // src/globe/realms.ts
+  function capFor(n, hearth) {
+    const base = ARMY_CAP[Math.min(8, n.level) - 1];
+    return hearth ? base : Math.round(base * 0.5);
+  }
+  var HEARTH_COST = { timber: 120, ore: 60, gold: 90 };
+  var LEVY_MEN = 50;
+  var HEARTH_MIN_LEVEL = 2;
+  var WARDEN_MEN = 60;
   var ARMY_CAP = [100, 250, 500, 1e3, 1600, 2200, 2700, 3250];
   var CLAIM_GRAIN = 120;
   var CLAIM_GOLD = 40;
@@ -30857,6 +30865,7 @@
         capital: null,
         res: { grain: 400, timber: 200, ore: 100, gold: 150 },
         alive: true,
+        hearth: false,
         home: new Vector3(1, 0, 0)
       });
     }
@@ -30927,9 +30936,16 @@
         verbs.push({
           verb: "muster",
           label: "Muster",
-          hint: `garrison ${n.garrison} \xB7 field ${fieldAt(key2)} \xB7 cap ${ARMY_CAP[Math.min(8, n.level) - 1]} (M)`
+          hint: `garrison ${n.garrison} \xB7 field ${fieldAt(key2)} \xB7 cap ${capFor(n, realms[n.owner]?.hearth ?? false)} (M)`
         });
         verbs.push({ verb: "upgrade", label: "Upgrade", hint: "raise the keep (U)" });
+        if (!realms[0].hearth) {
+          verbs.push({
+            verb: "hearth",
+            label: "Hearth",
+            hint: `raise the Hearth \xB7 ${HEARTH_COST.timber} timber, ${HEARTH_COST.ore} ore, ${HEARTH_COST.gold} gold \xB7 unlocks household troops`
+          });
+        }
         verbs.push({ verb: "trade", label: "Trade", hint: "then pick your other keep" });
         verbs.push({ verb: "buildroad", label: "Build road", hint: "then pick a keep within 3 cells" });
       } else {
@@ -30969,6 +30985,10 @@
       closeWheel();
       if (verb === "muster") {
         muster(key2);
+        return;
+      }
+      if (verb === "hearth") {
+        raiseHearth(key2);
         return;
       }
       if (verb === "upgrade") {
@@ -31314,6 +31334,49 @@
         }
       }
     }
+    function raiseHearth(key2) {
+      const n = nodes2.get(key2);
+      if (!n) return false;
+      const r = realms[n.owner];
+      if (!r) return false;
+      if (r.hearth) {
+        say(`${r.name} has already raised its Hearth`);
+        return false;
+      }
+      if (n.key !== r.capital) {
+        say("the Hearth can only be raised at your capital");
+        return false;
+      }
+      if (n.level < HEARTH_MIN_LEVEL) {
+        say(`the capital must reach level ${HEARTH_MIN_LEVEL} first (U upgrades a keep)`);
+        return false;
+      }
+      if (r.res.timber < HEARTH_COST.timber || r.res.ore < HEARTH_COST.ore || r.res.gold < HEARTH_COST.gold) {
+        say(`need ${HEARTH_COST.timber} timber, ${HEARTH_COST.ore} ore, ${HEARTH_COST.gold} gold`);
+        return false;
+      }
+      r.res.timber -= HEARTH_COST.timber;
+      r.res.ore -= HEARTH_COST.ore;
+      r.res.gold -= HEARTH_COST.gold;
+      r.hearth = true;
+      hosts.push({
+        id: nextHostId++,
+        owner: n.owner,
+        men: WARDEN_MEN,
+        startMen: WARDEN_MEN,
+        path: [key2],
+        seg: 0,
+        prog: 0,
+        from: key2,
+        to: null,
+        routed: false,
+        lastBeat: 0,
+        tier: 2,
+        warden: true
+      });
+      say(`Hearth raised at ${label(n)} \xB7 household troops unlocked \xB7 Warden sworn (${WARDEN_MEN} men)`);
+      return true;
+    }
     function fieldAt(key2) {
       let n = 0;
       for (const h of hosts) if (!h.routed && h.to === null && h.path[h.path.length - 1] === key2) n += h.men;
@@ -31327,27 +31390,27 @@
         return false;
       }
       const r = realms[n.owner];
-      const cap = ARMY_CAP[Math.min(8, n.level) - 1];
+      const raise = r.hearth ? MUSTER_MEN : LEVY_MEN;
+      const cap = capFor(n, r.hearth);
       const already = n.garrison + hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
-      if (already + MUSTER_MEN > cap) {
-        say("army is at its cap for this castle level");
+      if (already + raise > cap) {
+        say(!r.hearth ? `levies are capped at ${cap} until a Hearth is raised (double-click the capital)` : "army is at its cap for this castle level");
         return false;
       }
       if (r.res.grain < MUSTER_COST.grain || r.res.gold < MUSTER_COST.gold || r.res.ore < MUSTER_COST.ore) {
         say("not enough stores to muster");
         return false;
       }
-      const fromGarrison = Math.min(n.garrison, MUSTER_MEN);
-      n.garrison -= fromGarrison;
-      const toRaise = MUSTER_MEN - fromGarrison;
-      if (toRaise > 0) {
-        const share = toRaise / MUSTER_MEN;
-        r.res.grain -= MUSTER_COST.grain * share;
-        r.res.gold -= MUSTER_COST.gold * share;
-        r.res.ore -= MUSTER_COST.ore * share;
-      }
-      n.garrison = Math.min(cap, n.garrison + MUSTER_MEN);
-      say(`${MUSTER_MEN} men mustered at ${label(n)} \xB7 garrison ${n.garrison}`);
+      const room = Math.max(0, cap - n.garrison);
+      const toRaise = Math.min(raise, room);
+      if (toRaise <= 0) return false;
+      const share = toRaise / raise;
+      r.res.grain -= MUSTER_COST.grain * share;
+      r.res.gold -= MUSTER_COST.gold * share;
+      r.res.ore -= MUSTER_COST.ore * share;
+      n.garrison += toRaise;
+      say(`${toRaise} ${r.hearth ? "household troops" : "levies"} mustered at ${label(n)} \xB7 garrison ${n.garrison} of ${cap}`);
+      return true;
       return true;
     }
     function marchFrom(key2, to, men) {
@@ -31375,7 +31438,9 @@
         from: path[0],
         to: path[1],
         routed: false,
-        lastBeat: 0
+        lastBeat: 0,
+        // levies without a Hearth, household troops with one (power() reads this)
+        tier: realms[n.owner].hearth ? 2 : 1
       };
       hosts.push(host);
       say(`${take} men march from ${label(n)} \xB7 garrison ${n.garrison}`);
@@ -31455,7 +31520,7 @@
       const n = nodes2.get(key2);
       if (!n) return;
       if (n.owner === h.owner) {
-        const cap = ARMY_CAP[Math.min(8, n.level) - 1];
+        const cap = capFor(n, realms[h.owner].hearth);
         const before = n.garrison;
         n.garrison = Math.min(cap, n.garrison + h.men);
         h.men = 0;
@@ -31463,7 +31528,7 @@
         return;
       }
       if (n.owner >= 0) {
-        const garrison = Math.max(ARMY_CAP[Math.min(8, n.level) - 1] * 0.25, n.garrison);
+        const garrison = Math.max(capFor(n, realms[n.owner].hearth) * 0.25, n.garrison);
         if (h.men > garrison * 2.2) {
           takeCastle(n, h.owner);
           say(`${label(n)} stormed and taken`);
@@ -31479,8 +31544,9 @@
       const n = h.from ? nodes2.get(h.from) : null;
       const e = h.from && h.to ? edges.get(edgeKeyOf(h.from, h.to)) : null;
       const tierBonus = e?.tier ? 1.15 : 1;
-      const fed = fedFor(h.owner).size > 0 ? 1 : 0.65;
-      return h.men * tierBonus * fed;
+      const feed = fedFor(h.owner).size > 0 ? 1 : 0.65;
+      const unit = (h.tier ?? 1) >= 2 ? 1.6 : 1;
+      return h.men * tierBonus * feed * unit;
     }
     function cellOf(h) {
       const out = [];
@@ -32141,11 +32207,12 @@
     </div>`;
       html += `<div class="row"><span>Holdings</span><b>${mine.length} keep${mine.length === 1 ? "" : "s"}</b></div>`;
       const garrisonTotal = mine.reduce((s, k) => s + k.garrison, 0);
+      html += `<div class="row"><span>Hearth</span><b style="color:${me.hearth ? "#7fd6a2" : "#e8c66a"}">${me.hearth ? "raised \xB7 household" : "not raised \xB7 levies only"}</b></div>`;
       html += `<div class="row"><span>Garrisoned</span><b>${nf(garrisonTotal)} men</b></div>`;
       html += `<div class="row"><span>In the field</span><b>${nf(men)} men${marches ? ` \xB7 ${marches} marching` : ""}</b></div>`;
       if (cap) {
         const capFed = (incident.get(cap.key) ?? []).some((ek) => fedFor(0).has(ek));
-        html += `<div class="row"><span>Capital</span><b>lvl ${cap.level} \xB7 cap ${nf(ARMY_CAP[Math.min(8, cap.level) - 1])}</b></div>`;
+        html += `<div class="row"><span>Capital</span><b>lvl ${cap.level} \xB7 cap ${nf(capFor(cap, me.hearth))}</b></div>`;
         html += `<div class="row"><span>Supply</span><b style="color:${capFed ? "#7fd6a2" : "#ef8080"}">${capFed ? "connected" : "CUT OFF"}</b></div>`;
       }
       if (sel) {
@@ -32533,6 +32600,8 @@
         owner: (k) => nodes2.get(k)?.owner ?? -2,
         muster,
         orderMarch,
+        raiseHearth,
+        power: (h) => power(h),
         marchFrom,
         host: () => hosts,
         fedFor,
@@ -32699,7 +32768,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 16:09";
+  var BUILD = "2026-11-09 16:40";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
@@ -32712,6 +32781,8 @@
     return c;
   }
   var R = 2e3;
+  var ROAD_FADE_HI = R * 0.3;
+  var ROAD_FADE_LO = ROAD_FADE_HI - 60;
   var RELIEF = 0.011;
   var SEA = -0.19;
   var GRID = 20;
@@ -33662,9 +33733,15 @@
   var world = null;
   var roadStats = { roads: 0, trunk: 0, cut: 0, supplied: 0 };
   function* syncRoadsJob(face, cu, cv, reach0) {
-    if (cam.alt > R * 0.3) {
+    if (cam.alt > ROAD_FADE_HI + 20) {
       clearRoads();
       return;
+    }
+    {
+      const k = Math.max(0, Math.min(1, (ROAD_FADE_HI - cam.alt) / 60));
+      roadMat.opacity = k;
+      roadMat.transparent = k < 0.999;
+      roadMat.depthWrite = k > 0.999;
     }
     const reach = Math.min(reach0, 8);
     const positions = [];
@@ -33890,6 +33967,8 @@
   var beaconGeo = null;
   var beacons = null;
   var beaconRoofs = null;
+  var beaconWallMat = null;
+  var beaconRoofMat = null;
   var _stone = new Color();
   var seatCache = /* @__PURE__ */ new Map();
   var _bm = new Matrix4();
@@ -33930,6 +34009,63 @@
     beaconRoofGeo = mergeGeometries(parts);
     return beaconRoofGeo;
   }
+  function ensureBeacons() {
+    if (beacons) return;
+    beaconWallMat = new MeshStandardMaterial({ color: 16777215, roughness: 0.86, metalness: 0.02 });
+    beacons = new InstancedMesh(beaconWallGeometry(), beaconWallMat, BEACON_MAX);
+    beacons.frustumCulled = false;
+    castleGroup.add(beacons);
+    beaconRoofMat = new MeshStandardMaterial({ color: 16777215, roughness: 0.62, metalness: 0.05 });
+    beaconRoofs = new InstancedMesh(beaconRoofGeometry(), beaconRoofMat, BEACON_MAX);
+    beaconRoofs.frustumCulled = false;
+    castleGroup.add(beaconRoofs);
+  }
+  function updateLodFade() {
+    const roadK = Math.max(0, Math.min(1, (ROAD_FADE_HI - cam.alt) / 60));
+    roadMat.opacity = roadK;
+    roadMat.transparent = roadK < 0.999;
+    roadMat.depthWrite = roadK > 0.999;
+    const detailAlt = R * 0.055;
+    const bIn = Math.max(0, Math.min(1, (cam.alt - detailAlt * 0.55) / (detailAlt * 0.45)));
+    const bOut = Math.max(0, Math.min(1, (ROAD_FADE_HI - cam.alt) / 60));
+    const k = Math.min(bIn, bOut);
+    for (const m of [beaconWallMat, beaconRoofMat]) {
+      if (!m) continue;
+      m.opacity = k;
+      m.transparent = k < 0.999;
+      m.depthWrite = k > 0.999;
+    }
+  }
+  function fillBeacons(seats) {
+    ensureBeacons();
+    if (!beacons) return;
+    const grow = Math.max(1, Math.min(12, cam.alt / 45));
+    let n = 0;
+    const tint = new Color();
+    for (const s of seats) {
+      if (n >= BEACON_MAX) break;
+      seatTint(s.key, s.dir, tint);
+      _bq.setFromUnitVectors(_bup, s.dir);
+      _bs.set(grow, grow, grow);
+      _bm.compose(s.dir.clone().multiplyScalar(R + s.h * RELIEF * R + 0.3), _bq, _bs);
+      beacons.setMatrixAt(n, _bm);
+      _stone.setHex(10130308).multiplyScalar(0.9 + s.key.length % 5 * 0.03);
+      beacons.setColorAt(n, _stone);
+      if (beaconRoofs) {
+        beaconRoofs.setMatrixAt(n, _bm);
+        beaconRoofs.setColorAt(n, tint);
+      }
+      n++;
+    }
+    if (beacons.instanceColor) beacons.instanceColor.needsUpdate = true;
+    beacons.count = n;
+    beacons.instanceMatrix.needsUpdate = true;
+    if (beaconRoofs) {
+      if (beaconRoofs.instanceColor) beaconRoofs.instanceColor.needsUpdate = true;
+      beaconRoofs.count = n;
+      beaconRoofs.instanceMatrix.needsUpdate = true;
+    }
+  }
   function seatCached(face, tu, tv) {
     const key = `${face}/${tu}/${tv}`;
     if (!seatCache.has(key)) seatCache.set(key, seatOf(face, tu, tv));
@@ -33969,7 +34105,7 @@
   var SYNC_INTERVAL_MS = 260;
   var NOSYNC_GATE = params.get("nosyncgate") === "1";
   function syncCastles(force = false) {
-    const near = cam.alt < R * 0.05;
+    const near = cam.alt < R * 0.055;
     const far = cam.alt < R * 0.3;
     const clearDetail = () => {
       for (const [k, g] of castles) {
@@ -34018,10 +34154,10 @@
     mark("seats");
     const roadsDue = force || performance.now() - lastRoadBuild > 350;
     if (roadsDue) startRoadJob(face, cu, cv, reach);
+    updateLodFade();
     if (near) {
       lastTier = "detail";
-      if (beacons) beacons.count = 0;
-      if (beaconRoofs) beaconRoofs.count = 0;
+      fillBeacons(seats);
       stageMark = performance.now();
       let castleMs = 0;
       for (const s of seats) {
@@ -34051,52 +34187,8 @@
     }
     lastTier = "beacon";
     clearDetail();
-    if (!beacons) {
-      beacons = new InstancedMesh(
-        beaconWallGeometry(),
-        new MeshStandardMaterial({ color: 16777215, roughness: 0.86, metalness: 0.02 }),
-        BEACON_MAX
-      );
-      beacons.frustumCulled = false;
-      castleGroup.add(beacons);
-      beaconRoofs = new InstancedMesh(
-        beaconRoofGeometry(),
-        new MeshStandardMaterial({ color: 16777215, roughness: 0.62, metalness: 0.05 }),
-        BEACON_MAX
-      );
-      beaconRoofs.frustumCulled = false;
-      castleGroup.add(beaconRoofs);
-    }
-    const grow = Math.max(1, Math.min(12, cam.alt / 45));
-    let n = 0;
-    const tint = new Color();
-    for (const s of seats) {
-      if (n >= BEACON_MAX) break;
-      seatTint(s.key, s.dir, tint);
-      _bq.setFromUnitVectors(_bup, s.dir);
-      _bs.set(grow, grow, grow);
-      _bm.compose(
-        s.dir.clone().multiplyScalar(R + s.h * RELIEF * R + 0.3),
-        _bq,
-        _bs
-      );
-      beacons.setMatrixAt(n, _bm);
-      _stone.setHex(10130308).multiplyScalar(0.9 + s.key.length % 5 * 0.03);
-      beacons.setColorAt(n, _stone);
-      if (beaconRoofs) {
-        beaconRoofs.setMatrixAt(n, _bm);
-        beaconRoofs.setColorAt(n, tint);
-      }
-      n++;
-    }
-    if (beacons.instanceColor) beacons.instanceColor.needsUpdate = true;
-    beacons.count = n;
-    beacons.instanceMatrix.needsUpdate = true;
-    if (beaconRoofs) {
-      if (beaconRoofs.instanceColor) beaconRoofs.instanceColor.needsUpdate = true;
-      beaconRoofs.count = n;
-      beaconRoofs.instanceMatrix.needsUpdate = true;
-    }
+    ensureBeacons();
+    fillBeacons(seats);
   }
   function faceOf(d) {
     const ax = Math.abs(d.x);
@@ -34421,6 +34513,16 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
       Object.assign(aim, v);
     },
     cam: () => ({ ...cam }),
+    lodState: () => ({ road: roadMat.opacity, roads: roadStats.roads, beacon: beaconWallMat ? beaconWallMat.opacity : -1, detail: castles.size, beacons: beacons ? beacons.count : -1 }),
+    /** Record the next `n` frames for smoothness analysis. */
+    recordFrames: (n) => {
+      recFrames.length = 0;
+      recLimit = n;
+      recording = true;
+      recFrames.push({});
+      recFrames.pop();
+    },
+    frames: () => recFrames.slice(),
     roadPending: () => !!roadJob,
     roadStats: () => ({ ...roadStats }),
     stalls: () => stallLog.slice(),
@@ -34726,6 +34828,9 @@ build ${BUILD}`;
     arr.push(v);
     if (arr.length > 90) arr.shift();
   };
+  var recording = false;
+  var recLimit = 0;
+  var recFrames = [];
   var stallLog = [];
   var lastFrameStamp = performance.now();
   var lastWorkMs = 0;
@@ -34778,6 +34883,7 @@ build ${BUILD}`;
       markDirty();
     }
     buildBudgetMs = emaWork > 12 ? 4 : 11;
+    updateLodFade();
     if (castles.size) {
       const nowMs = performance.now();
       for (const g of castles.values()) {
@@ -34827,6 +34933,24 @@ build ${BUILD}`;
     const work = performance.now() - frameStart;
     lastWorkMs = work;
     push(fTotal, work);
+    if (recording) {
+      recFrames.push({
+        t: +frameStart.toFixed(2),
+        dt: +(dt * 1e3).toFixed(2),
+        alt: +cam.alt.toFixed(3),
+        aim: +aim.alt.toFixed(3),
+        lat: +cam.lat.toFixed(5),
+        latAim: +aim.lat.toFixed(5),
+        lon: +cam.lon.toFixed(5),
+        lonAim: +aim.lon.toFixed(5),
+        patches: nodes.size,
+        calls: roadStats.pairs,
+        work: +work.toFixed(2),
+        moving: cameraMoving,
+        roads: !!roadJob
+      });
+      if (recFrames.length >= recLimit) recording = false;
+    }
     if (!SCALE_PIN && !scaleLocked) {
       emaWork = emaWork * 0.9 + work * 0.1;
       emaGap = emaGap * 0.9 + Math.min(dt * 1e3, 100) * 0.1;
