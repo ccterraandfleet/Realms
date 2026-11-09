@@ -30918,6 +30918,47 @@
       }
     }
     const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
+    const plots = /* @__PURE__ */ new Map();
+    const PLOT_MAX = 3;
+    const PLOT_GAIN = 0.35;
+    const emptyPlots = () => ({ fields: 0, woodlot: 0, quarry: 0 });
+    const plotsOf = (key2) => plots.get(key2) ?? emptyPlots();
+    function plotCost(level) {
+      const m = Math.pow(1.8, level);
+      return {
+        grain: Math.round(60 * m),
+        timber: Math.round(50 * m),
+        ore: Math.round(30 * m),
+        gold: Math.round(40 * m)
+      };
+    }
+    const IDENTITY_KEY = "realms.identity.v1";
+    const classInfo = {
+      vanguard: {
+        name: "Vanguard",
+        eco: 0.9,
+        muster: 1.15,
+        blurb: "Bigger musters, leaner coffers. Your columns field 15% more men and your lands yield 10% less."
+      },
+      steward: {
+        name: "Steward",
+        eco: 1.2,
+        muster: 1,
+        blurb: "The lands come first. Every keep yields 20% more of everything."
+      },
+      necromancer: {
+        name: "Necromancer",
+        eco: 0.85,
+        muster: 0.8,
+        necro: true,
+        unroutable: true,
+        blurb: "Weaker musters, richer in the wrong way. Your dead never rout, and each battle returns 30% of your losses to the ranks as Thralls, capped at your muster strength. No morale penalty."
+      }
+    };
+    let playerClass = "steward";
+    let playerColour = null;
+    const isNecro = () => classInfo[playerClass].necro === true;
+    const isUnroutable = () => classInfo[playerClass].unroutable === true;
     let pending = null;
     let wheel = null;
     const ROAD_BUILD_COST = { timber: 60, gold: 40 };
@@ -30934,18 +30975,58 @@
       if (!n) return;
       const mine = n.owner === 0;
       const verbs = [];
+      const me0 = realms[0];
+      const afford = (c) => me0.res.grain >= (c.grain ?? 0) && me0.res.timber >= (c.timber ?? 0) && me0.res.ore >= (c.ore ?? 0) && me0.res.gold >= (c.gold ?? 0);
+      const money = (c) => [
+        c.grain ? `${c.grain} grain` : "",
+        c.timber ? `${c.timber} timber` : "",
+        c.ore ? `${c.ore} ore` : "",
+        c.gold ? `${c.gold} gold` : ""
+      ].filter(Boolean).join(" \xB7 ");
       if (mine) {
         verbs.push({
           verb: "muster",
           label: "Muster",
           hint: `garrison ${n.garrison} \xB7 field ${fieldAt(key2)} \xB7 cap ${capFor(n, realms[n.owner]?.hearth ?? false)} (M)`
         });
-        verbs.push({ verb: "upgrade", label: "Upgrade", hint: "raise the keep (U)" });
+        const upCost = {
+          grain: Math.round(300 * Math.pow(1.8, n.level - 1)),
+          gold: Math.round(120 * Math.pow(1.8, n.level - 1)),
+          ore: Math.round(60 * Math.pow(1.8, n.level - 1))
+        };
+        verbs.push({
+          verb: "upgrade",
+          label: `Upgrade ${n.level}`,
+          price: money(upCost),
+          hint: "raise the keep (U)",
+          blocked: n.level >= 8 ? "already at the highest level" : !afford(upCost) ? "not enough stores" : void 0
+        });
+        const pl = plotsOf(key2);
+        for (const [track, name, lv] of [
+          ["fields", "Fields", pl.fields],
+          ["woodlot", "Woodlot", pl.woodlot],
+          ["quarry", "Quarry", pl.quarry]
+        ]) {
+          if (lv >= PLOT_MAX) {
+            verbs.push({ verb: track, label: `${name} ${lv}`, price: "max", hint: "fully worked", blocked: "fully worked" });
+            continue;
+          }
+          const c = plotCost(lv);
+          verbs.push({
+            verb: track,
+            label: `${name} ${lv}`,
+            price: money(c),
+            hint: `work this land for more ${track === "fields" ? "grain" : track === "woodlot" ? "timber" : "ore"}`,
+            blocked: !afford(c) ? "not enough stores" : void 0
+          });
+        }
         if (!realms[0].hearth) {
           verbs.push({
             verb: "hearth",
             label: "Hearth",
-            hint: `raise the Hearth \xB7 ${HEARTH_COST.timber} timber, ${HEARTH_COST.ore} ore, ${HEARTH_COST.gold} gold \xB7 unlocks household troops`
+            price: money(HEARTH_COST),
+            hint: "raise the Hearth \xB7 unlocks household troops and your Warden",
+            blocked: realms[0].capital && realms[0].capital !== key2 ? "the Hearth goes on your capital" : n.level < HEARTH_MIN_LEVEL ? `needs capital level ${HEARTH_MIN_LEVEL}` : !afford(HEARTH_COST) ? "not enough stores" : void 0
           });
         }
         verbs.push({ verb: "trade", label: "Trade", hint: "then pick your other keep" });
@@ -30963,13 +31044,24 @@
       verbs.forEach((v, i) => {
         const a = -Math.PI / 2 + i / verbs.length * Math.PI * 2;
         const b = document.createElement("button");
-        b.textContent = v.label;
-        b.title = v.hint;
+        const keyCap = i + 1 <= 9 ? String(i + 1) : "";
+        b.innerHTML = `<span style="display:block">${keyCap ? `<span style="opacity:.55">${keyCap}</span> ` : ""}${v.label}</span>` + (v.price ? `<span style="display:block;font-size:10px;opacity:.72;margin-top:3px">${v.price}</span>` : "");
+        b.title = v.blocked ? `${v.hint} \xB7 ${v.blocked}` : v.hint;
+        b.disabled = !!v.blocked;
+        if (v.blocked) {
+          b.style.opacity = "0.45";
+          b.style.cursor = "not-allowed";
+          b.style.borderColor = "rgba(150,170,190,0.35)";
+        }
         b.dataset.verb = v.verb;
         b.style.cssText = "position:absolute;pointer-events:auto;transform:translate(-50%,-50%);left:" + Math.cos(a) * R2 + "px;top:" + Math.sin(a) * R2 + "px;font:12px/1 ui-monospace,monospace;color:#f2f7ff;background:rgba(24,34,48,0.95);border:1px solid rgba(150,200,255,0.5);border-radius:9px;padding:9px 11px;cursor:pointer;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.45)";
         b.addEventListener("pointerdown", (ev) => {
           ev.stopPropagation();
           ev.preventDefault();
+          if (v.blocked) {
+            say(`${v.label}: ${v.blocked}`);
+            return;
+          }
           act(v.verb, key2);
         });
         el.appendChild(b);
@@ -30985,6 +31077,10 @@
     }
     function act(verb, key2) {
       closeWheel();
+      if (verb === "fields" || verb === "woodlot" || verb === "quarry") {
+        upgradePlot(verb, key2);
+        return;
+      }
       if (verb === "muster") {
         muster(key2);
         return;
@@ -31015,6 +31111,32 @@
       if (verb === "trade") say("trade: now pick one of your other keeps");
       if (verb === "buildroad") say(`build road: now pick a keep within ${ROAD_BUILD_REACH} cells`);
       if (verb === "blockade") say("blockade: now click the road to sever");
+    }
+    function upgradePlot(track, key2) {
+      const n = nodes2.get(key2);
+      if (!n) return;
+      if (n.owner !== 0) {
+        say("that keep is not yours");
+        return;
+      }
+      const pl = plotsOf(key2);
+      const lvl = pl[track];
+      if (lvl >= PLOT_MAX) {
+        say(`the ${track} here is already fully worked (${PLOT_MAX})`);
+        return;
+      }
+      const cost = plotCost(lvl);
+      const me = realms[0];
+      if (me.res.grain < cost.grain || me.res.timber < cost.timber || me.res.ore < cost.ore || me.res.gold < cost.gold) {
+        say(`${track} level ${lvl + 1} needs ${cost.grain} grain, ${cost.timber} timber, ${cost.ore} ore, ${cost.gold} gold`);
+        return;
+      }
+      me.res.grain -= cost.grain;
+      me.res.timber -= cost.timber;
+      me.res.ore -= cost.ore;
+      me.res.gold -= cost.gold;
+      plots.set(key2, { ...pl, [track]: lvl + 1 });
+      say(`${track} at ${label(n)} worked to level ${lvl + 1} (+${Math.round(PLOT_GAIN * (lvl + 1) * 100)}% ${track === "fields" ? "grain" : track === "woodlot" ? "timber" : "ore"} here)`);
     }
     function nearestGarrison(target2) {
       let best = null;
@@ -31206,6 +31328,25 @@
         r.res.gold += TRADE_GOLD_PER_ROAD * dt * (1 + 0.2 * (a.level - 1));
       }
     }
+    function incomeRate(realmId = 0) {
+      const r = realms[realmId];
+      const out = { grain: 0, timber: 0, ore: 0, gold: 0 };
+      if (!r) return out;
+      const eco = realmId === 0 ? classInfo[playerClass].eco : 1;
+      for (const n of ownedBy(realmId)) {
+        const mult = 1 + 0.3 * (n.level - 1);
+        const pl = realmId === 0 ? plotsOf(n.key) : emptyPlots();
+        out.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields);
+        out.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot);
+        out.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry);
+        out.gold += 0.25 * mult;
+      }
+      out.grain *= eco;
+      out.timber *= eco;
+      out.ore *= eco;
+      out.gold *= eco;
+      return { grain: +out.grain.toFixed(4), timber: +out.timber.toFixed(4), ore: +out.ore.toFixed(4), gold: +out.gold.toFixed(4) };
+    }
     function tickEconomy(dt) {
       tickTrade(dt);
       for (const r of realms) {
@@ -31213,13 +31354,19 @@
         const mine = ownedBy(r.id);
         if (!mine.length) continue;
         const add = { grain: 0, timber: 0, ore: 0, gold: 0 };
+        const eco = r.id === 0 ? classInfo[playerClass].eco : 1;
         for (const n of mine) {
           const mult = 1 + 0.3 * (n.level - 1);
-          add.grain += 0.6 * mult;
-          add.timber += 0.35 * mult;
-          add.ore += 0.15 * mult;
+          const pl = r.id === 0 ? plotsOf(n.key) : emptyPlots();
+          add.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields);
+          add.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot);
+          add.ore += 0.15 * mult * (1 + PLOT_GAIN * pl.quarry);
           add.gold += 0.25 * mult;
         }
+        add.grain *= eco;
+        add.timber *= eco;
+        add.ore *= eco;
+        add.gold *= eco;
         r.res.grain += add.grain * dt;
         r.res.timber += add.timber * dt;
         r.res.ore += add.ore * dt;
@@ -31385,6 +31532,7 @@
       return n;
     }
     function muster(castleKey) {
+      const classMuster = realms[0] ? classInfo[playerClass].muster : 1;
       const n = nodes2.get(castleKey);
       if (!n || n.owner < 0) return false;
       if (isolated(n)) {
@@ -31392,7 +31540,8 @@
         return false;
       }
       const r = realms[n.owner];
-      const raise = r.hearth ? MUSTER_MEN : LEVY_MEN;
+      const baseRaise = r.hearth ? MUSTER_MEN : LEVY_MEN;
+      const raise = n.owner === 0 ? Math.max(10, Math.round(baseRaise * classMuster)) : baseRaise;
       const cap = capFor(n, r.hearth);
       const already = n.garrison + hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
       if (already + raise > cap) {
@@ -31588,6 +31737,9 @@
             a.facing = { x: nb.dir.x - na.dir.x, y: nb.dir.y - na.dir.y, z: nb.dir.z - na.dir.z };
             b.facing = { x: na.dir.x - nb.dir.x, y: na.dir.y - nb.dir.y, z: na.dir.z - nb.dir.z };
           }
+          if (a.owner === 0 && isNecro()) {
+            a.men = Math.min(a.startMen, a.men + Math.round(dmgA * 0.3));
+          }
           if (a.men <= a.startMen * 0.4 || a.men <= 0) route(a);
           if (b.men <= b.startMen * 0.4 || b.men <= 0) route(b);
           break;
@@ -31595,6 +31747,10 @@
       }
     }
     function route(h) {
+      if (h.owner === 0 && isUnroutable() && h.men > 0) {
+        if (!h.routed) say("your dead hold the line");
+        return;
+      }
       const home = realms[h.owner].capital;
       if (!home) return;
       const here = h.path[h.seg];
@@ -31734,7 +31890,8 @@
       const owned = [];
       for (const n of nodes2.values()) {
         if (n.owner < 0) continue;
-        owned.push([n.key, n.owner, n.level, n.garrison, +n.morale.toFixed(3)]);
+        const pl = plotsOf(n.key);
+        owned.push([n.key, n.owner, n.level, n.garrison, +n.morale.toFixed(3), pl.fields, pl.woodlot, pl.quarry]);
       }
       return {
         v: SAVE_VERSION,
@@ -31801,13 +31958,15 @@
       }
       hosts.length = 0;
       tradeRoutes.clear();
-      for (const [key2, owner, level, garrison, morale] of b.nodes) {
+      plots.clear();
+      for (const [key2, owner, level, garrison, morale, f, t, q] of b.nodes) {
         const n = nodes2.get(key2);
         if (!n) continue;
         n.owner = owner;
         n.level = level;
         n.garrison = garrison;
         n.morale = morale;
+        if (f || t || q) plots.set(key2, { fields: f ?? 0, woodlot: t ?? 0, quarry: q ?? 0 });
       }
       for (const rs of b.realms) {
         const r = realms[rs.id];
@@ -32538,6 +32697,26 @@
       return true;
     }
     function key(k) {
+      if (k === "tab" || k === "Tab") {
+        toggleRoster();
+        return true;
+      }
+      if (k === "k" || k === "K") {
+        showTitleCard();
+        return true;
+      }
+      if (wheel && k >= "1" && k <= "9" && k.length === 1) {
+        const btns = Array.from(wheel.querySelectorAll("button"));
+        const b = btns[Number(k) - 1];
+        if (b) {
+          if (b.disabled) {
+            say(`${b.title}`);
+            return true;
+          }
+          b.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+          return true;
+        }
+      }
       if (k === "m" || k === "M") {
         const sel = selected ? nodes2.get(selected) : null;
         if (sel && sel.owner === 0) {
@@ -32634,6 +32813,122 @@
         return true;
       }
       return false;
+    }
+    let rosterEl = null;
+    function toggleRoster() {
+      if (rosterEl) {
+        rosterEl.remove();
+        rosterEl = null;
+        return;
+      }
+      const el = document.createElement("div");
+      el.id = "realms-roster";
+      el.style.cssText = "position:fixed;left:16px;top:50%;transform:translateY(-50%);z-index:26;min-width:290px;max-height:64vh;overflow:auto;padding:12px 12px 10px;background:rgba(16,23,33,0.95);border:1px solid rgba(150,200,255,0.35);border-radius:12px;color:#eaf1fa;font:12px/1.45 ui-monospace,monospace;box-shadow:0 8px 24px rgba(0,0,0,0.45)";
+      const mine = hosts.filter((h) => h.owner === 0);
+      const head = document.createElement("div");
+      head.innerHTML = `<div style="font-size:11px;letter-spacing:.14em;opacity:.72">YOUR COLUMNS \xB7 ${mine.length}</div><div style="font-size:10px;opacity:.5;margin:2px 0 8px">click one to fly to it \xB7 Tab to close</div>`;
+      el.appendChild(head);
+      if (!mine.length) {
+        const none = document.createElement("div");
+        none.style.cssText = "opacity:.7";
+        none.textContent = "no columns afield. select a keep and press M to muster.";
+        el.appendChild(none);
+      }
+      for (const h of mine) {
+        const at = nodes2.get(h.path[h.seg]);
+        const state = h.routed ? "FALLING BACK" : h.to ? "MARCHING" : "HOLDING";
+        const row = document.createElement("button");
+        row.style.cssText = "display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:rgba(30,41,56,0.9);border:1px solid rgba(140,180,230,0.22);border-radius:8px;color:#eaf1fa;font:12px/1.35 ui-monospace,monospace;padding:6px 8px;margin-bottom:5px;cursor:pointer";
+        const pct = Math.round(100 * Math.min(1, h.men / Math.max(1, h.startMen)));
+        const hex2 = (realms[0].colour >>> 0).toString(16).padStart(6, "0");
+        const where = at ? label(at) : "in the field";
+        row.innerHTML = `<span style="width:8px;height:26px;border-radius:3px;background:#${hex2}"></span><span style="flex:1"><b>Host ${h.id}</b> (${h.men}/${h.startMen} men, ${pct}%)<br><span style="opacity:.68">${state} (${where})${h.tier === 2 ? ", household" : ""}${h.warden ? ", Warden" : ""}</span></span>`;
+        row.addEventListener("pointerdown", (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          if (at) {
+            o.flyToDir(at.dir, 70);
+            selected = at.key;
+          }
+          say(`Host ${h.id}: ${h.men}/${h.startMen} men, ${state.toLowerCase()}${at ? " at " + label(at) : ""}`);
+        });
+        el.appendChild(row);
+      }
+      const foot = document.createElement("div");
+      foot.style.cssText = "font-size:10px;opacity:.55;margin-top:6px";
+      foot.textContent = isNecro() ? "Necromancer: these columns cannot rout, and 30% of losses stand back up." : "F follows the first column \xB7 M musters at the selected keep";
+      el.appendChild(foot);
+      document.body.appendChild(el);
+      rosterEl = el;
+    }
+    function showTitleCard() {
+      if (document.getElementById("realms-title")) return;
+      const el = document.createElement("div");
+      el.id = "realms-title";
+      el.style.cssText = "position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,rgba(12,18,26,0.86),rgba(6,9,13,0.97));color:#eef4fb;font:13px/1.5 ui-monospace,monospace";
+      let cls = playerClass;
+      let col = playerColour ?? realms[0].colour;
+      const card = document.createElement("div");
+      card.style.cssText = "width:min(560px,92vw);padding:22px 22px 18px;border:1px solid rgba(150,200,255,0.3);border-radius:16px;background:rgba(18,25,36,0.96);box-shadow:0 20px 60px rgba(0,0,0,0.6)";
+      card.innerHTML = `<div style="font-size:11px;letter-spacing:.3em;opacity:.6">REALMS</div><div style="font-size:26px;font-weight:600;margin:2px 0 4px">Choose your banner and your craft</div><div style="font-size:11px;opacity:.66;margin-bottom:16px">One world, one seed. Your banner marks the land you take; your craft decides how you take it.</div><div style="font-size:10px;letter-spacing:.18em;opacity:.55;margin-bottom:6px">BANNER</div><div id="rt-swatches" style="display:flex;gap:8px;margin-bottom:16px"></div><div style="font-size:10px;letter-spacing:.18em;opacity:.55;margin-bottom:6px">CRAFT</div><div id="rt-classes" style="display:grid;gap:7px"></div><button id="rt-go" style="margin-top:16px;width:100%;padding:11px;border-radius:10px;cursor:pointer;border:1px solid rgba(150,220,255,0.6);background:linear-gradient(180deg,#1d3a52,#16283a);color:#eaf6ff;font:600 14px/1 ui-monospace,monospace">Take the field</button>`;
+      el.appendChild(card);
+      document.body.appendChild(el);
+      const sw = card.querySelector("#rt-swatches");
+      for (const hex2 of REALM_COLOURS.slice(0, 3)) {
+        const c = document.createElement("button");
+        c.style.cssText = `width:38px;height:38px;border-radius:9px;cursor:pointer;border:2px solid ${hex2 === col ? "#eaf6ff" : "rgba(255,255,255,0.15)"};background:#${(hex2 >>> 0).toString(16).padStart(6, "0")}`;
+        c.addEventListener("click", () => {
+          col = hex2;
+          Array.from(sw.children).forEach((b, i) => {
+            b.style.borderColor = REALM_COLOURS[i] === col ? "#eaf6ff" : "rgba(255,255,255,0.15)";
+          });
+        });
+        sw.appendChild(c);
+      }
+      const cl = card.querySelector("#rt-classes");
+      const paint2 = () => {
+        cl.innerHTML = "";
+        for (const id of ["vanguard", "steward", "necromancer"]) {
+          const info = classInfo[id];
+          const b = document.createElement("button");
+          b.style.cssText = `text-align:left;cursor:pointer;padding:9px 11px;border-radius:10px;border:1px solid ${id === cls ? "rgba(150,220,255,0.75)" : "rgba(140,180,230,0.2)"};background:${id === cls ? "rgba(29,58,82,0.95)" : "rgba(28,37,49,0.85)"};color:#eaf1fa;font:12px/1.45 ui-monospace,monospace`;
+          b.innerHTML = `<b>${info.name}</b><span style="display:block;opacity:.72;margin-top:2px">${info.blurb}</span>`;
+          b.addEventListener("click", () => {
+            cls = id;
+            paint2();
+          });
+          cl.appendChild(b);
+        }
+      };
+      paint2();
+      card.querySelector("#rt-go").addEventListener("click", () => {
+        playerClass = cls;
+        playerColour = col;
+        realms[0].colour = col;
+        try {
+          localStorage.setItem(IDENTITY_KEY, JSON.stringify({ cls, colour: col }));
+        } catch {
+        }
+        dirtyTerritory = true;
+        el.remove();
+        say(`${classInfo[cls].name} of the ${col === REALM_COLOURS[0] ? "blue" : col === REALM_COLOURS[1] ? "red" : "green"} banner takes the field`);
+      });
+    }
+    function loadIdentity() {
+      try {
+        const raw = localStorage.getItem(IDENTITY_KEY);
+        if (!raw) {
+          showTitleCard();
+          return;
+        }
+        const b = JSON.parse(raw);
+        if (b.cls && classInfo[b.cls]) playerClass = b.cls;
+        if (typeof b.colour === "number") {
+          playerColour = b.colour;
+          realms[0].colour = b.colour;
+        }
+      } catch {
+      }
     }
     const tickTimes = {
       economy: [],
@@ -32735,6 +33030,7 @@
       worldTime: Math.round(worldTime)
     });
     paint();
+    loadIdentity();
     return {
       tick,
       render,
@@ -32749,6 +33045,43 @@
       ownerAt: (k) => nodes2.get(k)?.owner ?? -1,
       dblclick,
       actForTest: (verb, key2) => act(verb, key2),
+      /* land + identity surface, so all of this is testable rather than only clickable */
+      plots: (k) => plotsOf(k),
+      plotCost,
+      playerClass: () => playerClass,
+      setClass: (c) => {
+        playerClass = c;
+      },
+      identityColour: () => realms[0].colour,
+      titleOpen: () => !!document.getElementById("realms-title"),
+      chooseIdentity: (cls, colour) => {
+        playerClass = cls;
+        playerColour = colour;
+        realms[0].colour = colour;
+        dirtyTerritory = true;
+        try {
+          localStorage.setItem(IDENTITY_KEY, JSON.stringify({ cls, colour }));
+        } catch {
+        }
+        document.getElementById("realms-title")?.remove();
+        return { cls, colour };
+      },
+      openTitle: () => {
+        showTitleCard();
+        return true;
+      },
+      toggleRoster: () => {
+        toggleRoster();
+        return !!rosterEl;
+      },
+      rosterRows: () => document.querySelectorAll("#realms-roster button").length,
+      wheelInfo: () => Array.from(document.querySelectorAll("#realms-wheel button")).map((b) => ({
+        label: b.innerText.replace(/\n/g, " "),
+        blocked: b.disabled,
+        reason: b.title
+      })),
+      wealth: () => ({ ...realms[0].res }),
+      incomeRate: (id) => incomeRate(id ?? 0),
       tradeCount: () => tradeRoutes.size,
       admin: () => ADMIN,
       tryRestore,
@@ -32983,7 +33316,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 17:48";
+  var BUILD = "2026-11-09 18:06";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
