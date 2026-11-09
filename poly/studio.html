@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realms · map studio</title>
+    <link rel="icon" href="data:," />
+    <style>
+      html, body { margin: 0; height: 100%; background: #0d1214; overflow: hidden; }
+      #stage { display: block; width: 100vw; height: 100vh; }
+      #tag { position: fixed; left: 14px; bottom: 12px; font: 11px/1.5 ui-monospace, monospace;
+             color: #cfd8d6; background: rgba(10,14,16,.55); padding: 7px 10px; border-radius: 7px;
+             border: 1px solid rgba(255,255,255,.12); }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="tag">drag to orbit · shift-drag to slide · wheel to zoom · [ ] new country · seed SEED</div>
+    <script src="dist/studio.js"></script>
+  </body>
+</html>
