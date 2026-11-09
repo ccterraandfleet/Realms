@@ -32942,7 +32942,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 17:08";
+  var BUILD = "2026-11-09 17:11";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
@@ -33164,6 +33164,7 @@
   var coneGeo = new ConeGeometry(0.42, 2.1, 6, 1);
   coneGeo.translate(0, 1.05, 0);
   var GREENS = [3103266, 3500583, 2640156, 4026923];
+  var STONE_TONES = [9077880, 10196106, 7301729, 11051414];
   var groundMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.94, flatShading: true });
   var nodes = /* @__PURE__ */ new Map();
   var nodeGroup = new Group();
@@ -33281,20 +33282,25 @@
           const k = j * n + i;
           if (S[k].cls !== FOREST) continue;
           const r = ih3(face, iu * 31 + i, iv * 37 + j, 41);
-          if (r < 0.4) continue;
-          const d = faceDir(
-            face,
-            u0 + (i + 0.15 + ih3(face, i, j, 43) * 0.7) * step,
-            v0 + (j + 0.15 + ih3(face, i, j, 47) * 0.7) * step,
-            new Vector3()
-          );
-          const h = sample(d).h;
-          spots.push({
-            p: d.clone().multiplyScalar(R + h * RELIEF * R),
-            up: d.clone(),
-            s: 0.7 + ih3(face, i, j, 53) * 0.7,
-            tone: r
-          });
+          if (r < 0.22) continue;
+          const clump = 1 + (ih3(face, i, j, 59) > 0.34 ? 1 : 0) + (ih3(face, i, j, 61) > 0.72 ? 1 : 0);
+          for (let c2 = 0; c2 < clump; c2++) {
+            const ju = ih3(face, i * 7 + c2 * 13, j * 5 + c2 * 17, 63);
+            const jv = ih3(face, i * 11 + c2 * 19, j * 3 + c2 * 23, 67);
+            const d = faceDir(
+              face,
+              u0 + (i + 0.08 + ju * 0.84) * step,
+              v0 + (j + 0.08 + jv * 0.84) * step,
+              new Vector3()
+            );
+            const h = S[k].h;
+            spots.push({
+              p: d.clone().multiplyScalar(R + h * RELIEF * R),
+              up: d.clone(),
+              s: (c2 === 0 ? 0.7 : 0.42) + ih3(face, i + c2, j + c2, 53) * (c2 === 0 ? 0.7 : 0.5),
+              tone: r
+            });
+          }
         }
       }
       if (spots.length) {
@@ -33315,6 +33321,56 @@
         trees.receiveShadow = true;
       }
     }
+    let rocks = null;
+    if (level >= MAX_LEVEL - 1) {
+      const spots = [];
+      for (let j = 0; j < GRID; j++) {
+        for (let i = 0; i < GRID; i++) {
+          const k = j * n + i;
+          const cls = S[k].cls;
+          if (cls !== HILLS && cls !== MOUNTAIN && cls !== PLAINS) continue;
+          const gate = cls === PLAINS ? 0.34 : 0.65;
+          const r = ih3(face, iu * 53 + i, iv * 59 + j, 71);
+          if (r < 1 - gate) continue;
+          const h = S[k].h;
+          if (h <= SEA) continue;
+          const d = faceDir(
+            face,
+            u0 + (i + 0.1 + ih3(face, i, j, 73) * 0.8) * step,
+            v0 + (j + 0.1 + ih3(face, i, j, 79) * 0.8) * step,
+            new Vector3()
+          );
+          spots.push({
+            p: d.clone().multiplyScalar(R + h * RELIEF * R),
+            up: d.clone(),
+            s: (cls === MOUNTAIN ? 0.45 : 0.3) + ih3(face, i, j, 83) * (cls === MOUNTAIN ? 0.75 : 0.45),
+            tone: r
+          });
+        }
+      }
+      if (spots.length) {
+        const rockGeo = new IcosahedronGeometry(1, 0);
+        const rockMat = new MeshStandardMaterial({ flatShading: true, roughness: 0.95, metalness: 0 });
+        rocks = new InstancedMesh(rockGeo, rockMat, spots.length);
+        const m = new Matrix4();
+        const q = new Quaternion();
+        const spin = new Quaternion();
+        const sc = new Vector3();
+        const upv = new Vector3(0, 1, 0);
+        const col = new Color();
+        spots.forEach((t, idx) => {
+          q.setFromUnitVectors(upv, t.up);
+          spin.setFromAxisAngle(upv, t.tone * Math.PI * 2);
+          q.multiply(spin);
+          sc.set(t.s * 1.25, t.s * 0.72, t.s * 1.1);
+          m.compose(t.p, q, sc);
+          rocks.setMatrixAt(idx, m);
+          rocks.setColorAt(idx, col.setHex(STONE_TONES[Math.floor(t.tone * STONE_TONES.length)]));
+        });
+        rocks.castShadow = true;
+        rocks.receiveShadow = true;
+      }
+    }
     const centreDir = faceDir(face, u0 + span / 2, v0 + span / 2, new Vector3());
     return {
       key: `${face}/${level}/${iu}/${iv}`,
@@ -33324,6 +33380,7 @@
       iv,
       mesh,
       trees,
+      rocks,
       lastWanted: performance.now(),
       centre: centreDir.clone().multiplyScalar(R),
       radius: R * span * 0.8
@@ -33332,6 +33389,12 @@
   function disposeNode(node) {
     nodeGroup.remove(node.mesh);
     node.mesh.geometry.dispose();
+    if (node.rocks) {
+      nodeGroup.remove(node.rocks);
+      node.rocks.geometry.dispose();
+      node.rocks.material.dispose();
+      node.rocks = null;
+    }
     if (node.trees) {
       nodeGroup.remove(node.trees);
       node.trees.geometry.dispose();
