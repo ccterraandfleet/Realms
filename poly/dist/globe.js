@@ -31580,6 +31580,14 @@
           const dmgB = Math.round(a.men * swing * (pb / (pa || 1)) * 0.5 + a.men * 0.02);
           a.men = Math.max(0, a.men - dmgA);
           b.men = Math.max(0, b.men - dmgB);
+          a.fightingUntil = worldTime + 0.9;
+          b.fightingUntil = worldTime + 0.9;
+          const na = nodes2.get(a.path[a.seg]);
+          const nb = nodes2.get(b.path[b.seg]);
+          if (na && nb) {
+            a.facing = { x: nb.dir.x - na.dir.x, y: nb.dir.y - na.dir.y, z: nb.dir.z - na.dir.z };
+            b.facing = { x: na.dir.x - nb.dir.x, y: na.dir.y - nb.dir.y, z: na.dir.z - nb.dir.z };
+          }
           if (a.men <= a.startMen * 0.4 || a.men <= 0) route(a);
           if (b.men <= b.startMen * 0.4 || b.men <= 0) route(b);
           break;
@@ -32140,6 +32148,8 @@
       if (cartCanopy.instanceColor) cartCanopy.instanceColor.needsUpdate = true;
     }
     let lastArmyDraw = { hosts: 0, bodies: 0, banners: 0 };
+    let renderPrevMs = 0;
+    let battlesLive = 0;
     function render() {
       const nowMs = performance.now();
       if (dirtyTerritory && nowMs - rebuildAt > 400) {
@@ -32150,6 +32160,10 @@
         for (const m of armyParts) m.count = 0;
       }
       drawCarts();
+      const fdt = renderPrevMs ? Math.min(0.1, (nowMs - renderPrevMs) / 1e3) : 0.016;
+      renderPrevMs = nowMs;
+      battlesLive = 0;
+      let closestDebug = "";
       const altForHosts = Math.max(0, o.camera.position.length() - o.R);
       const formScale = Math.max(0.85, Math.min(4, altForHosts / 130));
       const rankGap = SOL_SPACING * formScale;
@@ -32176,6 +32190,11 @@
         here.normalize();
         if (b) fwd.copy(b.dir).sub(a.dir).normalize();
         else fwd.copy(here).cross(UP).normalize();
+        const fighting = (h.fightingUntil ?? 0) > worldTime;
+        if (fighting && h.facing) {
+          fwd.set(h.facing.x, h.facing.y, h.facing.z);
+          if (fwd.lengthSq() < 1e-9) fwd.copy(here).cross(UP);
+        }
         fwd.addScaledVector(here, -fwd.dot(here));
         if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0).addScaledVector(here, -here.x);
         fwd.normalize();
@@ -32187,10 +32206,19 @@
         v4.copy(here).multiplyScalar(radius + 0.5);
         m4.compose(v4, q4, s4);
         shadowMesh.setMatrixAt(shadows++, m4);
-        const menDrawn = distToHost < 260 ? SOLDIERS_PER_HOST : distToHost < 900 ? 6 : 1;
+        const strengthFrac = Math.max(0.18, Math.min(1, h.men / Math.max(1, h.startMen)));
+        const fullMen = Math.max(2, Math.round(SOLDIERS_PER_HOST * strengthFrac));
+        const menDrawn = distToHost < 260 ? fullMen : distToHost < 900 ? Math.max(1, Math.round(fullMen * 0.4)) : 1;
         if (distToHost < nearest) nearest = distToHost;
+        const wantCharge = fighting ? 1 : 0;
+        h.chargeEase = (h.chargeEase ?? 0) + (wantCharge - (h.chargeEase ?? 0)) * Math.min(1, fdt * 7);
+        const charge = h.chargeEase ?? 0;
+        if (fighting) battlesLive++;
+        if (distToHost <= nearest) {
+          closestDebug = `d=${distToHost.toFixed(1)} full=${fullMen} drawn=${menDrawn} frac=${strengthFrac.toFixed(2)} fight=${fighting ? 1 : 0} charge=${charge.toFixed(2)} surge=${(charge * Math.sin(worldTime * 6.2) * 0.3).toFixed(3)} facing=${h.facing ? "yes" : "no"}`;
+        }
         let drawn = 0;
-        const gait = h.to ? worldTime * 7.5 : 0;
+        const gait = h.to ? worldTime * (7.5 + charge * 5.5) : 0;
         for (let r = 0; r < SOL_RANKS && drawn < menDrawn; r++) {
           for (let c = 0; c < SOL_COLS; c++) {
             if (bodies >= HOST_MAX * SOLDIERS_PER_HOST) break;
@@ -32200,8 +32228,9 @@
             const ox = (c - (SOL_COLS - 1) / 2) * rankGap + jitter;
             const oz = ((SOL_RANKS - 1) / 2 - r) * rankGap + jitter * 0.7;
             const phase = gait + (r * 1.9 + c * 2.7);
-            const bob = Math.sin(phase) * 0.09 * formScale;
-            const step = Math.cos(phase) * 0.07 * formScale;
+            const bob = Math.sin(phase) * (0.09 + charge * 0.05) * formScale;
+            const surge = charge * Math.sin(worldTime * 6.2 + r * 0.8 + c * 1.3) * 0.3 * formScale;
+            const step = Math.cos(phase) * 0.07 * formScale + surge;
             footDir.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz + step);
             footDir.normalize();
             footDir.multiplyScalar(1 + bob / radius);
@@ -32246,7 +32275,7 @@
         banners++;
       }
       bodyCount(bodies, shadows, banners);
-      lastArmyDraw = { hosts: hostCount, bodies, banners, nearest };
+      lastArmyDraw = { hosts: hostCount, bodies, banners, nearest, battles: battlesLive, probe: closestDebug };
       for (const m of armyParts) {
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -32954,7 +32983,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 17:18";
+  var BUILD = "2026-11-09 17:48";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
