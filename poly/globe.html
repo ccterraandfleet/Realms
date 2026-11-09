@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realms · the world</title>
+    <link rel="icon" href="data:," />
+    <style>
+      html, body { margin: 0; height: 100%; background: #06090f; overflow: hidden; }
+      #stage { display: block; width: 100vw; height: 100vh; cursor: grab; }
+      #hud {
+        position: fixed; left: 14px; bottom: 12px; white-space: pre;
+        font: 11px/1.6 ui-monospace, monospace; color: #cfd8d6;
+        background: rgba(8,12,16,.5); padding: 8px 11px; border-radius: 8px;
+        border: 1px solid rgba(255,255,255,.1); pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="hud">loading</div>
+    <script src="dist/globe.js"></script>
+  </body>
+</html>
