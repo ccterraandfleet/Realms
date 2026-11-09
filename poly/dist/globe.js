@@ -31375,6 +31375,8 @@
   }
   var LOD_FREEZE_ALT = 4200;
   var frozeHigh = false;
+  var lastRotKey = "";
+  var lastAltKey = -1;
   function unitsPerPixel(alt) {
     const viewHeight = 2 * Math.tan(camera.fov * Math.PI / 360) * Math.max(alt, 0.5);
     return viewHeight / Math.max(1, innerHeight);
@@ -31441,22 +31443,21 @@
     camera.updateMatrixWorld();
     projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(projScreen);
-    const key = `${cam.lat.toFixed(5)}|${cam.lon.toFixed(5)}|${Math.round(cam.alt * 4)}|${aspect2.toFixed(3)}`;
-    if (key !== lastKey) {
-      lastKey = key;
-      const high = cam.alt > LOD_FREEZE_ALT;
-      if (high && !frozeHigh) {
-        frozeHigh = true;
-        buildTree();
-        syncCastles();
-      } else if (!high && frozeHigh) {
-        frozeHigh = false;
-        buildTree();
-        syncCastles();
-      } else if (!high) {
-        buildTree();
-        syncCastles();
-      }
+    const rotKey = `${cam.lat.toFixed(5)}|${cam.lon.toFixed(5)}|${aspect2.toFixed(3)}`;
+    const altKey = Math.round(cam.alt * 4);
+    const high = cam.alt > LOD_FREEZE_ALT;
+    let wantBuild = false;
+    if (rotKey !== lastRotKey) wantBuild = true;
+    if (altKey !== lastAltKey) {
+      if (!high) wantBuild = true;
+      else if (!frozeHigh) wantBuild = true;
+    }
+    frozeHigh = high;
+    lastRotKey = rotKey;
+    lastAltKey = altKey;
+    if (wantBuild) {
+      buildTree();
+      syncCastles();
     }
     markDirty();
   }
@@ -31645,6 +31646,13 @@
       report();
     },
     render: () => renderer.render(scene, camera),
+    // does the middle of the frame actually land on built ground?
+    probe: () => {
+      const rc = new Raycaster();
+      rc.setFromCamera(new Vector2(0, 0), camera);
+      const hits = rc.intersectObjects(nodeGroup.children, false);
+      return { patches: nodes.size, hit: hits.length > 0, dist: hits.length ? Math.round(hits[0].distance) : null };
+    },
     lights: (sunI, hemiI, expo) => {
       sun.intensity = sunI;
       hemi.intensity = hemiI;
