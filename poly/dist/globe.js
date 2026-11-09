@@ -32699,11 +32699,13 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 16:04";
+  var BUILD = "2026-11-09 16:09";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
   var _triCol = new Color();
+  var _shoreSand = new Color(14274478);
+  var _shoreShallow = new Color(5484736);
   function saturate(c) {
     c.getHSL(_hsl);
     c.setHSL(_hsl.h, Math.min(1, _hsl.s * SAT_BOOST), _hsl.l);
@@ -32994,6 +32996,12 @@
         c.multiplyScalar((0.86 + ih3(face, iu * 131 + i, iv * 197 + j, 11) * 0.34) * LIFT);
         const facing = S[k00].h + S[k01].h - (S[k10].h + S[k11].h);
         c.multiplyScalar(1 + Math.max(-0.5, Math.min(0.5, facing * 30)) * 0.5);
+        const shore = Math.abs(mean - SEA);
+        if (shore < 0.016) {
+          const k2 = 1 - shore / 0.016;
+          if (cls !== OCEAN) c.lerp(_shoreSand, 0.42 * k2);
+          else c.lerp(_shoreShallow, 0.55 * k2);
+        }
         saturate(c);
         const quad = [
           [k00, k10, k11],
