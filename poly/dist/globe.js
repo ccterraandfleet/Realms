@@ -31480,8 +31480,23 @@
   function factionOf(dir) {
     return dir.angleTo(SPAWN_DIR) < YOUR_REACH ? FACTION_YOU : FACTION_ENEMY;
   }
-  var ROAD_WIDTH = 3.2;
+  var ROAD_WIDTH = 3.4;
+  var PEBBLE_TONES = [11049860, 10260345, 11774100, 9339505, 12563874, 8878953];
+  var SHOULDER_TONE = 8022354;
   var ROAD_TINT = 13218959;
+  var ROAD_LANES = 4;
+  var PEBBLE_MAX = 3e3;
+  var STONE_PROBE = params.get("stones") === "white";
+  var PEBBLE_STONE = [11774100, 10260345, 12892838, 9142384, 11049860, 9273970];
+  var pebbleMesh = null;
+  var pebbleGeo = new IcosahedronGeometry(0.5, 0);
+  var pebbleMat = new MeshStandardMaterial({
+    color: 16777215,
+    roughness: 0.9,
+    metalness: 0,
+    flatShading: true,
+    emissiveIntensity: 0
+  });
   var roadMesh = null;
   var roadMat = new MeshStandardMaterial({
     vertexColors: true,
@@ -31490,6 +31505,7 @@
     side: DoubleSide
   });
   function clearRoads() {
+    if (pebbleMesh) pebbleMesh.count = 0;
     if (!roadMesh) return;
     castleGroup.remove(roadMesh);
     roadMesh.geometry.dispose();
@@ -31511,9 +31527,12 @@
     const upv = new Vector3();
     const side = new Vector3();
     const tint = new Color();
-    const K = 9;
+    const K = 22;
     const wide = Math.max(1, Math.min(1.5, cam.alt / 400));
     let pairs = 0;
+    const focus = up.clone().multiplyScalar(R);
+    const stoneRange = Math.max(38, cam.alt * 1.1);
+    const pebbleSpots = [];
     for (let dv = -reach; dv <= reach; dv++) {
       for (let du = -reach; du <= reach; du++) {
         const tu = cu + du;
@@ -31532,7 +31551,7 @@
           const mid = faceDir(face, u0 + span * (0.5 + ox * 0.5), v0 + span * (0.5 + oy * 0.5), dir).clone();
           if (sample(mid, false).h <= SEA) continue;
           pairs++;
-          tint.setHex(ROAD_TINT).multiplyScalar(0.9 + ih3(tu, tv, ox + oy, 71) * 0.18);
+          tint.setHex(ROAD_TINT);
           sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(tu, tv, 5, 73) - 0.5) * 0.1);
           const pts = [];
           const sides = [];
@@ -31554,20 +31573,95 @@
             side.crossVectors(tan, upv).normalize().multiplyScalar(ROAD_WIDTH * wide / 2);
             sides.push(side.clone());
           }
-          for (let i = 0; i < pts.length - 1; i++) {
-            const l0 = pts[i].clone().sub(sides[i]);
-            const r0 = pts[i].clone().add(sides[i]);
-            const l1 = pts[i + 1].clone().sub(sides[i + 1]);
-            const r1 = pts[i + 1].clone().add(sides[i + 1]);
-            for (const v of [l0, r0, r1, l0, r1, l1]) {
-              positions.push(v.x, v.y, v.z);
-              colours.push(tint.r, tint.g, tint.b);
+          const spots = [];
+          const wantStones = cam.alt < R * 0.045;
+          const lanes = [];
+          const laneCols = [];
+          for (let i = 0; i < pts.length; i++) {
+            const row = [];
+            const rowCol = [];
+            const wobble = 0.82 + ih3(tu * 131 + i, tv * 197, 7, 79) * 0.36;
+            for (let ln = 0; ln <= ROAD_LANES; ln++) {
+              const t = ln / ROAD_LANES;
+              const off = (t - 0.5) * 2 * wobble;
+              const raw = pts[i].clone().addScaledVector(sides[i], off);
+              const up2 = raw.clone().normalize();
+              raw.addScaledVector(up2, ih3(tu + ln, tv + i, 11, 83) * 0.22);
+              row.push(raw);
+              const isEdge = ln === 0 || ln === ROAD_LANES;
+              const stone = PEBBLE_TONES[Math.floor(ih3(tu * 7 + i, tv * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
+              const col = new Color(isEdge ? SHOULDER_TONE : stone);
+              col.multiplyScalar(0.88 + ih3(tu + i, tv + ln, 23, 97) * 0.26);
+              rowCol.push(col);
+            }
+            lanes.push(row);
+            laneCols.push(rowCol);
+          }
+          if (wantStones) {
+            for (let i = 0; i < pts.length && pebbleSpots.length < PEBBLE_MAX; i++) {
+              for (let pc = 0; pc < 14; pc++) {
+                if (pebbleSpots.length >= PEBBLE_MAX) break;
+                if (ih3(tu * 977 + i, tv * 613 + pc, 31, 101) > 0.985) continue;
+                const lat = ih3(tu + i, tv + pc, 37, 103) * 2.4 - 1.2;
+                const sp = pts[i].clone().addScaledVector(sides[i], lat);
+                if (sp.distanceTo(focus) > stoneRange) continue;
+                sp.addScaledVector(sp.clone().normalize(), 0.26 + ih3(tu, tv + i, 41, 107) * 0.12);
+                pebbleSpots.push({
+                  p: sp,
+                  s: 0.34 + ih3(tu + pc, tv + i, 43, 109) * 0.42,
+                  t: ih3(tu, tv, i + pc, 113)
+                });
+              }
+            }
+          }
+          for (let i = 0; i < lanes.length - 1; i++) {
+            for (let ln = 0; ln < ROAD_LANES; ln++) {
+              const a2 = lanes[i][ln];
+              const b = lanes[i][ln + 1];
+              const c = lanes[i + 1][ln + 1];
+              const d = lanes[i + 1][ln];
+              const ca = laneCols[i][ln];
+              const cb = laneCols[i][ln + 1];
+              const cc = laneCols[i + 1][ln + 1];
+              const cd = laneCols[i + 1][ln];
+              for (const [v, col] of [[a2, ca], [b, cb], [c, cc], [a2, ca], [c, cc], [d, cd]]) {
+                positions.push(v.x, v.y, v.z);
+                colours.push(col.r, col.g, col.b);
+              }
             }
           }
         }
       }
     }
     clearRoads();
+    if (pebbleSpots.length) {
+      if (!pebbleMesh) {
+        pebbleMesh = new InstancedMesh(pebbleGeo, pebbleMat, PEBBLE_MAX);
+        pebbleMesh.frustumCulled = false;
+        pebbleMesh.receiveShadow = true;
+        castleGroup.add(pebbleMesh);
+      }
+      const m4 = new Matrix4();
+      const q4 = new Quaternion();
+      const qSpin = new Quaternion();
+      const s4 = new Vector3();
+      const up4 = new Vector3(0, 1, 0);
+      const col4 = new Color();
+      let n = 0;
+      for (const sp of pebbleSpots) {
+        q4.setFromUnitVectors(up4, sp.p.clone().normalize());
+        qSpin.setFromAxisAngle(up4, sp.t * Math.PI * 2);
+        q4.multiply(qSpin);
+        s4.set(sp.s * 1.5, sp.s * 0.85, sp.s * 1.5);
+        m4.compose(sp.p, q4, s4);
+        pebbleMesh.setMatrixAt(n, m4);
+        if (!STONE_PROBE) pebbleMesh.setColorAt(n, col4.setHex(PEBBLE_STONE[Math.floor(sp.t * PEBBLE_STONE.length)]));
+        n++;
+      }
+      pebbleMesh.count = n;
+      pebbleMesh.instanceMatrix.needsUpdate = true;
+      if (pebbleMesh.instanceColor) pebbleMesh.instanceColor.needsUpdate = true;
+    }
     if (!positions.length) return;
     const geo = new BufferGeometry();
     geo.setAttribute("position", new Float32BufferAttribute(positions, 3));
