@@ -31309,13 +31309,49 @@
     territory.frustumCulled = false;
     territory.visible = false;
     o.castleGroup.add(territory);
-    const hostGeo = new ConeGeometry(cellSize * 0.055, cellSize * 0.16, 6);
-    const hostMat = new MeshStandardMaterial({ color: 16777215, roughness: 0.6, metalness: 0.1 });
+    const SOL_COLS = 4;
+    const SOL_RANKS = 3;
+    const SOLDIERS_PER_HOST = SOL_COLS * SOL_RANKS;
+    const SOL_SPACING = 2.4;
+    const SOL_W = 1.6;
+    const SOL_H = 2.6;
+    const SOL_D = 1;
     const HOST_MAX = 64;
-    const hostMesh = new InstancedMesh(hostGeo, hostMat, HOST_MAX);
-    hostMesh.frustumCulled = false;
-    hostMesh.count = 0;
-    o.castleGroup.add(hostMesh);
+    const bodyGeo = new BoxGeometry(SOL_W, SOL_H, SOL_D);
+    const headGeo = new SphereGeometry(0.46, 6, 4);
+    const shadowGeo = new CircleGeometry(SOL_SPACING * 3.1, 16);
+    const poleGeo = new BoxGeometry(0.34, 8, 0.34);
+    const flagGeo = new PlaneGeometry(3.2, 2);
+    const bodyMesh = new InstancedMesh(
+      bodyGeo,
+      new MeshStandardMaterial({ color: 16777215, roughness: 0.72, metalness: 0.04 }),
+      HOST_MAX * SOLDIERS_PER_HOST
+    );
+    const headMesh = new InstancedMesh(
+      headGeo,
+      new MeshStandardMaterial({ color: 2761504, roughness: 0.8, flatShading: true }),
+      HOST_MAX * SOLDIERS_PER_HOST
+    );
+    const shadowMesh = new InstancedMesh(
+      shadowGeo,
+      new MeshBasicMaterial({ color: 0, transparent: true, opacity: 0.26, depthWrite: false }),
+      HOST_MAX
+    );
+    const poleMesh = new InstancedMesh(
+      poleGeo,
+      new MeshStandardMaterial({ color: 5917240, roughness: 0.85 }),
+      HOST_MAX
+    );
+    const flagMesh = new InstancedMesh(
+      flagGeo,
+      new MeshStandardMaterial({ color: 16777215, roughness: 0.7, side: DoubleSide }),
+      HOST_MAX
+    );
+    for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) {
+      m.frustumCulled = false;
+      m.count = 0;
+      o.castleGroup.add(m);
+    }
     const ringGeo = new RingGeometry(cellSize * 0.3, cellSize * 0.38, 20);
     const ringMat = new MeshBasicMaterial({ color: 16777215, transparent: true, opacity: 0.85, side: DoubleSide });
     const ring = new Mesh(ringGeo, ringMat);
@@ -31335,6 +31371,10 @@
     o.castleGroup.add(territoryRim);
     const m4 = new Matrix4();
     const q4 = new Quaternion();
+    const ih3ForHost = (a, b, c) => {
+      const n = Math.sin(a * 12.9898 + b * 78.233 + c * 37.719) * 43758.5453;
+      return n - Math.floor(n);
+    };
     const v4 = new Vector3();
     const s4 = new Vector3(1, 1, 1);
     const col4 = new Color();
@@ -31374,6 +31414,7 @@
       dirtyTerritory = false;
     }
     let beaconOn = true;
+    let armiesOn = true;
     let rebuildAt = 0;
     function render() {
       const nowMs = performance.now();
@@ -31381,30 +31422,83 @@
         rebuildTerritory();
         rebuildAt = nowMs;
       }
-      let n = 0;
+      if (!armiesOn) {
+        for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) m.count = 0;
+      }
+      const altForHosts = Math.max(0, o.camera.position.length() - o.R);
+      const formScale = Math.max(0.8, Math.min(4, altForHosts / 150));
+      const rankGap = SOL_SPACING * formScale;
+      let bodies = 0;
+      let shadows = 0;
+      let banners = 0;
+      const fwd = new Vector3();
+      const right = new Vector3();
+      const basis = new Matrix4();
       for (const h of hosts) {
-        if (n >= HOST_MAX) break;
+        if (shadows >= HOST_MAX) break;
         const a = nodes2.get(h.path[h.seg]);
         if (!a) continue;
         const b = h.to ? nodes2.get(h.to) : null;
-        const dirA = a.dir;
-        const dirB = b ? b.dir : a.dir;
-        const dir = dirA.clone().lerp(dirB, h.prog).normalize();
+        const here = a.dir.clone().lerp(b ? b.dir : a.dir, h.prog).normalize();
         const hh = b ? a.h + (b.h - a.h) * h.prog : a.h;
-        v4.copy(dir).multiplyScalar(o.R + Math.max(0, hh) * o.RELIEF * o.R + cellSize * 0.1);
-        q4.setFromUnitVectors(UP, dir);
-        s4.set(1, 1, 1);
-        s4.setScalar(0.72 + Math.min(1.3, h.men / 700));
+        const radius = o.R + Math.max(0, hh) * o.RELIEF * o.R;
+        if (b) fwd.copy(b.dir).sub(a.dir).normalize();
+        else fwd.copy(here).cross(UP).normalize();
+        fwd.addScaledVector(here, -fwd.dot(here));
+        if (fwd.lengthSq() < 1e-6) fwd.set(1, 0, 0).addScaledVector(here, -here.x);
+        fwd.normalize();
+        right.copy(fwd).cross(here).normalize();
+        basis.makeBasis(right, here, fwd);
+        q4.setFromRotationMatrix(basis);
+        const shade = realms[h.owner]?.colour ?? 16777215;
+        v4.copy(here).multiplyScalar(radius + 0.6);
+        s4.setScalar(formScale);
         m4.compose(v4, q4, s4);
-        hostMesh.setMatrixAt(n, m4);
-        col4.setHex(realms[h.owner]?.colour ?? 16777215);
-        if (h.routed) col4.multiplyScalar(0.5);
-        hostMesh.setColorAt(n, col4);
-        n++;
+        shadowMesh.setMatrixAt(shadows++, m4);
+        for (let r = 0; r < SOL_RANKS; r++) {
+          for (let c = 0; c < SOL_COLS; c++) {
+            if (bodies >= HOST_MAX * SOLDIERS_PER_HOST) break;
+            const jitter = (ih3ForHost(h.id, r, c) - 0.5) * 0.5 * formScale;
+            const ox = (c - (SOL_COLS - 1) / 2) * rankGap + jitter;
+            const oz = (r - (SOL_RANKS - 1) / 2) * rankGap + jitter * 0.6;
+            v4.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
+            v4.normalize().multiplyScalar(radius + (SOL_H / 2 + 0.15) * formScale);
+            s4.setScalar(formScale);
+            m4.compose(v4, q4, s4);
+            bodyMesh.setMatrixAt(bodies, m4);
+            col4.setHex(shade).multiplyScalar(h.routed ? 0.62 : 1);
+            bodyMesh.setColorAt(bodies, col4);
+            v4.copy(here).multiplyScalar(radius).addScaledVector(right, ox).addScaledVector(fwd, oz);
+            v4.normalize().multiplyScalar(radius + (SOL_H + 0.7) * formScale);
+            m4.compose(v4, q4, s4);
+            headMesh.setMatrixAt(bodies, m4);
+            bodies++;
+          }
+        }
+        v4.copy(here).multiplyScalar(radius).addScaledVector(fwd, (SOL_RANKS / 2 + 0.55) * rankGap);
+        const base = v4.clone();
+        v4.normalize().multiplyScalar(radius + 4.2 * formScale);
+        s4.setScalar(formScale);
+        m4.compose(v4, q4, s4);
+        poleMesh.setMatrixAt(banners, m4);
+        col4.setHex(shade).multiplyScalar(1.25);
+        flagMesh.setColorAt(banners, col4);
+        v4.copy(base).normalize().multiplyScalar(radius + 7.7 * formScale).addScaledVector(right, 1.7 * formScale);
+        m4.compose(v4, q4, s4);
+        flagMesh.setMatrixAt(banners, m4);
+        banners++;
       }
-      hostMesh.count = n;
-      hostMesh.instanceMatrix.needsUpdate = true;
-      if (hostMesh.instanceColor) hostMesh.instanceColor.needsUpdate = true;
+      if (armiesOn) {
+        bodyMesh.count = bodies;
+        headMesh.count = bodies;
+        shadowMesh.count = shadows;
+        poleMesh.count = banners;
+        flagMesh.count = banners;
+      }
+      for (const m of [bodyMesh, headMesh, shadowMesh, poleMesh, flagMesh]) {
+        m.instanceMatrix.needsUpdate = true;
+        if (m.instanceColor) m.instanceColor.needsUpdate = true;
+      }
       const capKey = realms[0]?.capital;
       const cap = capKey ? nodes2.get(capKey) : null;
       const camDist = o.camera.position.length();
@@ -31737,6 +31831,9 @@
       beacon: (on) => {
         beaconOn = on;
       },
+      armies: (on) => {
+        armiesOn = on;
+      },
       flyHome: () => {
         const cap = realms[0].capital ? nodes2.get(realms[0].capital) : null;
         if (cap) o.flyToDir(cap.dir);
@@ -31937,7 +32034,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 04:35";
+  var BUILD = "2026-11-09 04:56";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32638,7 +32735,8 @@
   function factionOf(dir) {
     return dir.angleTo(SPAWN_DIR) < YOUR_REACH ? FACTION_YOU : FACTION_ENEMY;
   }
-  var ROAD_WIDTH = 3.4;
+  var ROAD_WIDTH = 3.6;
+  var ROAD_LIFT = 0.75;
   var PEBBLE_TONES = [11049860, 10260345, 11774100, 9339505, 12563874, 8878953];
   var SHOULDER_TONE = 8022354;
   var ROAD_TINT = 13218959;
@@ -32689,8 +32787,8 @@
     const upv = new Vector3();
     const side = new Vector3();
     const tint = new Color();
-    const K = 22;
-    const wideBase = Math.max(1, Math.min(1.5, cam.alt / 400));
+    const K = 28;
+    const wideBase = Math.max(1, Math.min(2, cam.alt / 320));
     let wide = wideBase;
     let pairs = 0;
     const focus = up.clone().multiplyScalar(R);
@@ -32705,7 +32803,7 @@
     const maxAngle = Math.min(1.2, (reach + 0.6) * cellAng * 1.15);
     const view = world ? world.edgesInView(up.clone().normalize(), maxAngle) : [];
     for (const e of view) {
-      if (pairs >= 520) break;
+      if (pairs >= 1400) break;
       const s1 = e.seed;
       const s2 = e.seed % 9773;
       cA.copy(e.a);
@@ -32718,25 +32816,28 @@
       if (isCut) cutCount++;
       if (isFed) fedCount++;
       pairs++;
-      wide = wideBase * (isTrunk ? 1.75 : 1);
-      if (isCut) wide *= 0.62;
+      wide = wideBase * (isTrunk ? 1.35 : 1);
+      if (isCut) wide *= 0.8;
       tint.setHex(ROAD_TINT);
       roadEdgeMid.set(e.key, { p: e.mid, key: e.key, tier: e.tier, cut: isCut });
-      sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.1);
+      const halfRoad = ROAD_WIDTH * wide / 2;
+      const chord = cB.clone().sub(cA).normalize();
+      sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.08);
       const pts = [];
       const sides = [];
-      let drowned = false;
       for (let i = 0; i <= K; i++) {
         const t = i / K;
         dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
-        const h = sample(dir, false).h;
-        if (h <= SEA) {
-          drowned = true;
-          break;
+        const lateral = new Vector3().crossVectors(chord, dir).normalize();
+        let h = sample(dir, false).h;
+        for (const off of [-1, -0.5, 0.5, 1]) {
+          const probe = dir.clone().addScaledVector(lateral, off * halfRoad / R).normalize();
+          h = Math.max(h, sample(probe, false).h);
         }
-        pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + 0.55));
+        h = Math.max(h, SEA + 4e-3);
+        pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + ROAD_LIFT));
       }
-      if (drowned || pts.length < 2) continue;
+      if (pts.length < 2) continue;
       for (let i = 0; i < pts.length; i++) {
         tan.subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
         upv.copy(pts[i]).normalize();
@@ -32749,13 +32850,13 @@
       for (let i = 0; i < pts.length; i++) {
         const row = [];
         const rowCol = [];
-        const wobble = 0.82 + ih3(s1 * 131 + i, s2 * 197, 7, 79) * 0.36;
+        const wobble = 0.96 + ih3(s1 * 131 + i, s2 * 197, 7, 79) * 0.08;
         for (let ln = 0; ln <= ROAD_LANES; ln++) {
           const t = ln / ROAD_LANES;
           const off = (t - 0.5) * 2 * wobble;
           const raw = pts[i].clone().addScaledVector(sides[i], off);
           const up2 = raw.clone().normalize();
-          raw.addScaledVector(up2, ih3(s1 + ln, s2 + i, 11, 83) * 0.22);
+          raw.addScaledVector(up2, 0.06 + ih3(s1 + ln, s2 + i, 11, 83) * 0.05);
           row.push(raw);
           const isEdge = ln === 0 || ln === ROAD_LANES;
           const stone = PEBBLE_TONES[Math.floor(ih3(s1 * 7 + i, s2 * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
