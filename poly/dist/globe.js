@@ -32401,7 +32401,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 06:24";
+  var BUILD = "2026-11-09 06:47";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -33193,7 +33193,6 @@
     return out;
   }
   var PEBBLE_TONES = [11043151, 9925183, 11964508, 8807222, 12622438, 8215603];
-  var SHOULDER_TONE = 7165756;
   var ROAD_TINT = 11569746;
   var ROAD_LANES = 4;
   var PEBBLE_MAX = 3e3;
@@ -33209,7 +33208,61 @@
     emissiveIntensity: 0
   });
   var roadMesh = null;
+  var COBBLE_TILE = 2;
+  var COBBLE_PALETTE = [
+    "#8f8474",
+    "#9a8f7c",
+    "#847a6b",
+    "#a2967f",
+    "#79705f",
+    "#8a7f6d",
+    "#b0a48b",
+    "#6f6656"
+  ];
+  var cobbleTex = null;
+  function cobbleTexture() {
+    if (cobbleTex) return cobbleTex;
+    const S = 256;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = S;
+    const g = cv.getContext("2d");
+    g.fillStyle = "#3f3629";
+    g.fillRect(0, 0, S, S);
+    let seed = 20261109;
+    const rnd = () => (seed = seed * 1664525 + 1013904223 >>> 0) / 4294967296;
+    const stone = (x, y, r, tone, tilt) => {
+      for (const ox of [-S, 0, S]) {
+        for (const oy of [-S, 0, S]) {
+          const px2 = x + ox, py2 = y + oy;
+          if (px2 < -r * 2 || px2 > S + r * 2 || py2 < -r * 2 || py2 > S + r * 2) continue;
+          g.save();
+          g.translate(px2, py2);
+          g.rotate(tilt);
+          g.beginPath();
+          g.ellipse(0, 0, r, r * 0.82, 0, 0, Math.PI * 2);
+          g.fillStyle = tone;
+          g.fill();
+          g.strokeStyle = "rgba(28,22,16,0.55)";
+          g.lineWidth = 1.6;
+          g.stroke();
+          g.restore();
+        }
+      }
+    };
+    for (let i = 0; i < 46; i++) {
+      stone(rnd() * S, rnd() * S, 17 + rnd() * 9, COBBLE_PALETTE[Math.floor(rnd() * 3)], rnd() * Math.PI);
+    }
+    for (let i = 0; i < 70; i++) {
+      stone(rnd() * S, rnd() * S, 9 + rnd() * 6, COBBLE_PALETTE[3 + Math.floor(rnd() * 5)], rnd() * Math.PI);
+    }
+    cobbleTex = new CanvasTexture(cv);
+    cobbleTex.wrapS = cobbleTex.wrapT = RepeatWrapping;
+    cobbleTex.colorSpace = SRGBColorSpace;
+    cobbleTex.anisotropy = 4;
+    return cobbleTex;
+  }
   var roadMat = new MeshBasicMaterial({
+    map: cobbleTexture(),
     vertexColors: true,
     side: DoubleSide,
     // A road is a decal on a curved, faceted planet at 2,000 units radius, and the depth buffer does
@@ -33239,6 +33292,7 @@
     const reach = Math.min(reach0, 8);
     const positions = [];
     const colours = [];
+    const uvs = [];
     const cA = new Vector3();
     const cB = new Vector3();
     const dir = new Vector3();
@@ -33309,6 +33363,10 @@
         pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + ROAD_LIFT));
       }
       if (pts.length < 2) continue;
+      const stationDist = [0];
+      for (let i = 1; i < pts.length; i++) {
+        stationDist.push(stationDist[i - 1] + pts[i].distanceTo(pts[i - 1]));
+      }
       for (let i = 0; i < pts.length; i++) {
         tan.subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
         upv.copy(pts[i]).normalize();
@@ -33318,28 +33376,33 @@
       const wantStones = cam.alt < R * 0.045;
       const lanes = [];
       const laneCols = [];
+      const laneU = [];
       for (let i = 0; i < pts.length; i++) {
         const row = [];
         const rowCol = [];
+        const rowU = [];
         const wobble = 0.96 + ih3(s1 * 131 + i, s2 * 197, 7, 79) * 0.08;
         for (let ln = 0; ln <= ROAD_LANES; ln++) {
           const t = ln / ROAD_LANES;
           const off = (t - 0.5) * 2 * wobble;
           const raw = pts[i].clone().addScaledVector(sides[i], off);
+          rowU.push(ln / ROAD_LANES * (ROAD_WIDTH * wide / COBBLE_TILE));
           const up2 = raw.clone().normalize();
           raw.addScaledVector(up2, 0.06 + ih3(s1 + ln, s2 + i, 11, 83) * 0.05);
           row.push(raw);
           const isEdge = ln === 0 || ln === ROAD_LANES;
           const stone = PEBBLE_TONES[Math.floor(ih3(s1 * 7 + i, s2 * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
-          const col = new Color(isEdge ? SHOULDER_TONE : stone);
+          const col = new Color(stone);
+          if (isEdge) col.multiplyScalar(0.82);
           if (isCut) col.lerp(CUT_GREY, 0.72).multiplyScalar(0.72);
           else if (!isFed) col.lerp(CUT_GREY, 0.35).multiplyScalar(0.86);
           else if (isTrunk) col.multiplyScalar(1.1);
-          col.multiplyScalar(0.88 + ih3(s1 + i, s2 + ln, 23, 97) * 0.26);
+          col.multiplyScalar(0.94 + ih3(s1 + i, s2 + ln, 23, 97) * 0.12);
           rowCol.push(col);
         }
         lanes.push(row);
         laneCols.push(rowCol);
+        laneU.push(rowU);
       }
       if (wantStones) {
         for (let i = 0; i < pts.length && pebbleSpots.length < PEBBLE_MAX; i++) {
@@ -33368,9 +33431,16 @@
           const cb = laneCols[i][ln + 1];
           const cc = laneCols[i + 1][ln + 1];
           const cd = laneCols[i + 1][ln];
+          const ua = laneU[i][ln], ub = laneU[i][ln + 1];
+          const uc = laneU[i + 1][ln + 1], ud = laneU[i + 1][ln];
+          const va = stationDist[i] / COBBLE_TILE, vb = stationDist[i + 1] / COBBLE_TILE;
+          const uvList = [[ua, va], [ub, va], [uc, vb], [ua, va], [uc, vb], [ud, vb]];
+          let uvi = 0;
           for (const [v, col] of [[a, ca], [b, cb], [c, cc], [a, ca], [c, cc], [d, cd]]) {
             positions.push(v.x, v.y, v.z);
             colours.push(col.r, col.g, col.b);
+            uvs.push(uvList[uvi][0], uvList[uvi][1]);
+            uvi++;
           }
         }
       }
@@ -33414,6 +33484,7 @@
     const geo = new BufferGeometry();
     geo.setAttribute("position", new Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new Float32BufferAttribute(colours, 3));
+    geo.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
     geo.computeVertexNormals();
     roadMesh = new Mesh(geo, roadMat);
     roadMesh.receiveShadow = true;
