@@ -30906,6 +30906,161 @@
       }
     }
     const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
+    let pending = null;
+    let wheel = null;
+    const ROAD_BUILD_COST = { timber: 60, gold: 40 };
+    const ROAD_BUILD_REACH = 3;
+    const TRADE_GOLD_PER_ROAD = 0.12;
+    const tradeRoutes = /* @__PURE__ */ new Set();
+    function closeWheel() {
+      if (wheel && wheel.parentNode) wheel.parentNode.removeChild(wheel);
+      wheel = null;
+    }
+    function openWheel(key2, x, y) {
+      closeWheel();
+      const n = nodes2.get(key2);
+      if (!n) return;
+      const mine = n.owner === 0;
+      const verbs = [];
+      if (mine) {
+        verbs.push({ verb: "muster", label: "Muster", hint: "100 men here (M)" });
+        verbs.push({ verb: "upgrade", label: "Upgrade", hint: "raise the keep (U)" });
+        verbs.push({ verb: "trade", label: "Trade", hint: "then pick your other keep" });
+        verbs.push({ verb: "buildroad", label: "Build road", hint: "then pick a keep within 3 cells" });
+      } else {
+        verbs.push({ verb: "attack", label: "Attack", hint: n.owner < 0 ? "send a column to take it" : "march on this keep" });
+        if (n.owner < 0) verbs.push({ verb: "buildroad", label: "Build road", hint: "then pick a keep within 3 cells" });
+      }
+      verbs.push({ verb: "blockade", label: "Blockade road", hint: "then click a road" });
+      if (!verbs.length) return;
+      const el = document.createElement("div");
+      el.id = "realms-wheel";
+      el.style.cssText = "position:fixed;z-index:30;pointer-events:none;width:0;height:0;left:" + Math.round(x) + "px;top:" + Math.round(y) + "px";
+      const R2 = 74;
+      verbs.forEach((v, i) => {
+        const a = -Math.PI / 2 + i / verbs.length * Math.PI * 2;
+        const b = document.createElement("button");
+        b.textContent = v.label;
+        b.title = v.hint;
+        b.dataset.verb = v.verb;
+        b.style.cssText = "position:absolute;pointer-events:auto;transform:translate(-50%,-50%);left:" + Math.cos(a) * R2 + "px;top:" + Math.sin(a) * R2 + "px;font:12px/1 ui-monospace,monospace;color:#f2f7ff;background:rgba(24,34,48,0.95);border:1px solid rgba(150,200,255,0.5);border-radius:9px;padding:9px 11px;cursor:pointer;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.45)";
+        b.addEventListener("pointerdown", (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          act(v.verb, key2);
+        });
+        el.appendChild(b);
+      });
+      const mid = document.createElement("div");
+      mid.textContent = mine ? "your keep" : n.owner < 0 ? "unclaimed" : "rival keep";
+      mid.style.cssText = "position:absolute;transform:translate(-50%,-50%);pointer-events:none;font:10px/1 ui-monospace,monospace;color:#cfe0f5;white-space:nowrap;opacity:.85";
+      el.appendChild(mid);
+      document.body.appendChild(el);
+      wheel = el;
+      selected = key2;
+      say("choose an order");
+    }
+    function act(verb, key2) {
+      closeWheel();
+      if (verb === "muster") {
+        muster(key2);
+        return;
+      }
+      if (verb === "upgrade") {
+        selected = key2;
+        key2("u");
+        return;
+      }
+      if (verb === "attack") {
+        const target2 = nodes2.get(key2);
+        if (!target2) return;
+        const host = nearestReserve(target2);
+        if (!host) {
+          say("no army to send: muster at one of your keeps first");
+          return;
+        }
+        if (target2.owner < 0) claimByHost.set(host.id, key2);
+        orderMarch(host, key2);
+        return;
+      }
+      pending = { verb, from: key2 };
+      if (verb === "trade") say("trade: now pick one of your other keeps");
+      if (verb === "buildroad") say(`build road: now pick a keep within ${ROAD_BUILD_REACH} cells`);
+      if (verb === "blockade") say("blockade: now click the road to sever");
+    }
+    function nearestReserve(target2) {
+      return hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null).sort((a, b) => {
+        const da = nodes2.get(a.path[a.seg])?.dir.angleTo(target2.dir) ?? 9;
+        const db = nodes2.get(b.path[b.seg])?.dir.angleTo(target2.dir) ?? 9;
+        return da - db || b.men - a.men;
+      })[0] ?? null;
+    }
+    function setTradeRoute(from, to) {
+      const a = nodes2.get(from), b = nodes2.get(to);
+      if (!a || !b) return false;
+      if (a.owner !== 0 || b.owner !== 0) {
+        say("trade needs two of your own keeps");
+        return false;
+      }
+      if (!hasRoad(a) || !hasRoad(b)) {
+        say("no road reaches that keep");
+        return false;
+      }
+      const path = pathBetween(from, to);
+      if (path.length < 2) {
+        say("no open road route between those keeps");
+        return false;
+      }
+      for (let i = 0; i < path.length - 1; i++) tradeRoutes.add(edgeKeyOf(path[i], path[i + 1]));
+      say(`trade route opened, ${path.length - 1} roads earning`);
+      return true;
+    }
+    function buildRoad(from, to) {
+      const a = nodes2.get(from), b = nodes2.get(to);
+      if (!a || !b) return false;
+      const cells = a.dir.angleTo(b.dir) * o.R / cellSize;
+      if (cells > ROAD_BUILD_REACH + 1e-3) {
+        say(`too far: ${cells.toFixed(1)} cells, the limit is ${ROAD_BUILD_REACH}`);
+        return false;
+      }
+      if (a.owner < 0 && b.owner < 0) {
+        say("a road needs one end you hold");
+        return false;
+      }
+      const ek = edgeKeyOf(from, to);
+      if (edges.has(ek)) {
+        say("a road already runs there");
+        return false;
+      }
+      const me = realms[0];
+      if (me.res.timber < ROAD_BUILD_COST.timber || me.res.gold < ROAD_BUILD_COST.gold) {
+        say(`a road costs ${ROAD_BUILD_COST.timber} timber and ${ROAD_BUILD_COST.gold} gold`);
+        return false;
+      }
+      me.res.timber -= ROAD_BUILD_COST.timber;
+      me.res.gold -= ROAD_BUILD_COST.gold;
+      addEdge(from, to, 0, 1);
+      say(`road laid from ${label(a)} to ${label(b)}`);
+      return true;
+    }
+    const hasRoad = (n) => (incident.get(n.key) ?? []).length > 0;
+    function isolated(n) {
+      return !hasRoad(n);
+    }
+    function addEdge(a, b, tier, seed) {
+      const key2 = edgeKeyOf(a, b);
+      if (edges.has(key2)) return key2;
+      edges.set(key2, { key: key2, a: a < b ? a : b, b: a < b ? b : a, tier, seed, cut: false });
+      const ia = incident.get(a) ?? [];
+      ia.push(key2);
+      incident.set(a, ia);
+      const ib = incident.get(b) ?? [];
+      ib.push(key2);
+      incident.set(b, ib);
+      cutsChanged();
+      dirtyTerritory = true;
+      return key2;
+    }
     const beamMat = new MeshBasicMaterial({
       color: 12116223,
       transparent: true,
@@ -30971,7 +31126,20 @@
       for (const n of nodes2.values()) if (n.owner === id) out.push(n);
       return out;
     }
+    function tickTrade(dt) {
+      for (const ek of tradeRoutes) {
+        const e = edges.get(ek);
+        if (!e || e.cut) continue;
+        const a = nodes2.get(e.a), b = nodes2.get(e.b);
+        if (!a || !b) continue;
+        if (a.owner !== b.owner || a.owner < 0) continue;
+        const r = realms[a.owner];
+        if (!r || !r.alive) continue;
+        r.res.gold += TRADE_GOLD_PER_ROAD * dt * (1 + 0.2 * (a.level - 1));
+      }
+    }
     function tickEconomy(dt) {
+      tickTrade(dt);
       for (const r of realms) {
         if (!r.alive) continue;
         const mine = ownedBy(r.id);
@@ -31038,6 +31206,10 @@
     function muster(castleKey) {
       const n = nodes2.get(castleKey);
       if (!n || n.owner < 0) return false;
+      if (isolated(n)) {
+        say("no road reaches this keep: double-click it and Build road to connect it");
+        return false;
+      }
       const r = realms[n.owner];
       const cap = ARMY_CAP[Math.min(8, n.level) - 1];
       const already = hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
@@ -31670,11 +31842,11 @@
         lines.push(`selected ${label(sel)} (${owner}) \xB7 ${dist} units from home`);
         lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
       } else {
-        lines.push("click an unclaimed keep beside your roads: your nearest idle army marches out and takes it");
+        lines.push("double-click a keep for orders: attack, trade, blockade road, build road");
       }
       lines.push(`\u2014 ${lastLog}`);
       if (BUILD_TAG) lines.push(`build ${BUILD_TAG}`);
-      lines.push("H home \xB7 1-9 your castles \xB7 F follow army \xB7 SHIFT-click a road to cut it");
+      lines.push("DOUBLE-CLICK a keep for orders \xB7 H home \xB7 1-9 castles \xB7 F follow army");
       lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause");
       panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
     }
@@ -31711,6 +31883,25 @@
     }
     function click(x, y) {
       const n = pickKeep(x, y);
+      if (pending) {
+        const p0 = pending;
+        pending = null;
+        if (!n) {
+          say("pick a keep to finish that order");
+          return false;
+        }
+        if (p0.verb === "trade") {
+          setTradeRoute(p0.from, n.key);
+          selected = n.key;
+          return true;
+        }
+        if (p0.verb === "buildroad") {
+          buildRoad(p0.from, n.key);
+          selected = n.key;
+          return true;
+        }
+        return true;
+      }
       if (!n) return false;
       const reserve = hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null).sort((a, b) => {
         const da = nodes2.get(a.path[a.seg])?.dir.angleTo(n.dir) ?? 9;
@@ -31753,6 +31944,15 @@
       }
       orderMarch(reserve, n.key);
       selected = n.key;
+      return true;
+    }
+    function dblclick(x, y) {
+      const n = pickKeep(x, y);
+      if (!n) {
+        closeWheel();
+        return false;
+      }
+      openWheel(n.key, x, y);
       return true;
     }
     function key(k) {
@@ -31846,6 +32046,8 @@
         return true;
       }
       if (k === "escape") {
+        closeWheel();
+        pending = null;
         selected = null;
         return true;
       }
@@ -31882,6 +32084,7 @@
           tier: e.tier,
           cut: e.cut,
           fed: fed.has(e.key),
+          trade: tradeRoutes.has(e.key),
           mid: mid.clone().multiplyScalar(o.R + 1),
           seed: (a.tu * 7919 + a.tv * 104729 + b.tu * 1299709 + b.tv * 15485863) % 1e5
         });
@@ -31922,6 +32125,10 @@
       stats,
       node: (k) => nodes2.get(k),
       ownerAt: (k) => nodes2.get(k)?.owner ?? -1,
+      dblclick,
+      actForTest: (verb, key2) => act(verb, key2),
+      tradeCount: () => tradeRoutes.size,
+      edgeCount: () => edges.size,
       beacon: (on) => {
         beaconOn = on;
       },
@@ -32128,7 +32335,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 05:31";
+  var BUILD = "2026-11-09 05:48";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32954,7 +33161,8 @@
       pairs++;
       wide = wideBase * (isTrunk ? 1.6 : 0.85);
       if (isCut) wide *= 0.8;
-      tint.setHex(ROAD_TINT);
+      tint.setHex(e.trade ? 14135902 : ROAD_TINT);
+      if (e.trade) wide *= 1.06;
       roadEdgeMid.set(e.key, { p: e.mid, key: e.key, tier: e.tier, cut: isCut });
       const halfRoad = ROAD_WIDTH * wide / 2;
       const chord = cB.clone().sub(cA).normalize();
@@ -33292,11 +33500,20 @@
     lastY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
   });
+  var lastClickAt = 0;
+  var lastClickX = 0;
+  var lastClickY = 0;
   canvas.addEventListener("pointerup", (e) => {
     const moved = Math.hypot(e.clientX - lastX, e.clientY - lastY);
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
     if (moved < 6) {
+      const nowMs = performance.now();
+      const double = nowMs - lastClickAt < 380 && Math.hypot(e.clientX - lastClickX, e.clientY - lastClickY) < 16;
+      lastClickAt = nowMs;
+      lastClickX = e.clientX;
+      lastClickY = e.clientY;
+      if (double && world && world.dblclick(e.clientX, e.clientY)) return;
       if (world && world.click(e.clientX, e.clientY)) return;
       if (!e.shiftKey) return;
       if (roadEdgeMid.size) {
