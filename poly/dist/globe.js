@@ -30905,6 +30905,35 @@
       }
     }
     const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
+    const beamMat = new MeshBasicMaterial({
+      color: 7320831,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      side: DoubleSide
+    });
+    const beamGeo = new CylinderGeometry(cellSize * 0.045, cellSize * 0.075, cellSize * 3.4, 8, 1, true);
+    const beam = new Mesh(beamGeo, beamMat);
+    beam.visible = false;
+    beam.frustumCulled = false;
+    o.castleGroup.add(beam);
+    const ringGeoHome = new RingGeometry(cellSize * 0.42, cellSize * 0.5, 28);
+    const ringMatHome = new MeshBasicMaterial({
+      color: 9357055,
+      transparent: true,
+      opacity: 0.75,
+      depthWrite: false,
+      side: DoubleSide
+    });
+    const homeRing = new Mesh(ringGeoHome, ringMatHome);
+    homeRing.visible = false;
+    homeRing.frustumCulled = false;
+    o.castleGroup.add(homeRing);
+    const ringGeoOuter = new RingGeometry(cellSize * 0.62, cellSize * 0.66, 28);
+    const homeRingOuter = new Mesh(ringGeoOuter, ringMatHome.clone());
+    homeRingOuter.visible = false;
+    homeRingOuter.frustumCulled = false;
+    o.castleGroup.add(homeRingOuter);
     function supplyEdges(capitalKey, budget = 9e4) {
       const fed = /* @__PURE__ */ new Set();
       const seen = /* @__PURE__ */ new Set([capitalKey]);
@@ -30930,7 +30959,7 @@
       if (!r?.capital) return /* @__PURE__ */ new Set();
       const now2 = performance.now();
       const hit = fedCache.get(realmId);
-      if (hit && now2 - hit.at < 400) return hit.set;
+      if (hit && now2 - hit.at < 1500) return hit.set;
       const set = supplyEdges(r.capital);
       fedCache.set(realmId, { set, at: now2 });
       return set;
@@ -31291,6 +31320,18 @@
     const ring = new Mesh(ringGeo, ringMat);
     ring.visible = false;
     o.castleGroup.add(ring);
+    const rimGeo = new RingGeometry(cellSize * 0.5, cellSize * 0.545, 20);
+    const rimMat = new MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+      side: DoubleSide
+    });
+    const RIM_MAX = 2048;
+    const territoryRim = new InstancedMesh(rimGeo, rimMat, RIM_MAX);
+    territoryRim.frustumCulled = false;
+    territoryRim.visible = false;
+    o.castleGroup.add(territoryRim);
     const m4 = new Matrix4();
     const q4 = new Quaternion();
     const v4 = new Vector3();
@@ -31315,16 +31356,30 @@
         col4.setHex(realm ? realm.colour : 16777215);
         col4.multiplyScalar(0.45 + 0.55 * node.morale);
         territory.setColorAt(n, col4);
+        placeOnGround(node, grow * 1.04);
+        territoryRim.setMatrixAt(n, m4);
+        col4.setHex(realm ? realm.colour : 16777215).multiplyScalar(0.9);
+        territoryRim.setColorAt(n, col4);
         n++;
       }
       territory.count = n;
       territory.visible = n > 0;
+      territoryRim.count = n;
+      territoryRim.visible = n > 0;
+      territoryRim.instanceMatrix.needsUpdate = true;
+      if (territoryRim.instanceColor) territoryRim.instanceColor.needsUpdate = true;
       territory.instanceMatrix.needsUpdate = true;
       if (territory.instanceColor) territory.instanceColor.needsUpdate = true;
       dirtyTerritory = false;
     }
+    let beaconOn = true;
+    let rebuildAt = 0;
     function render() {
-      if (dirtyTerritory) rebuildTerritory();
+      const nowMs = performance.now();
+      if (dirtyTerritory && nowMs - rebuildAt > 400) {
+        rebuildTerritory();
+        rebuildAt = nowMs;
+      }
       let n = 0;
       for (const h of hosts) {
         if (n >= HOST_MAX) break;
@@ -31338,6 +31393,7 @@
         v4.copy(dir).multiplyScalar(o.R + Math.max(0, hh) * o.RELIEF * o.R + cellSize * 0.1);
         q4.setFromUnitVectors(UP, dir);
         s4.set(1, 1, 1);
+        s4.setScalar(0.72 + Math.min(1.3, h.men / 700));
         m4.compose(v4, q4, s4);
         hostMesh.setMatrixAt(n, m4);
         col4.setHex(realms[h.owner]?.colour ?? 16777215);
@@ -31348,6 +31404,31 @@
       hostMesh.count = n;
       hostMesh.instanceMatrix.needsUpdate = true;
       if (hostMesh.instanceColor) hostMesh.instanceColor.needsUpdate = true;
+      const capKey = realms[0]?.capital;
+      const cap = capKey ? nodes2.get(capKey) : null;
+      const camDist = o.camera.position.length();
+      const altAbove = Math.max(0, camDist - o.R);
+      const homeGrow = Math.max(0.2, Math.min(8, altAbove / 400));
+      const beamFade = Math.max(0, Math.min(1, (altAbove - 120) / 250));
+      if (cap && realms[0].alive && beaconOn) {
+        beam.visible = beamFade > 0.02;
+        beam.position.copy(cap.dir).multiplyScalar(surfaceR(cap) + cellSize * 3.4 * homeGrow / 2);
+        beam.quaternion.setFromUnitVectors(UP, cap.dir);
+        beam.scale.set(homeGrow, homeGrow, homeGrow);
+        beamMat.opacity = 0.34 * beamFade;
+        homeRing.visible = true;
+        homeRing.position.copy(cap.dir).multiplyScalar(surfaceR(cap) + cellSize * 0.12);
+        homeRing.quaternion.setFromUnitVectors(UP, cap.dir);
+        homeRing.scale.setScalar(Math.max(0.15, homeGrow));
+        homeRingOuter.visible = true;
+        homeRingOuter.position.copy(homeRing.position);
+        homeRingOuter.quaternion.copy(homeRing.quaternion);
+        homeRingOuter.scale.setScalar(Math.max(0.15, homeGrow) * 1.55);
+      } else {
+        beam.visible = false;
+        homeRing.visible = false;
+        homeRingOuter.visible = false;
+      }
       const sel = selected ? nodes2.get(selected) : null;
       if (sel) {
         placeOnGround(sel, 1);
@@ -31402,13 +31483,15 @@
       }
       if (sel) {
         const owner = sel.owner >= 0 ? realms[sel.owner].name : "unclaimed";
-        lines.push(`selected ${label(sel)} (${owner})`);
+        const dist = Math.round(sel.dir.angleTo(realms[0].home) * o.R);
+        lines.push(`selected ${label(sel)} (${owner}) \xB7 ${dist} units from home`);
         lines.push(`  lvl ${sel.level} \xB7 morale ${(sel.morale * 100).toFixed(0)}%${sel.owner === 0 ? " \xB7 M muster \xB7 U upgrade" : ""}`);
       } else {
-        lines.push("click an unclaimed keep beside your roads to claim it");
+        lines.push("H flies home \xB7 click an unclaimed keep beside your roads to claim it");
       }
       lines.push(`\u2014 ${lastLog}`);
-      lines.push("M muster \xB7 U upgrade \xB7 F follow army \xB7 R repair roads \xB7 space pause");
+      lines.push(`home ${me.capital ?? "lost"} \xB7 H fly home \xB7 1-9 your castles \xB7 F follow army`);
+      lines.push("M muster \xB7 U upgrade \xB7 R repair roads \xB7 space pause \xB7 click a road to cut it");
       panel.innerHTML = lines.map((l) => l.replace(/&/g, "&amp;").replace(/</g, "&lt;")).join("\n");
     }
     function projectToScreen(p) {
@@ -31501,16 +31584,39 @@
         say(`${label(sel)} raised to level ${sel.level}`);
         return true;
       }
-      if (k === "f" || k === "F") {
-        const h = hosts.find((hh) => hh.owner === 0 && !hh.routed && hh.to);
-        if (!h) {
-          say("no army marching");
+      if (k === "h" || k === "H" || k === "Home") {
+        const cap = realms[0].capital ? nodes2.get(realms[0].capital) : null;
+        if (!cap) {
+          say("you have no capital");
           return true;
         }
-        const a = nodes2.get(h.path[h.seg]);
-        if (a) {
-          say(`following your host at ${label(a)}`);
+        o.flyToDir(cap.dir);
+        selected = cap.key;
+        say(`flying home to ${label(cap)}`);
+        return true;
+      }
+      if (k >= "1" && k <= "9" && k.length === 1) {
+        const mine = ownedBy(0).sort((a, b) => a.dir.distanceTo(realms[0].home) - b.dir.distanceTo(realms[0].home));
+        const n = mine[Number(k) - 1];
+        if (!n) {
+          say(`you hold ${mine.length} castle${mine.length === 1 ? "" : "s"}`);
           return true;
+        }
+        o.flyToDir(n.dir);
+        selected = n.key;
+        say(`flying to ${label(n)}`);
+        return true;
+      }
+      if (k === "f" || k === "F") {
+        const h = hosts.find((hh) => hh.owner === 0 && !hh.routed && hh.to) ?? hosts.find((hh) => hh.owner === 0);
+        if (!h) {
+          say("no army afield");
+          return true;
+        }
+        const at = nodes2.get(h.path[h.seg]);
+        if (at) {
+          o.flyToDir(at.dir);
+          say(`following your host at ${label(at)}`);
         }
         return true;
       }
@@ -31594,6 +31700,15 @@
       toggleCutKey,
       stats,
       node: (k) => nodes2.get(k),
+      ownerAt: (k) => nodes2.get(k)?.owner ?? -1,
+      beacon: (on) => {
+        beaconOn = on;
+      },
+      flyHome: () => {
+        const cap = realms[0].capital ? nodes2.get(realms[0].capital) : null;
+        if (cap) o.flyToDir(cap.dir);
+        return cap?.key ?? null;
+      },
       realms: () => realms.map((r) => ({ ...r, castles: ownedBy(r.id).length })),
       hosts: () => hosts.map((h) => ({ ...h })),
       cutRoad: (a, b) => toggleCutKey(edgeKeyOf(a, b)),
@@ -32465,8 +32580,20 @@
   }
   var FACTION_YOU = 0;
   var FACTION_ENEMY = 1;
+  var roofNeutralMat = new MeshStandardMaterial({ color: 9077624, roughness: 0.85, metalness: 0.02 });
   var OWN_COLOUR = new Color(4161488);
   var ENEMY_COLOUR = new Color(12597547);
+  var NEUTRAL_COLOUR = new Color(10195588);
+  function seatOwner(key, dir) {
+    if (world) return world.ownerAt(key);
+    return factionOf(dir) === FACTION_YOU ? 0 : 1;
+  }
+  function seatTint(key, dir, out) {
+    const owner = seatOwner(key, dir);
+    if (owner === 0) return out.copy(OWN_COLOUR);
+    if (owner > 0) return out.copy(ENEMY_COLOUR);
+    return out.copy(NEUTRAL_COLOUR);
+  }
   var OWN_BLOCK = 6;
   var SPAWN_DIR = new Vector3(
     Math.cos(0.42) * Math.cos(-1.15),
@@ -32762,7 +32889,9 @@
       if (beacons) beacons.count = 0;
       for (const s of seats) {
         if (castles.has(s.key)) continue;
-        const g = mergeGroup(buildCastle(0.9, factionOf(s.dir) === FACTION_YOU ? roofBlueMat : roofRedMat));
+        const owner = seatOwner(s.key, s.dir);
+        const roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
+        const g = mergeGroup(buildCastle(0.9, roof));
         g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
@@ -32793,7 +32922,7 @@
     const tint = new Color();
     for (const s of seats) {
       if (n >= BEACON_MAX) break;
-      tint.copy(factionOf(s.dir) === FACTION_YOU ? OWN_COLOUR : ENEMY_COLOUR);
+      seatTint(s.key, s.dir, tint);
       _bq.setFromUnitVectors(_bup, s.dir);
       _bs.set(grow, grow, grow);
       _bm.compose(
@@ -33160,6 +33289,11 @@
       canvas,
       log: (line) => {
         console.log("[realms]", line);
+      },
+      flyToDir: (dir) => {
+        aim.lat = Math.asin(Math.max(-1, Math.min(1, dir.y)));
+        aim.lon = Math.atan2(dir.z, dir.x);
+        markDirty();
       }
     });
     window.__world = world;
@@ -33190,7 +33324,7 @@
       markDirty();
     }
     worldClock += dt;
-    if (world && worldClock >= 0.05) {
+    if (world && worldClock >= 0.033) {
       world.tick(worldClock);
       world.render();
       worldClock = 0;
