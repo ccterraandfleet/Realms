@@ -31511,6 +31511,166 @@
     roadMesh.geometry.dispose();
     roadMesh = null;
   }
+  var CUT_GREY = new Color(6643282);
+  var cutEdges = /* @__PURE__ */ new Set();
+  var roadEdgeMid = /* @__PURE__ */ new Map();
+  var roadEdgeTier = /* @__PURE__ */ new Map();
+  var roadStats = { roads: 0, trunk: 0, cut: 0, supplied: 0 };
+  function edgeKeyOf(a, b) {
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }
+  var landCache = /* @__PURE__ */ new Map();
+  function edgeIsDry(a, b) {
+    const key = edgeKeyOf(a.key, b.key);
+    const hit = landCache.get(key);
+    if (hit !== void 0) return hit;
+    const mid = new Vector3().copy(a.dir).add(b.dir).normalize();
+    const dry = sample(mid, false).h > SEA;
+    landCache.set(key, dry);
+    return dry;
+  }
+  function buildNetwork(face, cu, cv, reach) {
+    const nodes2 = [];
+    const byCell = /* @__PURE__ */ new Map();
+    for (let dv = -reach; dv <= reach; dv++) {
+      for (let du = -reach; du <= reach; du++) {
+        const tu = cu + du;
+        const tv = cv + dv;
+        if (tu < 0 || tv < 0 || tu >= TERR_PER_FACE || tv >= TERR_PER_FACE) continue;
+        const s = seatCached(face, tu, tv);
+        if (!s) continue;
+        const n = { key: `${tu},${tv}`, tu, tv, dir: s.dir };
+        nodes2.push(n);
+        byCell.set(n.key, n);
+      }
+    }
+    const seen = /* @__PURE__ */ new Set();
+    const cand = [];
+    for (const n of nodes2) {
+      for (let dv = -1; dv <= 1; dv++) {
+        for (let du = -1; du <= 1; du++) {
+          if (!du && !dv) continue;
+          const other = byCell.get(`${n.tu + du},${n.tv + dv}`);
+          if (!other) continue;
+          const key = edgeKeyOf(n.key, other.key);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (!edgeIsDry(n, other)) continue;
+          cand.push({ key, a: n, b: other, len: n.dir.distanceTo(other.dir) });
+        }
+      }
+    }
+    cand.sort((p, q) => p.len - q.len);
+    const parent = /* @__PURE__ */ new Map();
+    for (const n of nodes2) parent.set(n.key, n.key);
+    const find = (x) => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r);
+      let c = x;
+      while (parent.get(c) !== r) {
+        const nx = parent.get(c);
+        parent.set(c, r);
+        c = nx;
+      }
+      return r;
+    };
+    const tree = [];
+    const extras = [];
+    for (const e of cand) {
+      const ra = find(e.a.key);
+      const rb = find(e.b.key);
+      if (ra === rb) {
+        extras.push(e);
+        continue;
+      }
+      parent.set(ra, rb);
+      tree.push(e);
+    }
+    const loopBudget = Math.ceil(tree.length * 0.08);
+    const median = tree.length ? tree[Math.floor(tree.length / 2)].len : 0;
+    let loops = 0;
+    for (const e of extras) {
+      if (loops >= loopBudget) break;
+      if (e.len > median * 1.2) continue;
+      if (ih3(e.a.tu, e.b.tv, e.a.tv + e.b.tu, 137) > 0.62) continue;
+      loops++;
+      tree.push({ ...e, len: e.len });
+    }
+    const adjT = /* @__PURE__ */ new Map();
+    for (const e of tree) {
+      if (!adjT.has(e.a.key)) adjT.set(e.a.key, []);
+      if (!adjT.has(e.b.key)) adjT.set(e.b.key, []);
+      adjT.get(e.a.key).push(e.b.key);
+      adjT.get(e.b.key).push(e.a.key);
+    }
+    const root = nodes2[0]?.key;
+    const par = /* @__PURE__ */ new Map();
+    const order = [];
+    if (root) {
+      par.set(root, null);
+      order.push(root);
+      for (let i = 0; i < order.length; i++) {
+        for (const nb of adjT.get(order[i]) ?? []) {
+          if (par.has(nb)) continue;
+          par.set(nb, order[i]);
+          order.push(nb);
+        }
+      }
+    }
+    const size = /* @__PURE__ */ new Map();
+    for (const k of order) size.set(k, 1);
+    for (let i = order.length - 1; i > 0; i--) {
+      const k = order[i];
+      const pk = par.get(k);
+      if (pk) size.set(pk, (size.get(pk) ?? 1) + (size.get(k) ?? 1));
+    }
+    const total = nodes2.length || 1;
+    const trafficOf = (e) => {
+      if (par.get(e.b.key) === e.a.key) return Math.min(size.get(e.b.key) ?? 1, total - (size.get(e.b.key) ?? 1));
+      if (par.get(e.a.key) === e.b.key) return Math.min(size.get(e.a.key) ?? 1, total - (size.get(e.a.key) ?? 1));
+      return 0;
+    };
+    const ranked = [...tree].sort((p, q) => trafficOf(q) - trafficOf(p));
+    const trunkCut = Math.max(1, Math.floor(ranked.length * 0.35));
+    const edges = /* @__PURE__ */ new Map();
+    ranked.forEach((e, i) => edges.set(e.key, { tier: i < trunkCut ? 1 : 0, a: e.a, b: e.b }));
+    return { nodes: nodes2, edges };
+  }
+  function supplyFromCapital(nodes2, edges) {
+    let capital = null;
+    let best = Infinity;
+    for (const n of nodes2) {
+      const d = n.dir.distanceTo(SPAWN_DIR);
+      if (d < best) {
+        best = d;
+        capital = n;
+      }
+    }
+    const adj = /* @__PURE__ */ new Map();
+    for (const [key, e] of edges) {
+      if (cutEdges.has(key)) continue;
+      if (!adj.has(e.a.key)) adj.set(e.a.key, []);
+      if (!adj.has(e.b.key)) adj.set(e.b.key, []);
+      adj.get(e.a.key).push({ to: e.b.key, edge: key });
+      adj.get(e.b.key).push({ to: e.a.key, edge: key });
+    }
+    const fed = /* @__PURE__ */ new Set();
+    const fedEdges = /* @__PURE__ */ new Set();
+    if (!capital) return { fed, fedEdges };
+    const queue = [capital.key];
+    fed.add(capital.key);
+    while (queue.length) {
+      const k = queue.shift();
+      for (const step of adj.get(k) ?? []) {
+        fedEdges.add(step.edge);
+        if (!fed.has(step.to)) {
+          fed.add(step.to);
+          queue.push(step.to);
+        }
+      }
+    }
+    return { fed, fedEdges };
+  }
   function syncRoads(face, cu, cv, reach0) {
     if (cam.alt > R * 0.3) {
       clearRoads();
@@ -31528,11 +31688,18 @@
     const side = new Vector3();
     const tint = new Color();
     const K = 22;
-    const wide = Math.max(1, Math.min(1.5, cam.alt / 400));
+    const wideBase = Math.max(1, Math.min(1.5, cam.alt / 400));
+    let wide = wideBase;
     let pairs = 0;
     const focus = up.clone().multiplyScalar(R);
     const stoneRange = Math.max(38, cam.alt * 1.1);
     const pebbleSpots = [];
+    const net = buildNetwork(face, cu, cv, reach);
+    const supply = supplyFromCapital(net.nodes, net.edges);
+    roadEdgeMid.clear();
+    roadEdgeTier.clear();
+    let trunkCount = 0;
+    let cutCount = 0;
     for (let dv = -reach; dv <= reach; dv++) {
       for (let du = -reach; du <= reach; du++) {
         const tu = cu + du;
@@ -31543,6 +31710,14 @@
         for (const [ox, oy] of [[1, 0], [0, 1]]) {
           const bq = seatCached(face, tu + ox, tv + oy);
           if (!bq || pairs >= 420) continue;
+          const pairKey = edgeKeyOf(`${tu},${tv}`, `${tu + ox},${tv + oy}`);
+          const link = net.edges.get(pairKey);
+          if (!link) continue;
+          const isTrunk = link.tier === 1;
+          const isCut = cutEdges.has(pairKey);
+          const isFed = supply.fedEdges.has(pairKey);
+          if (isTrunk) trunkCount++;
+          if (isCut) cutCount++;
           cA.copy(a.dir);
           cB.copy(bq.dir);
           const span = 2 / TERR_PER_FACE;
@@ -31551,7 +31726,11 @@
           const mid = faceDir(face, u0 + span * (0.5 + ox * 0.5), v0 + span * (0.5 + oy * 0.5), dir).clone();
           if (sample(mid, false).h <= SEA) continue;
           pairs++;
+          wide = wideBase * (isTrunk ? 1.75 : 1);
+          if (isCut) wide *= 0.62;
           tint.setHex(ROAD_TINT);
+          roadEdgeMid.set(pairKey, cA.clone().add(cB).normalize().multiplyScalar(R + 1));
+          roadEdgeTier.set(pairKey, isTrunk ? 1 : 0);
           sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(tu, tv, 5, 73) - 0.5) * 0.1);
           const pts = [];
           const sides = [];
@@ -31591,6 +31770,9 @@
               const isEdge = ln === 0 || ln === ROAD_LANES;
               const stone = PEBBLE_TONES[Math.floor(ih3(tu * 7 + i, tv * 13 + ln, 17, 89) * PEBBLE_TONES.length)];
               const col = new Color(isEdge ? SHOULDER_TONE : stone);
+              if (isCut) col.lerp(CUT_GREY, 0.72).multiplyScalar(0.72);
+              else if (!isFed) col.lerp(CUT_GREY, 0.35).multiplyScalar(0.86);
+              else if (isTrunk) col.multiplyScalar(1.1);
               col.multiplyScalar(0.88 + ih3(tu + i, tv + ln, 23, 97) * 0.26);
               rowCol.push(col);
             }
@@ -31633,6 +31815,12 @@
         }
       }
     }
+    roadStats = {
+      roads: net.edges.size,
+      trunk: trunkCount,
+      cut: cutCount,
+      supplied: net.nodes.length ? Math.round(supply.fed.size / net.nodes.length * 100) : 0
+    };
     clearRoads();
     if (pebbleSpots.length) {
       if (!pebbleMesh) {
@@ -31878,8 +32066,32 @@
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointerup", (e) => {
+    const moved = Math.hypot(e.clientX - lastX, e.clientY - lastY);
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
+    if (moved < 6 && roadEdgeMid.size) {
+      const pv = new Vector3();
+      let bestKey = null;
+      let bestPx = 22;
+      for (const [key, mid] of roadEdgeMid) {
+        pv.copy(mid).project(camera);
+        if (pv.z > 1) continue;
+        const sx = (pv.x * 0.5 + 0.5) * canvas.clientWidth;
+        const sy = (-pv.y * 0.5 + 0.5) * canvas.clientHeight;
+        const d = Math.hypot(sx - e.clientX, sy - e.clientY);
+        if (d < bestPx) {
+          bestPx = d;
+          bestKey = key;
+        }
+      }
+      if (bestKey) {
+        if (cutEdges.has(bestKey)) cutEdges.delete(bestKey);
+        else cutEdges.add(bestKey);
+        dirty = true;
+        syncCastles();
+        report();
+      }
+    }
   });
   function dragBy(dx, dy) {
     const fine = aim.alt < 60 ? 0.35 : 1;
@@ -31947,6 +32159,15 @@
     aim.lat += dNorth / R;
   }, { passive: false });
   addEventListener("keydown", (e) => {
+    if (e.key === "r" || e.key === "R") {
+      if (cutEdges.size) {
+        cutEdges.clear();
+        dirty = true;
+        syncCastles();
+        report();
+      }
+      return;
+    }
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
     if (e.key === "]") location.search = `?seed=${SEED + 1}`;
   });
@@ -31957,7 +32178,8 @@
     hud.textContent = [
       `${TERRITORIES.toLocaleString()} territories \xB7 ${(6 * Math.pow(2, MAX_LEVEL) * GRID).toLocaleString()} facets per face at full detail`,
       `${alt} \xB7 quadtree level ${liveLevels}/${MAX_LEVEL} \xB7 ${nodes.size} patches \xB7 keeps ${castles.size}`,
-      `${Math.round(renderer.info.render.triangles).toLocaleString()} triangles \xB7 drag to fly \xB7 wheel to zoom`
+      `roads ${roadStats.roads} \xB7 trunk ${roadStats.trunk} \xB7 sites in supply ${roadStats.supplied}% \xB7 severed ${roadStats.cut}`,
+      `${Math.round(renderer.info.render.triangles).toLocaleString()} triangles \xB7 drag to fly \xB7 wheel to zoom \xB7 click a road to cut supply \xB7 R repairs`
     ].join("\n");
   }
   placeCamera();
@@ -31990,6 +32212,8 @@
       return worst;
     },
     castleGroup,
+    roadMidpoints: (trunkOnly = false) => Array.from(roadEdgeMid.entries()).filter(([k]) => !trunkOnly || roadEdgeTier.get(k) === 1).map(([, v]) => ({ x: v.x, y: v.y, z: v.z })),
+    roadState: () => ({ ...roadStats, cut: [...cutEdges] }),
     stats: () => ({
       seats: lastSeats,
       dbg: `count=${beacons ? beacons.count : -1} visible=${beacons ? beacons.visible : "x"} far=${Math.round(R * 0.3)}`,
