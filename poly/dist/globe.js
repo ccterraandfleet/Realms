@@ -30717,6 +30717,7 @@
             owner: -1,
             level: 1,
             morale: 1,
+            garrison: 0,
             pos: new Vector3()
           };
           n.pos.copy(seat.dir).multiplyScalar(surfaceR(n) + 0.3);
@@ -30923,7 +30924,11 @@
       const mine = n.owner === 0;
       const verbs = [];
       if (mine) {
-        verbs.push({ verb: "muster", label: "Muster", hint: "100 men here (M)" });
+        verbs.push({
+          verb: "muster",
+          label: "Muster",
+          hint: `garrison ${n.garrison} \xB7 field ${fieldAt(key2)} \xB7 cap ${ARMY_CAP[Math.min(8, n.level) - 1]} (M)`
+        });
         verbs.push({ verb: "upgrade", label: "Upgrade", hint: "raise the keep (U)" });
         verbs.push({ verb: "trade", label: "Trade", hint: "then pick your other keep" });
         verbs.push({ verb: "buildroad", label: "Build road", hint: "then pick a keep within 3 cells" });
@@ -30974,19 +30979,33 @@
       if (verb === "attack") {
         const target2 = nodes2.get(key2);
         if (!target2) return;
-        const host = nearestReserve(target2);
-        if (!host) {
-          say("no army to send: muster at one of your keeps first");
+        const from = nearestGarrison(target2);
+        if (!from) {
+          say("no garrison to send: muster at one of your keeps first (M)");
           return;
         }
-        if (target2.owner < 0) claimByHost.set(host.id, key2);
-        orderMarch(host, key2);
+        const before = hosts.length;
+        if (!marchFrom(from.key, key2)) return;
+        if (target2.owner < 0 && hosts.length > before) claimByHost.set(hosts[hosts.length - 1].id, key2);
         return;
       }
       pending = { verb, from: key2 };
       if (verb === "trade") say("trade: now pick one of your other keeps");
       if (verb === "buildroad") say(`build road: now pick a keep within ${ROAD_BUILD_REACH} cells`);
       if (verb === "blockade") say("blockade: now click the road to sever");
+    }
+    function nearestGarrison(target2) {
+      let best = null;
+      let bestD = Infinity;
+      for (const n of nodes2.values()) {
+        if (n.owner !== 0 || n.garrison <= 0) continue;
+        const d = n.dir.angleTo(target2.dir);
+        if (d < bestD) {
+          bestD = d;
+          best = n;
+        }
+      }
+      return best;
     }
     function nearestReserve(target2) {
       return hosts.filter((h) => h.owner === 0 && !h.routed && h.to === null).sort((a, b) => {
@@ -31143,6 +31162,7 @@
     let ownerVersion = 0;
     const ownersChanged = () => {
       ownerVersion++;
+      cartsDirty = true;
     };
     function ownedBy(id) {
       const hit = ownedCache.get(id);
@@ -31225,6 +31245,80 @@
     function hostAt(key2) {
       return hosts.find((h) => !h.routed && (h.path[h.seg] === key2 || h.path[h.seg + 1] === key2));
     }
+    const carts = [];
+    const CART_MAX = 320;
+    const CART_LANE = 1.05;
+    const CART_SPEED = 11;
+    let cartsDirty = true;
+    function autoTradeEdge(ek, realmId) {
+      const e = edges.get(ek);
+      if (!e || e.cut) return false;
+      const a = nodes2.get(e.a), b = nodes2.get(e.b);
+      if (!a || !b) return false;
+      const mineA = a.owner === realmId, mineB = b.owner === realmId;
+      if (!mineA && !mineB) return false;
+      const other = mineA ? b : a;
+      return other.owner === realmId || other.owner < 0;
+    }
+    function syncCarts() {
+      if (!cartsDirty) return;
+      cartsDirty = false;
+      const want = [];
+      for (const r of realms) {
+        if (!r.alive) continue;
+        for (const ek of edges.keys()) {
+          if (autoTradeEdge(ek, r.id) || r.id === 0 && tradeRoutes.has(ek)) want.push({ owner: r.id, edge: ek });
+          if (want.length >= CART_MAX) break;
+        }
+        if (want.length >= CART_MAX) break;
+      }
+      const live = new Map(carts.map((c) => [`${c.owner}:${c.edge}`, c]));
+      carts.length = 0;
+      for (const w of want) {
+        const hit = live.get(`${w.owner}:${w.edge}`);
+        const e = edges.get(w.edge);
+        if (!e) continue;
+        if (hit) {
+          carts.push(hit);
+          continue;
+        }
+        carts.push({
+          id: carts.length + 1,
+          owner: w.owner,
+          edge: w.edge,
+          a: e.a,
+          b: e.b,
+          prog: (e.a.length * 37 + e.b.length * 11) % 100 / 100,
+          dir: 1,
+          speed: CART_SPEED,
+          phase: 0
+        });
+      }
+    }
+    function tickCarts(dt) {
+      syncCarts();
+      for (const c of carts) {
+        const e = edges.get(c.edge);
+        if (!e || e.cut) continue;
+        const a = nodes2.get(c.a), b = nodes2.get(c.b);
+        if (!a || !b) continue;
+        const len = Math.max(1, a.dir.angleTo(b.dir) * o.R);
+        c.prog += c.speed / len * dt * c.dir;
+        c.phase += dt * c.speed * 1.4;
+        if (c.prog >= 1) {
+          c.prog = 1;
+          c.dir = -1;
+        } else if (c.prog <= 0) {
+          c.prog = 0;
+          c.dir = 1;
+        }
+      }
+    }
+    function fieldAt(key2) {
+      let n = 0;
+      for (const h of hosts) if (!h.routed && h.to === null && h.path[h.path.length - 1] === key2) n += h.men;
+      return n;
+    }
     function muster(castleKey) {
       const n = nodes2.get(castleKey);
       if (!n || n.owner < 0) return false;
@@ -31234,7 +31328,7 @@
       }
       const r = realms[n.owner];
       const cap = ARMY_CAP[Math.min(8, n.level) - 1];
-      const already = hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
+      const already = n.garrison + hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
       if (already + MUSTER_MEN > cap) {
         say("army is at its cap for this castle level");
         return false;
@@ -31243,23 +31337,48 @@
         say("not enough stores to muster");
         return false;
       }
-      r.res.grain -= MUSTER_COST.grain;
-      r.res.gold -= MUSTER_COST.gold;
-      r.res.ore -= MUSTER_COST.ore;
-      hosts.push({
+      const fromGarrison = Math.min(n.garrison, MUSTER_MEN);
+      n.garrison -= fromGarrison;
+      const toRaise = MUSTER_MEN - fromGarrison;
+      if (toRaise > 0) {
+        const share = toRaise / MUSTER_MEN;
+        r.res.grain -= MUSTER_COST.grain * share;
+        r.res.gold -= MUSTER_COST.gold * share;
+        r.res.ore -= MUSTER_COST.ore * share;
+      }
+      n.garrison = Math.min(cap, n.garrison + MUSTER_MEN);
+      say(`${MUSTER_MEN} men mustered at ${label(n)} \xB7 garrison ${n.garrison}`);
+      return true;
+    }
+    function marchFrom(key2, to, men) {
+      const n = nodes2.get(key2);
+      if (!n || n.owner < 0) return false;
+      const take = Math.min(n.garrison, men ?? n.garrison);
+      if (take <= 0) {
+        say("no garrison there to march: muster first (M)");
+        return false;
+      }
+      const path = pathBetween(key2, to);
+      if (path.length < 2) {
+        say("no road route to that castle");
+        return false;
+      }
+      n.garrison -= take;
+      const host = {
         id: nextHostId++,
         owner: n.owner,
-        men: MUSTER_MEN,
-        startMen: MUSTER_MEN,
-        path: [castleKey],
+        men: take,
+        startMen: take,
+        path,
         seg: 0,
         prog: 0,
-        from: castleKey,
-        to: null,
+        from: path[0],
+        to: path[1],
         routed: false,
         lastBeat: 0
-      });
-      say(`${MUSTER_MEN} men mustered at ${label(n)}`);
+      };
+      hosts.push(host);
+      say(`${take} men march from ${label(n)} \xB7 garrison ${n.garrison}`);
       return true;
     }
     function orderMarch(host, to) {
@@ -31336,11 +31455,15 @@
       const n = nodes2.get(key2);
       if (!n) return;
       if (n.owner === h.owner) {
-        say(`${h.men} men reached ${label(n)}`);
+        const cap = ARMY_CAP[Math.min(8, n.level) - 1];
+        const before = n.garrison;
+        n.garrison = Math.min(cap, n.garrison + h.men);
+        h.men = 0;
+        say(`${n.garrison - before} men garrisoned at ${label(n)}`);
         return;
       }
       if (n.owner >= 0) {
-        const garrison = ARMY_CAP[Math.min(8, n.level) - 1];
+        const garrison = Math.max(ARMY_CAP[Math.min(8, n.level) - 1] * 0.25, n.garrison);
         if (h.men > garrison * 2.2) {
           takeCastle(n, h.owner);
           say(`${label(n)} stormed and taken`);
@@ -31619,6 +31742,24 @@
       m.count = 0;
       o.castleGroup.add(m);
     }
+    const cartBedGeo = new BoxGeometry(0.92, 0.34, 1.5);
+    const cartBedMat = new MeshStandardMaterial({ color: 7031343, roughness: 0.9, flatShading: true });
+    const cartCanopyGeo = new BoxGeometry(0.84, 0.5, 0.95);
+    const cartCanopyMat = new MeshStandardMaterial({ color: 16777215, roughness: 0.85, flatShading: true });
+    const cartWheelGeo = new CylinderGeometry(0.3, 0.3, 0.14, 8);
+    cartWheelGeo.rotateZ(Math.PI / 2);
+    const cartWheelMat = new MeshStandardMaterial({ color: 3023897, roughness: 0.95, flatShading: true });
+    const cartBed = new InstancedMesh(cartBedGeo, cartBedMat, CART_MAX);
+    const cartCanopy = new InstancedMesh(cartCanopyGeo, cartCanopyMat, CART_MAX);
+    const cartWheels = new InstancedMesh(cartWheelGeo, cartWheelMat, CART_MAX * 2);
+    const cartParts = [cartBed, cartCanopy, cartWheels];
+    for (const m of cartParts) {
+      m.frustumCulled = false;
+      m.count = 0;
+      m.instanceMatrix.setUsage(DynamicDrawUsage);
+      o.castleGroup.add(m);
+    }
+    cartCanopy.instanceColor = new InstancedBufferAttribute(new Float32Array(CART_MAX * 3), 3);
     const ringGeo = new RingGeometry(cellSize * 0.3, cellSize * 0.38, 20);
     const ringMat = new MeshBasicMaterial({ color: 16777215, transparent: true, opacity: 0.85, side: DoubleSide });
     const ring = new Mesh(ringGeo, ringMat);
@@ -31705,6 +31846,74 @@
       const hh = b ? a.h + (b.h - a.h) * h.prog : a.h;
       return out.copy(a.dir).lerp(b ? b.dir : a.dir, h.prog).normalize().multiplyScalar(o.R + Math.max(0, hh) * o.RELIEF * o.R);
     }
+    const _cp = new Vector3();
+    const _cp2 = new Vector3();
+    const _ctan = new Vector3();
+    const _cside = new Vector3();
+    const _cup = new Vector3();
+    const _cmat = new Matrix4();
+    const _cq = new Quaternion();
+    const _cq2 = new Quaternion();
+    const _cscale = new Vector3();
+    const _ccol = new Color();
+    const cartScaleFor = (alt) => Math.max(1, Math.min(3.4, alt / 90));
+    function drawCarts() {
+      if (!carts.length) {
+        for (const m of cartParts) m.count = 0;
+        return;
+      }
+      const alt = Math.max(0, o.camera.position.length() - o.R);
+      const sc = cartScaleFor(alt);
+      let bedN = 0, wheelN = 0, canopyN = 0;
+      for (const c of carts) {
+        const e = edges.get(c.edge);
+        if (!e || e.cut) continue;
+        const ea = nodes2.get(e.a), eb = nodes2.get(e.b);
+        if (!ea || !eb) continue;
+        const forward = c.a === e.a;
+        const t = forward ? c.prog : 1 - c.prog;
+        const sign2 = c.dir === 1 ? 1 : -1;
+        const tA = Math.max(0, Math.min(1, t - 0.02 * sign2));
+        const tB = Math.max(0, Math.min(1, t + 0.02 * sign2));
+        const seed = (ea.tu * 7919 + ea.tv * 104729 + eb.tu * 1299709 + eb.tv * 15485863) % 1e5;
+        o.roadPoint(ea.dir, eb.dir, seed, t, _cp);
+        o.roadPoint(ea.dir, eb.dir, seed, tB, _cp2);
+        _cp2.sub(_cp);
+        if (_cp2.lengthSq() < 1e-8) continue;
+        _cside.crossVectors(_cp2.normalize(), _cup.copy(_cp).normalize()).normalize();
+        const lane = CART_LANE * sc * 0.5;
+        _cp.addScaledVector(_cside, -lane);
+        _ctan.copy(_cp2).normalize();
+        _cup.copy(_cp).normalize();
+        _cq.setFromUnitVectors(new Vector3(0, 0, 1), _ctan);
+        _cscale.set(sc, sc, sc);
+        _cmat.compose(_cp, _cq, _cscale);
+        cartBed.setMatrixAt(bedN, _cmat);
+        bedN++;
+        const col = realms[c.owner]?.colour ?? 16777215;
+        _ccol.setHex(col);
+        cartCanopy.instanceColor.setXYZ(canopyN, _ccol.r, _ccol.g, _ccol.b);
+        _cmat.compose(_cp.clone().addScaledVector(_cup, 0.42 * sc), _cq, _cscale);
+        cartCanopy.setMatrixAt(canopyN, _cmat);
+        canopyN++;
+        for (const side of [-1, 1]) {
+          _cq2.copy(_cq);
+          const spin = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), c.phase * side);
+          _cq2.multiply(spin);
+          const wp = _cp.clone().addScaledVector(_cside, side * 0.48 * sc).addScaledVector(_cup, 0.16 * sc);
+          _cmat.compose(wp, _cq2, _cscale);
+          cartWheels.setMatrixAt(wheelN, _cmat);
+          wheelN++;
+        }
+      }
+      cartBed.count = bedN;
+      cartCanopy.count = canopyN;
+      cartWheels.count = wheelN;
+      cartBed.instanceMatrix.needsUpdate = true;
+      cartCanopy.instanceMatrix.needsUpdate = true;
+      cartWheels.instanceMatrix.needsUpdate = true;
+      if (cartCanopy.instanceColor) cartCanopy.instanceColor.needsUpdate = true;
+    }
     function render() {
       const nowMs = performance.now();
       if (dirtyTerritory && nowMs - rebuildAt > 400) {
@@ -31714,6 +31923,7 @@
       if (!armiesOn) {
         for (const m of armyParts) m.count = 0;
       }
+      drawCarts();
       const altForHosts = Math.max(0, o.camera.position.length() - o.R);
       const formScale = Math.max(0.85, Math.min(4, altForHosts / 130));
       const rankGap = SOL_SPACING * formScale;
@@ -31923,7 +32133,9 @@
       <div class="chip"><span>Gold</span><b>${nf(me.res.gold)}</b></div>
     </div>`;
       html += `<div class="row"><span>Holdings</span><b>${mine.length} keep${mine.length === 1 ? "" : "s"}</b></div>`;
-      html += `<div class="row"><span>Army</span><b>${nf(men)} men${marches ? ` \xB7 ${marches} marching` : ""}</b></div>`;
+      const garrisonTotal = mine.reduce((s, k) => s + k.garrison, 0);
+      html += `<div class="row"><span>Garrisoned</span><b>${nf(garrisonTotal)} men</b></div>`;
+      html += `<div class="row"><span>In the field</span><b>${nf(men)} men${marches ? ` \xB7 ${marches} marching` : ""}</b></div>`;
       if (cap) {
         const capFed = (incident.get(cap.key) ?? []).some((ek) => fedFor(0).has(ek));
         html += `<div class="row"><span>Capital</span><b>lvl ${cap.level} \xB7 cap ${nf(ARMY_CAP[Math.min(8, cap.level) - 1])}</b></div>`;
@@ -31936,6 +32148,7 @@
         html += `<div class="bar"><i style="width:${Math.max(3, Math.min(100, sel.morale * 100)).toFixed(0)}%;background:${tagColour}"></i></div>`;
         html += `<div class="row"><span>Selected</span><b><span class="tag" style="background:${tagColour}22;color:${tagColour}">${esc(owner)}</span> ${esc(label(sel))}</b></div>`;
         html += `<div class="row"><span>Level ${sel.level} \xB7 morale</span><b>${(sel.morale * 100).toFixed(0)}%</b></div>`;
+        html += `<div class="row"><span>Garrison here</span><b>${nf(sel.garrison)} \xB7 field ${nf(fieldAt(sel.key))}</b></div>`;
       }
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
@@ -32167,6 +32380,7 @@
       worldTime += dt;
       timeIt("economy", () => tickEconomy(dt));
       warmSupply();
+      tickCarts(dt);
       timeIt("hosts", () => tickHosts(dt));
       timeIt("claims", () => resolveClaims());
       timeIt("combat", () => tickCombat(dt));
@@ -32258,6 +32472,11 @@
       dblclick,
       actForTest: (verb, key2) => act(verb, key2),
       tradeCount: () => tradeRoutes.size,
+      cartCount: () => carts.length,
+      /** Diagnostic: hide the merchant fleet so its contribution can be measured by frame diff. */
+      showCarts: (on) => {
+        for (const m of cartParts) m.visible = on;
+      },
       edgeCount: () => edges.size,
       hostPointFor: (id) => {
         const h = hosts.find((x) => x.id === id);
@@ -32307,6 +32526,7 @@
         owner: (k) => nodes2.get(k)?.owner ?? -2,
         muster,
         orderMarch,
+        marchFrom,
         host: () => hosts,
         fedFor,
         pathBetween,
@@ -32472,7 +32692,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 07:22";
+  var BUILD = "2026-11-09 15:03";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32603,8 +32823,11 @@
     [MOUNTAIN]: [7171425, 8026734, 6316119, 8816250]
   };
   var canvas = document.getElementById("stage");
-  var renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(1);
+  var CAPTURE = params.get("capture") === "1";
+  var renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: CAPTURE });
+  var SCALE_PIN = Number(params.get("scale") ?? 0);
+  var qualityScale = SCALE_PIN > 0 ? SCALE_PIN : Math.min(1, Number(params.get("dpr") ?? 1));
+  renderer.setPixelRatio(qualityScale);
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFSoftShadowMap;
@@ -32622,7 +32845,7 @@
   var camera = new PerspectiveCamera(38, aspect2, 0.5, 4e4);
   var sun = new DirectionalLight(16773589, Number(params.get("sun") ?? 2.75));
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.bias = -9e-4;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 800;
@@ -32856,19 +33079,29 @@
   var considered = 0;
   var passed = 0;
   var BUILD_BUDGET = 420;
+  var BUILD_MS = 6;
+  var centreScratch = new Vector3();
+  var lastBuildMs = 0;
+  var nodeScratch = 0;
   function buildTree() {
+    const buildStart = performance.now();
+    let buildMs = 0;
+    let visited = 0;
     const wanted = /* @__PURE__ */ new Set();
     let deepest = 0;
     let builtThisPass = 0;
     considered = 0;
     passed = 0;
+    lastBuildMs = 0;
     const consider = (face, level, iu, iv) => {
       considered++;
+      visited++;
       const span = 2 / Math.pow(2, level);
       const u0 = -1 + iu * span;
       const v0 = -1 + iv * span;
       const centreDir = faceDir(face, u0 + span / 2, v0 + span / 2, vA);
-      const centre = centreDir.clone().multiplyScalar(R);
+      centreScratch.copy(centreDir).multiplyScalar(R);
+      const centre = centreScratch;
       const arc = R * span;
       const dist = Math.max(1, centre.distanceTo(camPos) - arc * 0.72);
       const camAlt = Math.max(0.35, camDir.length() - R);
@@ -32888,12 +33121,16 @@
       const key = `${face}/${level}/${iu}/${iv}`;
       wanted.add(key);
       deepest = Math.max(deepest, level);
-      if (!nodes.has(key) && builtThisPass < BUILD_BUDGET) {
+      if (!nodes.has(key) && builtThisPass < BUILD_BUDGET && buildMs < BUILD_MS) {
         builtThisPass++;
+        const bt = performance.now();
         const node = buildNode(face, level, iu, iv);
+        terrainVersion++;
         nodes.set(key, node);
         nodeGroup.add(node.mesh);
         if (node.trees) nodeGroup.add(node.trees);
+        buildMs += performance.now() - bt;
+        nodeScratch += buildMs;
       }
     };
     for (let f = 0; f < 6; f++) {
@@ -33202,8 +33439,19 @@
     dirty = true;
   };
   var lastKey = "";
+  var stageTimes = { place: [], tree: [], sync: [], seats: [], syncRoads: [], castleBuild: [] };
+  var stageMark = 0;
+  var mark = (name) => {
+    const now2 = performance.now();
+    const arr = stageTimes[name];
+    arr.push(now2 - stageMark);
+    if (arr.length > 90) arr.shift();
+    stageMark = now2;
+  };
   function updateScene() {
+    stageMark = performance.now();
     placeCamera();
+    mark("place");
     camera.updateMatrixWorld();
     projScreen.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(projScreen);
@@ -33221,7 +33469,9 @@
     lastAltKey = altKey;
     if (wantBuild) {
       buildTree();
+      mark("tree");
       syncCastles();
+      mark("sync");
     }
     markDirty();
   }
@@ -33268,6 +33518,8 @@
   }
   var ROAD_TINT = 11569746;
   var ROAD_LANES = 4;
+  var lateralScratch = new Vector3();
+  var probeScratch = new Vector3();
   var PEBBLE_MAX = 3e3;
   var STONE_PROBE = params.get("stones") === "white";
   var PEBBLE_STONE = [11774100, 10260345, 12892838, 9142384, 11049860, 9273970];
@@ -33410,32 +33662,47 @@
       if (e.trade) wide *= 1.06;
       roadEdgeMid.set(e.key, { p: e.mid, key: e.key, tier: e.tier, cut: isCut });
       const halfRoad = ROAD_WIDTH * wide / 2;
+      const nearRoad = cA.distanceTo(camPos) < Math.max(70, cam.alt * 3);
       const chord = cB.clone().sub(cA).normalize();
       sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.08);
-      const pts = [];
-      const sides = [];
-      for (let i = -1; i <= K + 1; i++) {
-        const t = i / K;
-        dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
-        const lateral = new Vector3().crossVectors(chord, dir).normalize();
-        let h = sample(dir, false).h;
-        const across = halfRoad + 0.6;
-        for (const u of [-1, -0.5, 0, 0.5, 1]) {
-          const probe = dir.clone().addScaledVector(lateral, u * across / R).normalize();
-          h = Math.max(h, sample(probe, false).h);
-        }
-        if (cam.alt < 260) {
-          const drawn = drawnRadiusAt(dir);
-          if (isFinite(drawn)) {
-            const drawnH = (drawn - R) / (RELIEF * R);
-            h = Math.max(h, drawnH);
-          } else {
-            h += 0.035;
+      const band = cam.alt < 260 ? 1 : 0;
+      const cached = centreCache.get(e.key);
+      const fresh = cached && cached.band === band && (band === 0 || performance.now() - cached.at < 4e3);
+      let pts;
+      if (fresh && cached) {
+        pts = cached.pts;
+      } else {
+        const built = [];
+        const buildOne = () => {
+          const pts2 = built;
+          for (let i = -1; i <= K + 1; i++) {
+            const t = i / K;
+            dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
+            lateralScratch.crossVectors(chord, dir).normalize();
+            const lateral = lateralScratch;
+            let h = sample(dir, false).h;
+            const across = halfRoad + 0.6;
+            h = Math.max(h, sample(probeScratch.copy(dir).addScaledVector(lateral, across / R).normalize(), false).h);
+            h = Math.max(h, sample(probeScratch.copy(dir).addScaledVector(lateral, -across / R).normalize(), false).h);
+            if (cam.alt < 260 && nearRoad) {
+              const drawn = drawnRadiusAt(dir);
+              if (isFinite(drawn)) {
+                const drawnH = (drawn - R) / (RELIEF * R);
+                h = Math.max(h, drawnH);
+              } else {
+                h += 0.035;
+              }
+            }
+            h = Math.max(h, SEA + 4e-3);
+            pts2.push(dir.clone().multiplyScalar(R + h * RELIEF * R + ROAD_LIFT));
           }
-        }
-        h = Math.max(h, SEA + 4e-3);
-        pts.push(dir.clone().multiplyScalar(R + h * RELIEF * R + ROAD_LIFT));
+        };
+        buildOne();
+        pts = built;
+        if (centreCache.size > 2600) centreCache.clear();
+        centreCache.set(e.key, { v: terrainVersion, band, at: performance.now(), pts });
       }
+      const sides = [];
       if (pts.length < 2) continue;
       const stationDist = [0];
       for (let i = 1; i < pts.length; i++) {
@@ -33558,7 +33825,6 @@
     geo.setAttribute("position", new Float32BufferAttribute(positions, 3));
     geo.setAttribute("color", new Float32BufferAttribute(colours, 3));
     geo.setAttribute("uv", new Float32BufferAttribute(uvs, 2));
-    geo.computeVertexNormals();
     roadMesh = new Mesh(geo, roadMat);
     roadMesh.receiveShadow = true;
     roadMesh.frustumCulled = false;
@@ -33597,7 +33863,15 @@
   }
   var lastSeats = 0;
   var lastTier = "none";
-  function syncCastles() {
+  var lastSyncSig = "";
+  var lastFullSync = 0;
+  var lastRoadBuild = 0;
+  var centreCache = /* @__PURE__ */ new Map();
+  var terrainVersion = 0;
+  var cameraMoving = false;
+  var SYNC_INTERVAL_MS = 260;
+  var NOSYNC_GATE = params.get("nosyncgate") === "1";
+  function syncCastles(force = false) {
     const near = cam.alt < R * 0.05;
     const far = cam.alt < R * 0.3;
     const clearDetail = () => {
@@ -33614,12 +33888,22 @@
     }
     const face = faceOf(up);
     const span = 2 / TERR_PER_FACE;
+    const tierNow = near ? "detail" : "beacon";
     const camFaceUV = faceUV(face, up);
-    const reach = Math.ceil(cam.alt / (R * span) * 2) + 3;
+    const cellSpan = R * span;
+    const viewW = 2 * cam.alt * Math.tan(camera.fov * Math.PI / 360) * aspect2;
+    const reach = Math.min(9, Math.ceil(viewW * 0.5 / cellSpan) + 3);
     const cu = Math.floor((camFaceUV.u + 1) / 2 * TERR_PER_FACE);
     const cv = Math.floor((camFaceUV.v + 1) / 2 * TERR_PER_FACE);
+    const sig = `${face}/${cu}/${cv}/${reach}/${tierNow}`;
+    const nowMs = performance.now();
+    const cellChanged = sig !== lastSyncSig;
+    if (!NOSYNC_GATE && !force && !cellChanged && nowMs - lastFullSync < SYNC_INTERVAL_MS) return;
+    lastSyncSig = sig;
+    lastFullSync = nowMs;
     const wanted = /* @__PURE__ */ new Set();
     const seats = [];
+    stageMark = performance.now();
     for (let dv = -reach; dv <= reach; dv++) {
       for (let du = -reach; du <= reach; du++) {
         const tu = cu + du;
@@ -33633,12 +33917,23 @@
       }
     }
     lastSeats = seats.length;
-    syncRoads(face, cu, cv, reach);
+    mark("seats");
+    const roadsDue = force || !cameraMoving && performance.now() - lastRoadBuild > 250;
+    if (roadsDue) {
+      stageMark = performance.now();
+      syncRoads(face, cu, cv, reach);
+      lastRoadBuild = performance.now();
+      mark("syncRoads");
+    }
     if (near) {
       lastTier = "detail";
       if (beacons) beacons.count = 0;
+      stageMark = performance.now();
+      let castleMs = 0;
       for (const s of seats) {
         if (castles.has(s.key)) continue;
+        if (castleMs > 9) continue;
+        const cb0 = performance.now();
         const owner = seatOwner(s.key, s.dir);
         const roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
         const g = mergeGroup(buildCastle(1.15, roof));
@@ -33647,6 +33942,7 @@
         g.rotateY(s.key.length % 6);
         castles.set(s.key, g);
         castleGroup.add(g);
+        castleMs += performance.now() - cb0;
       }
       for (const [k, g] of castles) {
         if (!wanted.has(k)) {
@@ -33654,6 +33950,7 @@
           castles.delete(k);
         }
       }
+      mark("castleBuild");
       return;
     }
     lastTier = "beacon";
@@ -33823,8 +34120,9 @@
     }
     _dragNorth.normalize();
     _dragEast.crossVectors(_dragNorth, _dragUp).normalize();
-    _dragD.applyAxisAngle(_dragEast, -(dy * upp) / R);
-    _dragD.applyAxisAngle(_dragNorth, dx * upp / R);
+    const dragSign = params.get("draginvert") === "0" ? -1 : 1;
+    _dragD.applyAxisAngle(_dragEast, dragSign * dy * upp / R);
+    _dragD.applyAxisAngle(_dragNorth, -dragSign * dx * upp / R);
     const nlat = Math.asin(Math.max(-1, Math.min(1, _dragD.y)));
     const nlon = Math.atan2(_dragD.z, _dragD.x);
     const TWO = Math.PI * 2;
@@ -33891,6 +34189,30 @@
     if (e.key === "]") location.search = `?seed=${SEED + 1}`;
   });
   var hud = document.getElementById("hud");
+  var statsBox = params.get("stats") === "1" ? (() => {
+    const el = document.createElement("div");
+    el.style.cssText = "position:fixed;top:8px;right:8px;z-index:40;padding:7px 9px;border-radius:8px;font:11px/1.45 ui-monospace,monospace;color:#e8f2ef;background:rgba(8,18,24,.82);border:1px solid rgba(120,180,170,.35);white-space:pre;pointer-events:none";
+    document.body.appendChild(el);
+    return el;
+  })() : null;
+  var statsFrames = 0;
+  var statsFpsAt = performance.now();
+  var statsFps = 0;
+  function paintStats() {
+    if (!statsBox) return;
+    statsFrames++;
+    const now2 = performance.now();
+    if (now2 - statsFpsAt > 500) {
+      statsFps = Math.round(statsFrames * 1e3 / (now2 - statsFpsAt));
+      statsFrames = 0;
+      statsFpsAt = now2;
+    }
+    const info = renderer.info;
+    statsBox.textContent = `fps ${statsFps}   scale ${qualityScale.toFixed(2)}
+work ${emaWork.toFixed(1)}ms  gap ${emaGap.toFixed(1)}ms
+calls ${info.render.calls}  tris ${(info.render.triangles / 1e3).toFixed(0)}k
+alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
+  }
   function report() {
     if (!hud) return;
     const alt = cam.alt > R * 0.5 ? `orbit \xB7 altitude ${(cam.alt / R).toFixed(2)} planet radii` : cam.alt > R * 0.03 ? `continent \xB7 ${Math.round(cam.alt)} units up` : cam.alt > 6 ? `region \xB7 ${Math.round(cam.alt)} units up` : `ground \xB7 ${cam.alt.toFixed(1)} units up`;
@@ -33932,6 +34254,23 @@
     },
     castleGroup,
     roadMidpoints: (trunkOnly = false) => Array.from(roadEdgeMid.values()).filter((v) => !trunkOnly || v.tier === 1).map((v) => ({ x: v.p.x, y: v.p.y, z: v.p.z })),
+    /** Percentiles of each update stage, for the drag-lag hunt. */
+    stageStats: () => {
+      const q = (arr, pc) => {
+        if (!arr.length) return 0;
+        const a = [...arr].sort((x, y) => x - y);
+        return +a[Math.min(a.length - 1, Math.floor(pc * a.length))].toFixed(1);
+      };
+      const out = {};
+      for (const [k, arr] of Object.entries(stageTimes)) {
+        out[k] = { p50: q(arr, 0.5), p90: q(arr, 0.9), max: q(arr, 0.999), n: arr.length };
+      }
+      out.considered = { p50: considered, p90: passed, max: lastBuildMs, n: nodes.size };
+      return out;
+    },
+    resetStageStats: () => {
+      for (const arr of Object.values(stageTimes)) arr.length = 0;
+    },
     roadState: () => ({ ...roadStats }),
     world: () => world ? world.stats() : null,
     worldApi: () => world,
@@ -33952,13 +34291,24 @@
       territories: TERRITORIES
     }),
     set: (v) => {
-      Object.assign(cam, v);
+      const clean = {};
+      for (const [k, val] of Object.entries(v)) {
+        if (typeof val === "number" && Number.isFinite(val)) clean[k] = val;
+      }
+      Object.assign(cam, clean);
       Object.assign(aim, { lat: cam.lat, lon: cam.lon, alt: cam.alt });
       lastKey = "";
       updateScene();
       renderer.render(scene, camera);
       report();
     },
+    /** Test hook: move the EASING TARGET, which is what a drag or a wheel does. set() assigns cam
+     * and aim together and therefore never exercises the path a hand takes. */
+    aimTo: (v) => {
+      Object.assign(aim, v);
+    },
+    cam: () => ({ ...cam }),
+    aim: () => ({ ...aim }),
     render: () => renderer.render(scene, camera),
     // how far UP the screen world-north points at the current target, and the camera tilt:
     // +1 means north is straight up the screen, negative means the view is inverted
@@ -34238,6 +34588,10 @@ build ${BUILD}`;
   var fUpdate = [];
   var fTick = [];
   var fDraw = [];
+  var emaWork = 8;
+  var emaGap = 16;
+  var qualityFrames = 0;
+  var movedLast = false;
   var tMark = 0;
   var push = (arr, v) => {
     arr.push(v);
@@ -34259,6 +34613,15 @@ build ${BUILD}`;
       cam.lon += dLon * k;
       tMark = performance.now();
       updateScene();
+      push(fUpdate, performance.now() - tMark);
+      movedLast = true;
+      cameraMoving = true;
+    } else if (movedLast) {
+      movedLast = false;
+      cameraMoving = false;
+      tMark = performance.now();
+      syncCastles(true);
+      markDirty();
       push(fUpdate, performance.now() - tMark);
     }
     if (buildBacklog > 0 && !dirty) {
@@ -34287,7 +34650,28 @@ build ${BUILD}`;
       dirty = false;
       report();
     }
-    push(fTotal, performance.now() - frameStart);
+    const work = performance.now() - frameStart;
+    push(fTotal, work);
+    if (!SCALE_PIN) {
+      emaWork = emaWork * 0.9 + work * 0.1;
+      emaGap = emaGap * 0.9 + Math.min(dt * 1e3, 100) * 0.1;
+      qualityFrames++;
+      if (qualityFrames >= 45) {
+        qualityFrames = 0;
+        if ((emaWork > 18 || emaGap > 30) && qualityScale > 0.55) {
+          qualityScale = Math.max(0.55, qualityScale * 0.85);
+          renderer.setPixelRatio(qualityScale);
+          renderer.setSize(innerWidth, innerHeight, false);
+          markDirty();
+        } else if (emaWork < 8 && emaGap < 19 && qualityScale < 1) {
+          qualityScale = Math.min(1, qualityScale * 1.08);
+          renderer.setPixelRatio(qualityScale);
+          renderer.setSize(innerWidth, innerHeight, false);
+          markDirty();
+        }
+      }
+    }
+    if (statsBox) paintStats();
   });
   markDirty();
 })();
