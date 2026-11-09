@@ -13334,7 +13334,7 @@
       renderItemsIndex++;
       return renderItem;
     }
-    function push(object, geometry, material, groupOrder, z, group) {
+    function push2(object, geometry, material, groupOrder, z, group) {
       const renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
       if (material.transmission > 0) {
         transmissive.push(renderItem);
@@ -13375,7 +13375,7 @@
       transmissive,
       transparent,
       init,
-      push,
+      push: push2,
       unshift,
       finish,
       sort
@@ -31110,20 +31110,46 @@
       return fed;
     }
     const fedCache = /* @__PURE__ */ new Map();
+    let graphVersion = 0;
+    let supplyTurn = 0;
     function fedFor(realmId) {
       const r = realms[realmId];
       if (!r?.capital) return /* @__PURE__ */ new Set();
-      const now2 = performance.now();
       const hit = fedCache.get(realmId);
-      if (hit && now2 - hit.at < 1500) return hit.set;
+      if (hit && hit.version === graphVersion) return hit.set;
+      if (hit) return hit.set;
       const set = supplyEdges(r.capital);
-      fedCache.set(realmId, { set, at: now2 });
+      fedCache.set(realmId, { set, version: graphVersion, at: performance.now() });
       return set;
     }
-    const cutsChanged = () => fedCache.clear();
+    function warmSupply() {
+      const living = realms.filter((r) => r.alive && r.capital);
+      if (!living.length) return;
+      for (let i = 0; i < living.length; i++) {
+        const r = living[(supplyTurn + i) % living.length];
+        const hit = fedCache.get(r.id);
+        if (!hit || hit.version !== graphVersion) {
+          const set = supplyEdges(r.capital);
+          fedCache.set(r.id, { set, version: graphVersion, at: performance.now() });
+          supplyTurn = (supplyTurn + i + 1) % living.length;
+          return;
+        }
+      }
+    }
+    const cutsChanged = () => {
+      graphVersion++;
+    };
+    const ownedCache = /* @__PURE__ */ new Map();
+    let ownerVersion = 0;
+    const ownersChanged = () => {
+      ownerVersion++;
+    };
     function ownedBy(id) {
+      const hit = ownedCache.get(id);
+      if (hit && hit.version === ownerVersion) return hit.list;
       const out = [];
       for (const n of nodes2.values()) if (n.owner === id) out.push(n);
+      ownedCache.set(id, { list: out, version: ownerVersion });
       return out;
     }
     function tickTrade(dt) {
@@ -31144,17 +31170,13 @@
         if (!r.alive) continue;
         const mine = ownedBy(r.id);
         if (!mine.length) continue;
-        let gain = 0;
         const add = { grain: 0, timber: 0, ore: 0, gold: 0 };
-        const fed = r.capital ? fedFor(r.id) : null;
         for (const n of mine) {
           const mult = 1 + 0.3 * (n.level - 1);
-          const connected = !fed || !edges.size ? true : true;
           add.grain += 0.6 * mult;
           add.timber += 0.35 * mult;
           add.ore += 0.15 * mult;
           add.gold += 0.25 * mult;
-          gain += connected ? 1 : 0;
         }
         r.res.grain += add.grain * dt;
         r.res.timber += add.timber * dt;
@@ -31337,15 +31359,23 @@
       const fed = fedFor(h.owner).size > 0 ? 1 : 0.65;
       return h.men * tierBonus * fed;
     }
+    function cellOf(h) {
+      const out = [];
+      if (h.from) out.push(h.from);
+      if (h.to) out.push(h.to);
+      else if (h.path.length) out.push(h.path[h.path.length - 1]);
+      return out;
+    }
     function tickCombat(dt) {
       for (let i = 0; i < hosts.length; i++) {
         const a = hosts[i];
-        if (a.to === null || a.routed) continue;
+        if (a.routed || a.men <= 0) continue;
+        const aCells = cellOf(a);
+        if (!aCells.length) continue;
         for (let j = i + 1; j < hosts.length; j++) {
           const b = hosts[j];
-          if (b.to === null || b.routed || b.owner === a.owner) continue;
-          const aCells = [a.from, a.to];
-          const bCells = [b.from, b.to];
+          if (b.routed || b.men <= 0 || b.owner === a.owner) continue;
+          const bCells = cellOf(b);
           const shared = aCells.some((c) => bCells.includes(c));
           if (!shared) continue;
           a.lastBeat += dt;
@@ -31411,6 +31441,7 @@
     function takeCastle(n, by) {
       const prev = n.owner;
       n.owner = by;
+      ownersChanged();
       n.morale = 0.5;
       n.level = Math.max(1, n.level - 1);
       dirtyTerritory = true;
@@ -31446,6 +31477,7 @@
         r.res.gold -= CLAIM_GOLD;
       }
       n.owner = realmId;
+      ownersChanged();
       n.level = 1;
       n.morale = 1;
       dirtyTerritory = true;
@@ -32112,20 +32144,42 @@
       }
       return false;
     }
+    const tickTimes = {
+      economy: [],
+      hosts: [],
+      claims: [],
+      combat: [],
+      siege: [],
+      ai: [],
+      total: []
+    };
+    const timeIt = (name, fn) => {
+      const t02 = performance.now();
+      const out = fn();
+      const arr = tickTimes[name];
+      arr.push(performance.now() - t02);
+      if (arr.length > 120) arr.shift();
+      return out;
+    };
     function tick(dt) {
       if (paused) return;
+      const t02 = performance.now();
       worldTime += dt;
-      tickEconomy(dt);
-      tickHosts(dt);
-      resolveClaims();
-      tickCombat(dt);
-      tickSiege(dt);
-      tickAI(dt);
+      timeIt("economy", () => tickEconomy(dt));
+      warmSupply();
+      timeIt("hosts", () => tickHosts(dt));
+      timeIt("claims", () => resolveClaims());
+      timeIt("combat", () => tickCombat(dt));
+      timeIt("siege", () => tickSiege(dt));
+      timeIt("ai", () => tickAI(dt));
       panelUpdateAt += dt;
       if (panelUpdateAt > 0.25) {
         panelUpdateAt = 0;
         paint();
       }
+      const arr = tickTimes.total;
+      arr.push(performance.now() - t02);
+      if (arr.length > 120) arr.shift();
     }
     function edgesInView(center, maxAngle) {
       const fed = fedFor(0);
@@ -32159,6 +32213,21 @@
       say(e.cut ? "road cut: supply past it is lost" : "road repaired");
       return e.cut;
     };
+    const tickProfile = () => {
+      const q = (arr, pc) => {
+        if (!arr.length) return 0;
+        const a = [...arr].sort((x, y) => x - y);
+        return +a[Math.min(a.length - 1, Math.floor(pc * a.length))].toFixed(2);
+      };
+      const out = {};
+      for (const [k, arr] of Object.entries(tickTimes)) {
+        out[k] = { p50: q(arr, 0.5), p90: q(arr, 0.9), max: q(arr, 0.999) };
+      }
+      return out;
+    };
+    const resetTickProfile = () => {
+      for (const arr of Object.values(tickTimes)) arr.length = 0;
+    };
     const stats = () => ({
       nodes: nodes2.size,
       edges: edges.size,
@@ -32182,6 +32251,8 @@
       edgesInView,
       toggleCutKey,
       stats,
+      tickProfile,
+      resetTickProfile,
       node: (k) => nodes2.get(k),
       ownerAt: (k) => nodes2.get(k)?.owner ?? -1,
       dblclick,
@@ -32401,7 +32472,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 06:58";
+  var BUILD = "2026-11-09 07:22";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32537,6 +32608,9 @@
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
+  var shadowClock = 1;
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = Number(params.get("expo") ?? 1.2);
   renderer.outputColorSpace = SRGBColorSpace;
@@ -33995,6 +34069,64 @@
         distinct: distinct.size
       };
     },
+    /** Frame timing percentiles plus scene counts, for the lag hunt. */
+    frameStats: () => {
+      const q = (arr, p) => {
+        if (!arr.length) return 0;
+        const a = [...arr].sort((x, y) => x - y);
+        return +a[Math.min(a.length - 1, Math.floor(p * a.length))].toFixed(1);
+      };
+      return {
+        frames: fTotal.length,
+        total: { p50: q(fTotal, 0.5), p90: q(fTotal, 0.9), max: q(fTotal, 0.999) },
+        update: { p50: q(fUpdate, 0.5), p90: q(fUpdate, 0.9), max: q(fUpdate, 0.999) },
+        tick: { p50: q(fTick, 0.5), p90: q(fTick, 0.9), max: q(fTick, 0.999) },
+        draw: { p50: q(fDraw, 0.5), p90: q(fDraw, 0.9), max: q(fDraw, 0.999) }
+      };
+    },
+    resetFrameStats: () => {
+      fTotal.length = 0;
+      fUpdate.length = 0;
+      fTick.length = 0;
+      fDraw.length = 0;
+    },
+    /** Frame cost, so "laggy" can be turned into numbers instead of guessed at. */
+    perf: () => {
+      let patches = 0, meshes = 0, instanced = 0, casters = 0, instancedCount = 0;
+      scene.traverse((o) => {
+        if (!o.visible) return;
+        if (o.userData && o.userData.terrain) patches++;
+        const m = o;
+        if (m.isMesh) {
+          meshes++;
+          if (m.castShadow) casters++;
+          const im = m;
+          if (im.isInstancedMesh) {
+            instanced++;
+            instancedCount += im.count;
+          }
+        }
+      });
+      const info = renderer.info;
+      const t0 = performance.now();
+      renderer.render(scene, camera);
+      const t1 = performance.now();
+      return {
+        drawMs: +(t1 - t0).toFixed(1),
+        calls: info.render.calls,
+        tris: info.render.triangles,
+        patches,
+        meshes,
+        instanced,
+        instancedCount,
+        casters,
+        roads: roadStats.roads,
+        alt: Math.round(cam.alt),
+        ratio: renderer.getPixelRatio(),
+        geoms: info.memory.geometries,
+        tex: info.memory.textures
+      };
+    },
     /** What the road mesh actually contains, so "built" can be told apart from "rendered". */
     roadMeshInfo: () => {
       if (!roadMesh) return { exists: false };
@@ -34102,7 +34234,17 @@ build ${BUILD}`;
   }, 250);
   var worldClock = 0;
   var lastT = performance.now();
+  var fTotal = [];
+  var fUpdate = [];
+  var fTick = [];
+  var fDraw = [];
+  var tMark = 0;
+  var push = (arr, v) => {
+    arr.push(v);
+    if (arr.length > 90) arr.shift();
+  };
   renderer.setAnimationLoop(() => {
+    const frameStart = performance.now();
     const now2 = performance.now();
     const dt = Math.min(0.05, (now2 - lastT) / 1e3);
     lastT = now2;
@@ -34115,7 +34257,9 @@ build ${BUILD}`;
       cam.alt += dAlt * k;
       cam.lat += dLat * k;
       cam.lon += dLon * k;
+      tMark = performance.now();
       updateScene();
+      push(fUpdate, performance.now() - tMark);
     }
     if (buildBacklog > 0 && !dirty) {
       buildTree();
@@ -34124,16 +34268,26 @@ build ${BUILD}`;
     }
     worldClock += dt;
     if (world && worldClock >= 0.033) {
+      tMark = performance.now();
       world.tick(worldClock);
       world.render();
+      push(fTick, performance.now() - tMark);
       worldClock = 0;
       dirty = true;
     }
+    shadowClock += dt;
+    if (shadowClock >= 0.1) {
+      renderer.shadowMap.needsUpdate = true;
+      shadowClock = 0;
+    }
     if (dirty) {
+      tMark = performance.now();
       renderer.render(scene, camera);
+      push(fDraw, performance.now() - tMark);
       dirty = false;
       report();
     }
+    push(fTotal, performance.now() - frameStart);
   });
   markDirty();
 })();
