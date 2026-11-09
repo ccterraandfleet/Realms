@@ -20101,6 +20101,156 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  // src/view/landStyles.ts
+  var STYLES = {
+    A: {
+      id: "A",
+      label: "A \xB7 facets",
+      blurb: "What is live now: one flat tone per tile, relief from shading alone.",
+      grain: 0,
+      grainScale: 0.5,
+      ao: 0,
+      terrace: 0,
+      smooth: 0,
+      speckle: 0.09,
+      rockSlope: 0.62,
+      rim: 0,
+      contour: 0
+    },
+    B: {
+      id: "B",
+      label: "B \xB7 grain",
+      blurb: "Finer noise grain across every tile, hollows darkened, rock starting lower on the slope.",
+      grain: 0.52,
+      grainScale: 0.95,
+      ao: 0.46,
+      terrace: 0,
+      smooth: 0,
+      speckle: 0.05,
+      rockSlope: 0.5,
+      rim: 0.26,
+      contour: 0
+    },
+    C: {
+      id: "C",
+      label: "C \xB7 terraces",
+      blurb: "Elevation snapped into steps, so hills get flat tops and hard cliff walls.",
+      grain: 0.2,
+      grainScale: 0.8,
+      ao: 0.5,
+      terrace: 1.3,
+      smooth: 0,
+      speckle: 0.05,
+      rockSlope: 0.32,
+      rim: 0.14,
+      contour: 0
+    },
+    D: {
+      id: "D",
+      label: "D \xB7 painterly",
+      blurb: "Smoother ground with broad colour drift and fine speckle, closer to a painting.",
+      grain: 0.55,
+      grainScale: 0.11,
+      ao: 0.26,
+      terrace: 0,
+      smooth: 3,
+      speckle: 0.16,
+      rockSlope: 0.66,
+      rim: 0.24,
+      contour: 0
+    },
+    E: {
+      id: "E",
+      label: "E \xB7 drawn contours",
+      blurb: "Contour bands every two tiles inked into the ground, over mild grain. A drawn map on 3D land.",
+      grain: 0.26,
+      grainScale: 0.7,
+      ao: 0.3,
+      terrace: 0,
+      smooth: 1,
+      speckle: 0.07,
+      rockSlope: 0.48,
+      rim: 0.18,
+      contour: 2
+    }
+  };
+  function styleById(id) {
+    return STYLES[(id ?? "A").toUpperCase()] ?? STYLES.A;
+  }
+  function hash22(x, y, seed2) {
+    let h = x * 374761393 + y * 668265263 + seed2 * 2147483647;
+    h = (h ^ h >>> 13) * 1274126177;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function noise(x, y, seed2) {
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const tx = x - xi;
+    const ty = y - yi;
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    const a = hash22(xi, yi, seed2);
+    const b = hash22(xi + 1, yi, seed2);
+    const c = hash22(xi, yi + 1, seed2);
+    const d = hash22(xi + 1, yi + 1, seed2);
+    return (a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy;
+  }
+  function grainAt(x, z, scale, seed2) {
+    return noise(x * scale, z * scale, seed2) * 0.65 + noise(x * scale * 2.7, z * scale * 2.7, seed2 + 31) * 0.35;
+  }
+  function concavity(heights, w, h, x, z) {
+    const at = (px, pz) => heights[Math.max(0, Math.min(h - 1, pz)) * w + Math.max(0, Math.min(w - 1, px))];
+    const y = at(x, z);
+    let sum = 0;
+    let count = 0;
+    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 3], [-3, -3]]) {
+      sum += at(x + dx, z + dz);
+      count++;
+    }
+    const mean = sum / count;
+    return Math.max(0, Math.min(1, (mean - y) * 0.9));
+  }
+  function applyTerrace(heights, world2, step) {
+    if (step <= 0) return heights;
+    const out = Float32Array.from(heights);
+    let lowestLand = Infinity;
+    for (let t = 0; t < out.length; t++) {
+      if (world2.terrain[t] !== 0) lowestLand = Math.min(lowestLand, out[t]);
+    }
+    for (let t = 0; t < out.length; t++) {
+      if (world2.terrain[t] === 0) continue;
+      const y = out[t];
+      const above = y - lowestLand;
+      if (above < step) continue;
+      out[t] = lowestLand + Math.ceil(above / step) * step - step * 0.12;
+    }
+    return out;
+  }
+  function blurHeights(heights, w, h, passes) {
+    let src = heights;
+    for (let p = 0; p < passes; p++) {
+      const out = Float32Array.from(src);
+      for (let z = 0; z < h; z++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0;
+          let n = 0;
+          for (let dz = -1; dz <= 1; dz++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              const nx = x + dx;
+              const nz = z + dz;
+              if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
+              sum += src[nz * w + nx];
+              n++;
+            }
+          }
+          out[z * w + x] = sum / n;
+        }
+      }
+      src = out;
+    }
+    return src;
+  }
+
   // src/view/scene.ts
   var CAM_DIST = 620;
   var RELIEF = 30;
@@ -20133,7 +20283,7 @@
     plot: hsl(38, 0.42, 0.48)
   };
   var Scene2 = class {
-    constructor(canvas2, game2) {
+    constructor(canvas2, game2, styleId) {
       this.game = game2;
       __publicField(this, "renderer");
       __publicField(this, "scene", new Scene());
@@ -20153,11 +20303,15 @@
       __publicField(this, "sizeKey", "");
       __publicField(this, "terrainColors", null);
       __publicField(this, "colourSig", "");
+      __publicField(this, "style");
       /** A ring on the selected castle, so a click is unmistakable on a huge map. */
       __publicField(this, "ring", null);
       __publicField(this, "lastCam", null);
       this.canvas = canvas2;
-      this.heights = computeHeights(game2.world);
+      this.style = styleById(styleId ?? null);
+      const base = computeHeights(game2.world);
+      const blurred = this.style.smooth ? blurHeights(base, game2.world.w, game2.world.h, this.style.smooth) : base;
+      this.heights = applyTerrace(blurred, game2.world, this.style.terrace);
       const renderer = new WebGLRenderer({ canvas: canvas2, antialias: true });
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       renderer.shadowMap.enabled = true;
@@ -20237,12 +20391,44 @@
           const kind = terrain[t];
           const shade = faceShade(x, z, heights, w, h);
           const slope = faceSlope(x, z, heights, w, h);
-          const rocky = slope > 0.62;
+          const rocky = slope > this.style.rockSlope;
           const family = rocky ? PALETTE.rock : familyOf(kind);
-          const jitter = hash(x, z, 3) * 0.09 + 0.955;
+          const jitter = hash(x, z, 3) * this.style.speckle + (1 - this.style.speckle * 0.5);
           let [r, g, b] = rgb(pick(family, hash(x, z, 11)));
           if (rocky) {
-            const k = 0.82 + (slope - 0.62) * 0.55;
+            const k = 0.82 + (slope - this.style.rockSlope) * 0.55;
+            r *= k;
+            g *= k;
+            b *= k;
+          }
+          if (this.style.grain > 0) {
+            const gr = grainAt(x, z, this.style.grainScale, 907);
+            const k = 1 + (gr - 0.5) * this.style.grain;
+            r *= k;
+            g *= k;
+            b *= k;
+          }
+          if (this.style.ao > 0) {
+            const hollow = concavity(heights, w, h, x, z);
+            const k = 1 - hollow * this.style.ao;
+            r *= k;
+            g *= k;
+            b *= k;
+          }
+          if (this.style.contour > 0) {
+            const band = heights[t] / this.style.contour % 1;
+            if (band < 0.16) {
+              const k = 0.7 + band * 1.4;
+              r *= k;
+              g *= k;
+              b *= k;
+            }
+          }
+          if (this.style.rim > 0) {
+            const at = (px, pz) => heights[Math.max(0, Math.min(h - 1, pz)) * w + Math.max(0, Math.min(w - 1, px))];
+            const gx = at(x - 1, z) - at(x + 1, z);
+            const gz = at(x, z - 1) - at(x, z + 1);
+            const k = 1 + Math.max(-1, Math.min(1, (gx + gz) * 0.6)) * this.style.rim;
             r *= k;
             g *= k;
             b *= k;
@@ -20865,7 +21051,8 @@
   var canvas = document.getElementById("map");
   var world = generateWorld(seed, SIZE, SIZE, Math.round(SIZE * SIZE / 420));
   var game = new Game(world);
-  var scene = new Scene2(canvas, game);
+  var landStyle = params.get("land");
+  var scene = new Scene2(canvas, game, landStyle ?? void 0);
   var cam = new Camera2();
   var selectedCastle = null;
   var selectedPlot = null;
