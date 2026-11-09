@@ -31189,6 +31189,8 @@
         nodes.delete(key);
       }
     }
+    buildBacklog = 0;
+    for (const k of wanted) if (!nodes.has(k)) buildBacklog++;
     liveLevels = deepest;
   }
   function box(w, h, d, mat, x = 0, y = 0, z = 0) {
@@ -31369,12 +31371,13 @@
   var MIN_ALT = 20;
   var MAX_ALT = R * 3.2;
   var carriedNorth = new Vector3(0, 1, 0);
-  function latCos(lat) {
-    const c = Math.cos(lat);
-    return (c < 0 ? -1 : 1) * Math.max(0.35, Math.abs(c));
-  }
+  var _dragD = new Vector3();
+  var _dragUp = new Vector3();
+  var _dragNorth = new Vector3();
+  var _dragEast = new Vector3();
   var LOD_FREEZE_ALT = 4200;
   var frozeHigh = false;
+  var buildBacklog = 0;
   var lastRotKey = "";
   var lastAltKey = -1;
   function unitsPerPixel(alt) {
@@ -31564,16 +31567,51 @@
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
   });
+  function dragBy(dx, dy) {
+    const fine = aim.alt < 60 ? 0.35 : 1;
+    const upp = unitsPerPixel(aim.alt) * fine;
+    _dragD.set(Math.cos(aim.lat) * Math.cos(aim.lon), Math.sin(aim.lat), Math.cos(aim.lat) * Math.sin(aim.lon)).normalize();
+    _dragUp.copy(_dragD);
+    _dragNorth.copy(carriedNorth).addScaledVector(_dragUp, -carriedNorth.dot(_dragUp));
+    if (_dragNorth.lengthSq() < 1e-9) {
+      _dragNorth.set(1, 0, 0).addScaledVector(_dragUp, -_dragUp.x);
+      if (_dragNorth.lengthSq() < 1e-9) _dragNorth.set(0, 0, 1).addScaledVector(_dragUp, -_dragUp.z);
+    }
+    _dragNorth.normalize();
+    _dragEast.crossVectors(_dragNorth, _dragUp).normalize();
+    _dragD.applyAxisAngle(_dragEast, -(dy * upp) / R);
+    _dragD.applyAxisAngle(_dragNorth, dx * upp / R);
+    const nlat = Math.asin(Math.max(-1, Math.min(1, _dragD.y)));
+    const nlon = Math.atan2(_dragD.z, _dragD.x);
+    const TWO = Math.PI * 2;
+    let bestLat = nlat;
+    let bestLon = nlon;
+    let bestCost = Infinity;
+    for (const cand of [
+      [nlat, nlon],
+      [Math.PI - nlat, nlon + Math.PI],
+      [-Math.PI - nlat, nlon + Math.PI]
+    ]) {
+      let dl = cand[1] - aim.lon;
+      while (dl > Math.PI) dl -= TWO;
+      while (dl < -Math.PI) dl += TWO;
+      const cost = Math.abs(cand[0] - aim.lat) + Math.abs(dl) * Math.max(0.05, Math.abs(Math.cos(aim.lat)));
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestLat = cand[0];
+        bestLon = aim.lon + dl;
+      }
+    }
+    aim.lat = bestLat;
+    aim.lon = bestLon;
+  }
   canvas.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
-    const fine = aim.alt < 60 ? 0.35 : 1;
-    const upp = unitsPerPixel(aim.alt) * fine;
-    aim.lon -= dx * upp / (R * latCos(aim.lat));
-    aim.lat += dy * upp / R;
+    dragBy(dx, dy);
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -31591,7 +31629,7 @@
     const py2 = ny * 0.5 * innerHeight;
     const dEast = px2 * (oldUpp - newUpp);
     const dNorth = -py2 * (oldUpp - newUpp);
-    aim.lon += dEast / (R * latCos(aim.lat));
+    aim.lon += dEast / (R * Math.max(0.35, Math.abs(Math.cos(aim.lat))));
     aim.lat += dNorth / R;
   }, { passive: false });
   addEventListener("keydown", (e) => {
@@ -31627,6 +31665,7 @@
     nodes,
     castles,
     stats: () => ({
+      backlog: buildBacklog,
       alt: Math.round(cam.alt * 100) / 100,
       considered,
       passed,
@@ -31728,6 +31767,11 @@
       cam.lat += dLat * k;
       cam.lon += dLon * k;
       updateScene();
+    }
+    if (buildBacklog > 0 && !dirty) {
+      buildTree();
+      syncCastles();
+      markDirty();
     }
     if (dirty) {
       renderer.render(scene, camera);
