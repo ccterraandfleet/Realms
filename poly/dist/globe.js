@@ -31039,22 +31039,33 @@
       if (!verbs.length) return;
       const el = document.createElement("div");
       el.id = "realms-wheel";
-      el.style.cssText = "position:fixed;z-index:30;pointer-events:none;width:0;height:0;left:" + Math.round(x) + "px;top:" + Math.round(y) + "px";
-      const R2 = 74;
+      const CARD_W = Math.min(300, window.innerWidth - 24);
+      const px2 = Math.max(12, Math.min(window.innerWidth - CARD_W - 12, x + 18));
+      const py2 = Math.max(12, Math.min(window.innerHeight - 260, y - 40));
+      el.style.cssText = `position:fixed;z-index:30;left:${Math.round(px2)}px;top:${Math.round(py2)}px;width:${CARD_W}px;font:12px/1.3 ui-monospace,monospace;color:#eaf1fa;background:rgba(14,20,29,0.97);border:1px solid rgba(150,200,255,0.32);border-radius:12px;box-shadow:0 14px 34px rgba(0,0,0,0.55);overflow:hidden`;
+      const head = document.createElement("div");
+      head.style.cssText = "display:flex;justify-content:space-between;align-items:baseline;padding:9px 11px 7px;border-bottom:1px solid rgba(150,200,255,0.16)";
+      head.innerHTML = `<span style="font-size:10px;letter-spacing:.16em;opacity:.6">${mine ? "YOUR KEEP" : n.owner < 0 ? "UNCLAIMED" : "RIVAL KEEP"}</span><span style="font-size:10px;opacity:.45">esc</span>`;
+      el.appendChild(head);
+      const list = document.createElement("div");
+      list.style.cssText = "padding:5px";
       verbs.forEach((v, i) => {
-        const a = -Math.PI / 2 + i / verbs.length * Math.PI * 2;
         const b = document.createElement("button");
-        const keyCap = i + 1 <= 9 ? String(i + 1) : "";
-        b.innerHTML = `<span style="display:block">${keyCap ? `<span style="opacity:.55">${keyCap}</span> ` : ""}${v.label}</span>` + (v.price ? `<span style="display:block;font-size:10px;opacity:.72;margin-top:3px">${v.price}</span>` : "");
+        const keyCap = i + 1 <= 9 ? String(i + 1) : "\xB7";
+        b.dataset.verb = v.verb;
         b.title = v.blocked ? `${v.hint} \xB7 ${v.blocked}` : v.hint;
         b.disabled = !!v.blocked;
-        if (v.blocked) {
-          b.style.opacity = "0.45";
-          b.style.cursor = "not-allowed";
-          b.style.borderColor = "rgba(150,170,190,0.35)";
+        b.style.cssText = "display:flex;gap:8px;align-items:center;width:100%;text-align:left;padding:6px 7px;border-radius:7px;cursor:pointer;border:1px solid transparent;background:transparent;color:#eaf1fa;font:12px/1.25 ui-monospace,monospace";
+        const dim = v.blocked ? "opacity:.42" : "opacity:1";
+        b.innerHTML = `<span style="flex:0 0 15px;height:15px;line-height:15px;text-align:center;border-radius:4px;background:rgba(150,200,255,0.16);font-size:10px;${dim}">${keyCap}</span><span style="flex:1;${dim}">${v.label}` + (v.blocked ? `<span style="display:block;font-size:10px;opacity:.8">${v.blocked}</span>` : "") + `</span>` + (v.price ? `<span style="flex:0 0 auto;font-size:10px;opacity:.62;text-align:right;max-width:132px">${v.price}</span>` : "");
+        if (!v.blocked) {
+          b.addEventListener("pointerenter", () => {
+            b.style.background = "rgba(150,200,255,0.12)";
+          });
+          b.addEventListener("pointerleave", () => {
+            b.style.background = "transparent";
+          });
         }
-        b.dataset.verb = v.verb;
-        b.style.cssText = "position:absolute;pointer-events:auto;transform:translate(-50%,-50%);left:" + Math.cos(a) * R2 + "px;top:" + Math.sin(a) * R2 + "px;font:12px/1 ui-monospace,monospace;color:#f2f7ff;background:rgba(24,34,48,0.95);border:1px solid rgba(150,200,255,0.5);border-radius:9px;padding:9px 11px;cursor:pointer;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.45)";
         b.addEventListener("pointerdown", (ev) => {
           ev.stopPropagation();
           ev.preventDefault();
@@ -31064,12 +31075,9 @@
           }
           act(v.verb, key2);
         });
-        el.appendChild(b);
+        list.appendChild(b);
       });
-      const mid = document.createElement("div");
-      mid.textContent = mine ? "your keep" : n.owner < 0 ? "unclaimed" : "rival keep";
-      mid.style.cssText = "position:absolute;transform:translate(-50%,-50%);pointer-events:none;font:10px/1 ui-monospace,monospace;color:#cfe0f5;white-space:nowrap;opacity:.85";
-      el.appendChild(mid);
+      el.appendChild(list);
       document.body.appendChild(el);
       wheel = el;
       selected = key2;
@@ -31526,6 +31534,42 @@
       say(`Hearth raised at ${label(n)} \xB7 household troops unlocked \xB7 Warden sworn (${WARDEN_MEN} men)`);
       return true;
     }
+    function garrisonCacheSeeded() {
+      return hosts.concat(garrisonFormations());
+    }
+    let garrisonCache = [];
+    let garrisonStamp = -1e9;
+    function garrisonFormations() {
+      const now2 = performance.now();
+      if (now2 - garrisonStamp < 220) return garrisonCache;
+      garrisonStamp = now2;
+      const out = [];
+      for (const n of nodes2.values()) {
+        if (n.owner < 0 || n.garrison <= 0) continue;
+        const road = (incident.get(n.key) ?? [])[0];
+        if (!road) continue;
+        const e = edges.get(road);
+        if (!e) continue;
+        const to = e.a === n.key ? e.b : e.a;
+        out.push({
+          id: -1 - out.length,
+          owner: n.owner,
+          men: n.garrison,
+          startMen: Math.max(n.garrison, 1),
+          path: [n.key, to],
+          seg: 0,
+          prog: 0.12,
+          from: n.key,
+          to: null,
+          routed: false,
+          lastBeat: 0,
+          tier: 1,
+          garrison: true
+        });
+      }
+      garrisonCache = out;
+      return out;
+    }
     function fieldAt(key2) {
       let n = 0;
       for (const h of hosts) if (!h.routed && h.to === null && h.path[h.path.length - 1] === key2) n += h.men;
@@ -31543,16 +31587,15 @@
       const baseRaise = r.hearth ? MUSTER_MEN : LEVY_MEN;
       const raise = n.owner === 0 ? Math.max(10, Math.round(baseRaise * classMuster)) : baseRaise;
       const cap = capFor(n, r.hearth);
-      const already = n.garrison + hosts.filter((h) => h.owner === n.owner && !h.routed).reduce((s, h) => s + h.men, 0);
-      if (already + raise > cap) {
-        say(!r.hearth ? `levies are capped at ${cap} until a Hearth is raised (double-click the capital)` : "army is at its cap for this castle level");
+      const room = Math.max(0, cap - n.garrison);
+      if (room <= 0) {
+        say(!r.hearth ? `garrison full (${n.garrison} of ${cap}) \xB7 levies cap here until a Hearth is raised \xB7 attack to march them out, or upgrade the keep` : `garrison full (${n.garrison} of ${cap}) \xB7 attack to march them out, or upgrade the keep for more room`);
         return false;
       }
       if (r.res.grain < MUSTER_COST.grain || r.res.gold < MUSTER_COST.gold || r.res.ore < MUSTER_COST.ore) {
         say("not enough stores to muster");
         return false;
       }
-      const room = Math.max(0, cap - n.garrison);
       const toRaise = Math.min(raise, room);
       if (toRaise <= 0) return false;
       const share = toRaise / raise;
@@ -31560,7 +31603,7 @@
       r.res.gold -= MUSTER_COST.gold * share;
       r.res.ore -= MUSTER_COST.ore * share;
       n.garrison += toRaise;
-      say(`${toRaise} ${r.hearth ? "household troops" : "levies"} mustered at ${label(n)} \xB7 garrison ${n.garrison} of ${cap}`);
+      say(`${toRaise} ${r.hearth ? "household troops" : "levies"} mustered at ${label(n)} \xB7 garrison ${n.garrison} of ${cap}` + (toRaise < raise ? ` \xB7 only ${room} fit: upgrade the keep or raise a Hearth for more room` : "") + ` \xB7 attack to march them out`);
       return true;
       return true;
     }
@@ -32336,7 +32379,8 @@
       const basis = new Matrix4();
       const footDir = new Vector3();
       const hereThrowaway = new Vector3();
-      for (const h of hosts) {
+      const drawHosts = garrisonCacheSeeded();
+      for (const h of drawHosts) {
         if (shadows >= HOST_MAX) break;
         hostCount++;
         const a = nodes2.get(h.path[h.seg]);
@@ -32862,46 +32906,115 @@
       rosterEl = el;
     }
     function showTitleCard() {
-      if (document.getElementById("realms-title")) return;
+      document.getElementById("realms-title")?.remove();
       const el = document.createElement("div");
       el.id = "realms-title";
-      el.style.cssText = "position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,rgba(12,18,26,0.86),rgba(6,9,13,0.97));color:#eef4fb;font:13px/1.5 ui-monospace,monospace";
+      el.style.cssText = "position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 18%,rgba(28,46,64,0.93),rgba(6,9,13,0.985) 62%);color:#eef4fb;font:13px/1.5 ui-monospace,monospace;overflow:auto;padding:18px";
       let cls = playerClass;
       let col = playerColour ?? realms[0].colour;
-      const card = document.createElement("div");
-      card.style.cssText = "width:min(560px,92vw);padding:22px 22px 18px;border:1px solid rgba(150,200,255,0.3);border-radius:16px;background:rgba(18,25,36,0.96);box-shadow:0 20px 60px rgba(0,0,0,0.6)";
-      card.innerHTML = `<div style="font-size:11px;letter-spacing:.3em;opacity:.6">REALMS</div><div style="font-size:26px;font-weight:600;margin:2px 0 4px">Choose your banner and your craft</div><div style="font-size:11px;opacity:.66;margin-bottom:16px">One world, one seed. Your banner marks the land you take; your craft decides how you take it.</div><div style="font-size:10px;letter-spacing:.18em;opacity:.55;margin-bottom:6px">BANNER</div><div id="rt-swatches" style="display:flex;gap:8px;margin-bottom:16px"></div><div style="font-size:10px;letter-spacing:.18em;opacity:.55;margin-bottom:6px">CRAFT</div><div id="rt-classes" style="display:grid;gap:7px"></div><button id="rt-go" style="margin-top:16px;width:100%;padding:11px;border-radius:10px;cursor:pointer;border:1px solid rgba(150,220,255,0.6);background:linear-gradient(180deg,#1d3a52,#16283a);color:#eaf6ff;font:600 14px/1 ui-monospace,monospace">Take the field</button>`;
-      el.appendChild(card);
+      const hasSave = (() => {
+        try {
+          return !!localStorage.getItem(SAVE_KEY);
+        } catch {
+          return false;
+        }
+      })();
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "width:min(880px,96vw);padding:6px";
+      wrap.innerHTML = `
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:11px;letter-spacing:.44em;opacity:.55">SUPERTERRA</div>
+          <div style="font-size:42px;font-weight:700;letter-spacing:.10em;line-height:1.02;margin:4px 0 6px">REALMS</div>
+          <div style="font-size:12px;opacity:.62;max-width:44ch">One world, one seed, no rounds. Take ground, hold the roads, and let the columns decide it.</div>
+        </div>
+        <div id="rt-seedrow" style="font-size:11px;opacity:.7;text-align:right;min-width:190px"></div>
+      </div>
+      <div style="font-size:10px;letter-spacing:.2em;opacity:.5;margin:20px 0 8px">YOUR CRAFT</div>
+      <div id="rt-classes" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:9px"></div>
+      <div style="font-size:10px;letter-spacing:.2em;opacity:.5;margin:18px 0 8px">YOUR BANNER</div>
+      <div id="rt-swatches" style="display:flex;gap:9px;align-items:center"></div>
+      <div style="display:flex;gap:9px;margin-top:22px;flex-wrap:wrap">
+        <button id="rt-go" style="flex:1 1 220px;padding:13px;border-radius:11px;cursor:pointer;
+          border:1px solid rgba(150,220,255,0.55);background:linear-gradient(180deg,#20455f,#152838);
+          color:#eaf6ff;font:600 15px/1 ui-monospace,monospace;letter-spacing:.04em">Take the field</button>
+        <button id="rt-continue" style="flex:1 1 200px;padding:13px;border-radius:11px;cursor:pointer;
+          border:1px solid rgba(150,200,255,0.28);background:rgba(24,34,46,0.9);color:#dbe8f6;
+          font:600 14px/1 ui-monospace,monospace">Continue campaign</button>
+      </div>
+      <div id="rt-hint" style="font-size:11px;opacity:.5;margin-top:10px"></div>
+      <div style="font-size:10.5px;opacity:.42;margin-top:18px;line-height:1.7">
+        double-click a keep for orders \xB7 M muster \xB7 Tab army \xB7 K this screen \xB7 space pause \xB7 1-9 jump to your keeps
+      </div>`;
+      el.appendChild(wrap);
       document.body.appendChild(el);
-      const sw = card.querySelector("#rt-swatches");
-      for (const hex2 of REALM_COLOURS.slice(0, 3)) {
-        const c = document.createElement("button");
-        c.style.cssText = `width:38px;height:38px;border-radius:9px;cursor:pointer;border:2px solid ${hex2 === col ? "#eaf6ff" : "rgba(255,255,255,0.15)"};background:#${(hex2 >>> 0).toString(16).padStart(6, "0")}`;
-        c.addEventListener("click", () => {
-          col = hex2;
-          Array.from(sw.children).forEach((b, i) => {
-            b.style.borderColor = REALM_COLOURS[i] === col ? "#eaf6ff" : "rgba(255,255,255,0.15)";
+      const seedRow = wrap.querySelector("#rt-seedrow");
+      const seedNow = (() => {
+        try {
+          return new URL(location.href).searchParams.get("seed") ?? String(o.SEED);
+        } catch {
+          return String(o.SEED);
+        }
+      })();
+      seedRow.innerHTML = `<div style="opacity:.6;letter-spacing:.16em">WORLD SEED</div>
+      <div style="font-size:20px;font-weight:600;margin:2px 0 6px">${seedNow}</div>`;
+      const seedBtn = document.createElement("button");
+      seedBtn.textContent = "load another seed";
+      seedBtn.style.cssText = "margin-top:6px;padding:6px 9px;border-radius:7px;cursor:pointer;font:11px ui-monospace,monospace;border:1px solid rgba(150,200,255,0.25);background:rgba(24,34,46,0.8);color:#cfe0f5";
+      seedBtn.addEventListener("click", () => {
+        const v = window.prompt("World seed (this wipes the map for everyone on that seed):", seedNow);
+        if (!v) return;
+        const u = new URL(location.href);
+        u.searchParams.set("seed", v.trim());
+        location.href = u.toString();
+      });
+      seedRow.appendChild(seedBtn);
+      const sw = wrap.querySelector("#rt-swatches");
+      const paintSwatches = () => {
+        sw.innerHTML = "";
+        REALM_COLOURS.slice(0, 4).forEach((hex2) => {
+          const c = document.createElement("button");
+          const on = hex2 === col;
+          c.style.cssText = `width:40px;height:40px;border-radius:10px;cursor:pointer;border:2px solid ${on ? "#eaf6ff" : "rgba(255,255,255,0.14)"};background:#${(hex2 >>> 0).toString(16).padStart(6, "0")};box-shadow:${on ? "0 0 0 3px rgba(150,220,255,0.22)" : "none"}`;
+          c.addEventListener("click", () => {
+            col = hex2;
+            paintSwatches();
           });
+          sw.appendChild(c);
         });
-        sw.appendChild(c);
-      }
-      const cl = card.querySelector("#rt-classes");
-      const paint2 = () => {
+        const tag = document.createElement("span");
+        tag.style.cssText = "font-size:11px;opacity:.5;margin-left:6px";
+        tag.textContent = "marks every keep and column you own";
+        sw.appendChild(tag);
+      };
+      paintSwatches();
+      const cl = wrap.querySelector("#rt-classes");
+      const numbers = (id) => {
+        const i = classInfo[id];
+        const out = [`economy \xD7${i.eco.toFixed(2)}`, `muster \xD7${i.muster.toFixed(2)}`];
+        if (i.unroutable) out.push("never routs");
+        if (i.necro) out.push("30% losses return");
+        return out;
+      };
+      const paintClasses = () => {
         cl.innerHTML = "";
         for (const id of ["vanguard", "steward", "necromancer"]) {
           const info = classInfo[id];
+          const on = id === cls;
           const b = document.createElement("button");
-          b.style.cssText = `text-align:left;cursor:pointer;padding:9px 11px;border-radius:10px;border:1px solid ${id === cls ? "rgba(150,220,255,0.75)" : "rgba(140,180,230,0.2)"};background:${id === cls ? "rgba(29,58,82,0.95)" : "rgba(28,37,49,0.85)"};color:#eaf1fa;font:12px/1.45 ui-monospace,monospace`;
-          b.innerHTML = `<b>${info.name}</b><span style="display:block;opacity:.72;margin-top:2px">${info.blurb}</span>`;
+          b.style.cssText = `text-align:left;cursor:pointer;padding:12px 13px;border-radius:12px;display:block;border:1px solid ${on ? "rgba(150,220,255,0.8)" : "rgba(140,180,230,0.18)"};background:${on ? "linear-gradient(180deg,rgba(32,69,95,0.95),rgba(21,40,56,0.95))" : "rgba(22,30,40,0.86)"};color:#eaf1fa;font:12px/1.45 ui-monospace,monospace;min-height:132px`;
+          b.innerHTML = `<div style="font-size:14px;font-weight:700;letter-spacing:.04em;margin-bottom:5px">${info.name}</div><div style="opacity:.7;font-size:11.5px;line-height:1.5;margin-bottom:9px">${info.blurb}</div><div style="display:flex;flex-wrap:wrap;gap:5px">` + numbers(id).map((n) => `<span style="font-size:10px;padding:2px 6px;border-radius:5px;background:rgba(150,200,255,0.14);opacity:.9">${n}</span>`).join("") + `</div>`;
           b.addEventListener("click", () => {
             cls = id;
-            paint2();
+            paintClasses();
           });
           cl.appendChild(b);
         }
       };
-      paint2();
-      card.querySelector("#rt-go").addEventListener("click", () => {
+      paintClasses();
+      const hint = wrap.querySelector("#rt-hint");
+      hint.textContent = hasSave ? "A campaign is saved here. Continue keeps it; Take the field starts you on this seed with your banner." : "No campaign saved yet. Your capital is the keep nearest the spawn point.";
+      const go = (continueSave) => {
         playerClass = cls;
         playerColour = col;
         realms[0].colour = col;
@@ -32910,8 +33023,22 @@
         } catch {
         }
         dirtyTerritory = true;
+        if (!continueSave && hasSave) {
+          clearSave();
+        }
         el.remove();
-        say(`${classInfo[cls].name} of the ${col === REALM_COLOURS[0] ? "blue" : col === REALM_COLOURS[1] ? "red" : "green"} banner takes the field`);
+        say(`${classInfo[cls].name} takes the field`);
+        if (continueSave && hasSave) tryRestore();
+      };
+      wrap.querySelector("#rt-go").addEventListener("click", () => go(false));
+      const cont = wrap.querySelector("#rt-continue");
+      cont.disabled = !hasSave;
+      if (!hasSave) {
+        cont.style.opacity = "0.4";
+        cont.style.cursor = "not-allowed";
+      }
+      cont.addEventListener("click", () => {
+        if (hasSave) go(true);
       });
     }
     function loadIdentity() {
@@ -33081,6 +33208,9 @@
         reason: b.title
       })),
       wealth: () => ({ ...realms[0].res }),
+      lastLog: () => lastLog,
+      garrisonDrawn: () => garrisonFormations().length,
+      garrisonMen: () => garrisonFormations().reduce((s, h) => s + h.men, 0),
       incomeRate: (id) => incomeRate(id ?? 0),
       tradeCount: () => tradeRoutes.size,
       admin: () => ADMIN,
@@ -33316,7 +33446,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 18:06";
+  var BUILD = "2026-11-09 18:48";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
