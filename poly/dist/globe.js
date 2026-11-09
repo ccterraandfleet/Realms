@@ -12818,7 +12818,7 @@
       return `uv${value}`;
     }
     function getParameters(material, lights, shadows, scene2, object) {
-      const fog = scene2.fog;
+      const fog2 = scene2.fog;
       const geometry = object.geometry;
       const environment = material.isMeshStandardMaterial ? scene2.environment : null;
       const envMap = (material.isMeshStandardMaterial ? cubeuvmaps : cubemaps).get(material.envMap || environment);
@@ -12984,9 +12984,9 @@
         vertexUv2s: HAS_ATTRIBUTE_UV2,
         vertexUv3s: HAS_ATTRIBUTE_UV3,
         pointsUvs: object.isPoints === true && !!geometry.attributes.uv && (HAS_MAP || HAS_ALPHAMAP),
-        fog: !!fog,
+        fog: !!fog2,
         useFog: material.fog === true,
-        fogExp2: fog && fog.isFogExp2,
+        fogExp2: fog2 && fog2.isFogExp2,
         flatShading: material.flatShading === true,
         sizeAttenuation: material.sizeAttenuation === true,
         logarithmicDepthBuffer,
@@ -16718,13 +16718,13 @@
       }
       uniform.value.copy(map.matrix);
     }
-    function refreshFogUniforms(uniforms, fog) {
-      fog.color.getRGB(uniforms.fogColor.value, getUnlitUniformColorSpace(renderer2));
-      if (fog.isFog) {
-        uniforms.fogNear.value = fog.near;
-        uniforms.fogFar.value = fog.far;
-      } else if (fog.isFogExp2) {
-        uniforms.fogDensity.value = fog.density;
+    function refreshFogUniforms(uniforms, fog2) {
+      fog2.color.getRGB(uniforms.fogColor.value, getUnlitUniformColorSpace(renderer2));
+      if (fog2.isFog) {
+        uniforms.fogNear.value = fog2.near;
+        uniforms.fogFar.value = fog2.far;
+      } else if (fog2.isFogExp2) {
+        uniforms.fogDensity.value = fog2.density;
       }
     }
     function refreshMaterialUniforms(uniforms, material, pixelRatio, height, transmissionRenderTarget) {
@@ -18086,7 +18086,7 @@
       function setProgram(camera2, scene2, geometry, material, object) {
         if (scene2.isScene !== true) scene2 = _emptyScene;
         textures.resetTextureUnits();
-        const fog = scene2.fog;
+        const fog2 = scene2.fog;
         const environment = material.isMeshStandardMaterial ? scene2.environment : null;
         const colorSpace = _currentRenderTarget === null ? _this.outputColorSpace : _currentRenderTarget.isXRRenderTarget === true ? _currentRenderTarget.texture.colorSpace : LinearSRGBColorSpace;
         const envMap = (material.isMeshStandardMaterial ? cubeuvmaps : cubemaps).get(material.envMap || environment);
@@ -18135,7 +18135,7 @@
             needsProgramChange = true;
           } else if (materialProperties.envMap !== envMap) {
             needsProgramChange = true;
-          } else if (material.fog === true && materialProperties.fog !== fog) {
+          } else if (material.fog === true && materialProperties.fog !== fog2) {
             needsProgramChange = true;
           } else if (materialProperties.numClippingPlanes !== void 0 && (materialProperties.numClippingPlanes !== clipping.numPlanes || materialProperties.numIntersection !== clipping.numIntersection)) {
             needsProgramChange = true;
@@ -18232,8 +18232,8 @@
           if (materialProperties.needsLights) {
             markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
           }
-          if (fog && material.fog === true) {
-            materials.refreshFogUniforms(m_uniforms, fog);
+          if (fog2 && material.fog === true) {
+            materials.refreshFogUniforms(m_uniforms, fog2);
           }
           materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height, _transmissionRenderTarget);
           WebGLUniforms.upload(_gl, getUniformList(materialProperties), m_uniforms, textures);
@@ -30796,8 +30796,8 @@
   var R = 2e3;
   var RELIEF = 0.011;
   var SEA = -0.19;
-  var GRID = 8;
-  var MAX_LEVEL = 12;
+  var GRID = 16;
+  var MAX_LEVEL = 13;
   var TERR_PER_FACE = 46;
   var TERRITORIES = 6 * TERR_PER_FACE * TERR_PER_FACE;
   function ih3(x, y, z, s) {
@@ -30901,6 +30901,9 @@
     if (detail) {
       h += (fbm3(d.x * 26, d.y * 26, d.z * 26, 3, SEED + 41) - 0.5) * 0.26;
       h += (fbm3(d.x * 90, d.y * 90, d.z * 90, 2, SEED + 53) - 0.5) * 0.1;
+      h += (fbm3(d.x * 240, d.y * 240, d.z * 240, 2, SEED + 71) - 0.5) * 0.055;
+      h += (fbm3(d.x * 640, d.y * 640, d.z * 640, 2, SEED + 83) - 0.5) * 0.022;
+      h += (fbm3(d.x * 1500, d.y * 1500, d.z * 1500, 1, SEED + 97) - 0.5) * 9e-3;
     }
     const moist = fbm3(d.x * 12, d.y * 12, d.z * 12, 3, SEED + 67);
     let cls = PLAINS;
@@ -30928,17 +30931,19 @@
   renderer.toneMappingExposure = Number(params.get("expo") ?? 1.2);
   renderer.outputColorSpace = SRGBColorSpace;
   var scene = new Scene();
+  var fog = new Fog(12175554, 1e6, 2e6);
+  scene.fog = fog;
   scene.background = new Color(660512);
   var aspect2 = innerWidth / innerHeight;
   var camera = new PerspectiveCamera(38, aspect2, 0.5, 4e4);
-  var sun = new DirectionalLight(16773589, Number(params.get("sun") ?? 2.4));
+  var sun = new DirectionalLight(16773589, Number(params.get("sun") ?? 2.75));
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -9e-4;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 800;
   scene.add(sun);
-  var hemi = new HemisphereLight(14084340, 6974020, Number(params.get("hemi") ?? 1.1));
+  var hemi = new HemisphereLight(13621974, 9076562, Number(params.get("hemi") ?? 1.5));
   scene.add(hemi);
   var atmo = null;
   var atmoFade = { value: 1 };
@@ -31030,7 +31035,7 @@
         const cls = mean <= SEA ? OCEAN : S[k00].cls;
         const list = cls === OCEAN ? [2912146, 2779273] : PALETTE[cls] ?? PALETTE[PLAINS];
         c.setHex(list[Math.floor(ih3(face, iu * 977 + i, iv * 613 + j, 3) * list.length)]);
-        c.multiplyScalar((0.93 + ih3(face, iu * 131 + i, iv * 197 + j, 11) * 0.14) * LIFT);
+        c.multiplyScalar((0.9 + ih3(face, iu * 131 + i, iv * 197 + j, 11) * 0.2) * LIFT);
         const facing = S[k00].h + S[k01].h - (S[k10].h + S[k11].h);
         c.multiplyScalar(1 + Math.max(-0.45, Math.min(0.45, facing * 26)) * 0.32);
         const quad = [
@@ -31054,7 +31059,7 @@
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     let trees = null;
-    if (level >= MAX_LEVEL) {
+    if (level >= MAX_LEVEL - 1) {
       const spots = [];
       for (let j = 0; j < GRID; j++) {
         for (let i = 0; i < GRID; i++) {
@@ -31147,11 +31152,13 @@
       const centreDir = faceDir(face, u0 + span / 2, v0 + span / 2, vA);
       const centre = centreDir.clone().multiplyScalar(R);
       const arc = R * span;
+      const dist = Math.max(1, centre.distanceTo(camPos) - arc * 0.72);
       const camAlt = Math.max(0.35, camDir.length() - R);
+      if (dist > fog.far * 1.15) return;
       const angHalf = Math.min(1.7, arc / R);
       if (!nodeVisible(centre, arc * 0.75, angHalf)) return;
       passed++;
-      const needDetail = arc / camAlt > 0.42;
+      const needDetail = arc / dist > 0.42;
       if (level < MAX_LEVEL && needDetail) {
         for (let d = 0; d < 4; d++) {
           const du = d & 1;
@@ -31350,10 +31357,18 @@
     lon: Number(params.get("lon") ?? SEAT.lon.toFixed(4)),
     alt: Number(params.get("alt") ?? 1900),
     // units above the surface
-    tilt: Number(params.get("tilt") ?? 0.62),
-    // radians from straight down
+    tilt: 0.62,
+    // derived from altitude, never set by hand
     azim: Number(params.get("azim") ?? 0)
   };
+  var aim = { lat: cam.lat, lon: cam.lon, alt: cam.alt };
+  var MIN_ALT = 20;
+  var MAX_ALT = R * 3.2;
+  function tiltFor(alt) {
+    const t = Math.log(Math.max(1, alt / 14)) / Math.log(1400 / 14);
+    const k = Math.max(0, Math.min(1, t));
+    return 0.95 - 0.33 * (k * k * (3 - 2 * k));
+  }
   var up = new Vector3();
   var north = new Vector3();
   var east = new Vector3();
@@ -31366,13 +31381,16 @@
     target.copy(up).multiplyScalar(r);
     north.set(0, 1, 0).sub(up.clone().multiplyScalar(up.y)).normalize();
     east.crossVectors(north, up).normalize();
+    cam.tilt = tiltFor(cam.alt);
     camDir.copy(up).multiplyScalar(R + cam.alt);
     const d = Math.max(cam.alt, 0.4);
     camPos.copy(target).addScaledVector(up, Math.cos(cam.tilt) * d).addScaledVector(north, -Math.sin(cam.tilt) * Math.cos(cam.azim) * d).addScaledVector(east, Math.sin(cam.tilt) * Math.sin(cam.azim) * d);
     camera.position.copy(camPos);
     camera.lookAt(target);
-    camera.near = Math.max(0.15, cam.alt * 4e-3);
+    camera.near = Math.max(0.05, cam.alt * 4e-3);
     camera.far = Math.max(9e3, cam.alt * 8);
+    fog.near = Math.max(6, cam.alt * 2.2);
+    fog.far = Math.max(260, cam.alt * 12);
     camera.updateProjectionMatrix();
     atmoFade.value = smoothstep2(R * 0.02, R * 0.12, cam.alt);
     if (atmo) {
@@ -31518,32 +31536,29 @@
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
-    const groundPan = cam.alt < R * 0.02;
+    const groundPan = aim.alt < R * 0.02;
     if (groundPan) {
-      const perPixel = cam.alt * 1.4 / innerHeight;
-      const dLon = dx * perPixel / (R * Math.cos(Math.max(0.1, cam.lat)));
+      const perPixel = aim.alt * 1.4 / innerHeight;
+      const dLon = dx * perPixel / (R * Math.cos(Math.max(0.1, aim.lat)));
       const dLat = dy * perPixel / R;
-      cam.lon += dLon;
-      cam.lat = Math.max(-1.45, Math.min(1.45, cam.lat + dLat));
+      aim.lon += dLon;
+      aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dLat));
     } else {
-      cam.lon -= dx * 5e-3;
-      cam.lat = Math.max(-1.45, Math.min(1.45, cam.lat + dy * 5e-3));
+      aim.lon -= dx * 5e-3;
+      aim.lat = Math.max(-1.45, Math.min(1.45, aim.lat + dy * 5e-3));
     }
-    updateScene();
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
-    const f = Math.exp(e.deltaY * 12e-4);
-    const before = cam.alt;
-    cam.alt = Math.max(5, Math.min(R * 3.2, cam.alt * f));
+    const f = Math.exp(e.deltaY * 11e-4);
+    const before = aim.alt;
+    aim.alt = Math.max(MIN_ALT, Math.min(MAX_ALT, aim.alt * f));
     const rect = canvas.getBoundingClientRect();
     const nx = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
     const ny = ((e.clientY - rect.top) / rect.height - 0.5) * 2;
-    const k = 1 - cam.alt / before;
-    cam.lon += nx * cam.alt * 0.9 / R * k;
-    cam.lat -= ny * cam.alt * 0.9 / R * k;
-    cam.tilt = Math.max(0.24, Math.min(0.86, 0.62 + (1 - Math.min(1, cam.alt / (R * 0.35))) * -0.22));
-    updateScene();
+    const k = 1 - aim.alt / before;
+    aim.lon += nx * aim.alt * 0.9 / R * k;
+    aim.lat -= ny * aim.alt * 0.9 / R * k;
   }, { passive: false });
   addEventListener("keydown", (e) => {
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
@@ -31587,6 +31602,7 @@
     }),
     set: (v) => {
       Object.assign(cam, v);
+      Object.assign(aim, { lat: cam.lat, lon: cam.lon, alt: cam.alt });
       lastKey = "";
       updateScene();
       renderer.render(scene, camera);
@@ -31653,7 +31669,22 @@
   };
   window.__globe = api;
   if (hud) hud.addEventListener("click", report);
+  var lastT = performance.now();
   renderer.setAnimationLoop(() => {
+    const now2 = performance.now();
+    const dt = Math.min(0.05, (now2 - lastT) / 1e3);
+    lastT = now2;
+    const k = 1 - Math.exp(-dt * 9);
+    const dAlt = aim.alt - cam.alt;
+    const dLat = aim.lat - cam.lat;
+    const dLon = aim.lon - cam.lon;
+    const moved = Math.abs(dAlt) > aim.alt * 15e-4 || Math.abs(dLat) > 2e-4 || Math.abs(dLon) > 2e-4;
+    if (moved) {
+      cam.alt += dAlt * k;
+      cam.lat += dLat * k;
+      cam.lon += dLon * k;
+      updateScene();
+    }
     if (dirty) {
       renderer.render(scene, camera);
       dirty = false;
