@@ -30704,6 +30704,7 @@
     let paused = false;
     let lastLog = "press H to fly to your castle \xB7 click an unclaimed keep to claim it";
     const BUILD_TAG = o.build ?? "";
+    const ADMIN = !!o.admin;
     const cellSize = Math.PI * o.R / 2 / o.TERR_PER_FACE;
     const nodeKey = (f, tu, tv) => `${f}/${tu}/${tv}`;
     const edgeKeyOf = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -30869,6 +30870,7 @@
         home: new Vector3(1, 0, 0)
       });
     }
+    if (ADMIN) realms[0].res = { grain: 9999999, timber: 9999999, ore: 9999999, gold: 9999999 };
     const allNodes = [...nodes2.values()];
     const nearestTo = (dir, pool) => {
       let best = null;
@@ -31657,7 +31659,7 @@
     function claimNode(n, realmId) {
       const r = realms[realmId];
       if (!r) return false;
-      if (realmId === 0) {
+      if (realmId === 0 && !ADMIN) {
         if (r.res.grain < CLAIM_GRAIN || r.res.gold < CLAIM_GOLD) {
           say("not enough gold or grain to claim");
           return false;
@@ -31713,6 +31715,102 @@
             if (target2) marchFrom(from.key, target2.key);
           }
         }
+      }
+    }
+    const SAVE_KEY = "realms.save.v1";
+    const SAVE_VERSION = 1;
+    const AUTOSAVE_EVERY = 12;
+    let saveClock = 0;
+    let lastSaveNote = "not saved yet";
+    function serialize() {
+      const owned = [];
+      for (const n of nodes2.values()) {
+        if (n.owner < 0) continue;
+        owned.push([n.key, n.owner, n.level, n.garrison, +n.morale.toFixed(3)]);
+      }
+      return {
+        v: SAVE_VERSION,
+        seed: o.SEED,
+        t: +worldTime.toFixed(1),
+        nodes: owned,
+        realms: realms.map((r) => ({ id: r.id, alive: r.alive, hearth: r.hearth, capital: r.capital, res: { ...r.res } })),
+        hosts: hosts.map((h) => ({ ...h, path: h.path.slice() })),
+        trade: [...tradeRoutes]
+      };
+    }
+    function restore(b) {
+      if (!b || b.v !== SAVE_VERSION || b.seed !== o.SEED) return false;
+      for (const n of nodes2.values()) {
+        n.owner = -1;
+        n.level = 1;
+        n.garrison = 0;
+        n.morale = 1;
+      }
+      hosts.length = 0;
+      tradeRoutes.clear();
+      for (const [key2, owner, level, garrison, morale] of b.nodes) {
+        const n = nodes2.get(key2);
+        if (!n) continue;
+        n.owner = owner;
+        n.level = level;
+        n.garrison = garrison;
+        n.morale = morale;
+      }
+      for (const rs of b.realms) {
+        const r = realms[rs.id];
+        if (!r) continue;
+        r.alive = rs.alive;
+        r.hearth = rs.hearth;
+        r.capital = rs.capital;
+        r.res = { ...rs.res };
+      }
+      for (const h of b.hosts) hosts.push({ ...h, path: h.path.slice() });
+      for (const t of b.trade) tradeRoutes.add(t);
+      worldTime = b.t;
+      ownersChanged();
+      dirtyTerritory = true;
+      return true;
+    }
+    function tryRestore() {
+      try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (!raw) return { restored: false };
+        const b = JSON.parse(raw);
+        const ok = restore(b);
+        if (ok) lastSaveNote = `restored ${b.nodes.length} keeps from ${new Date(b.t * 1e3).toISOString().slice(11, 19)} of world time`;
+        return { restored: ok, keeps: ok ? b.nodes.length : 0, at: b.t };
+      } catch {
+        return { restored: false };
+      }
+    }
+    function saveNow() {
+      try {
+        localStorage.setItem(SAVE_KEY, JSON.stringify(serialize()));
+        lastSaveNote = `saved ${ownedTotal()} keeps at ${Math.floor(worldTime)}s`;
+        return true;
+      } catch {
+        lastSaveNote = "save failed (storage full or blocked)";
+        return false;
+      }
+    }
+    function ownedTotal() {
+      let owned = 0;
+      for (const n of nodes2.values()) if (n.owner >= 0) owned++;
+      return owned;
+    }
+    function tickSave(dt) {
+      if (paused) return;
+      saveClock += dt;
+      if (saveClock < AUTOSAVE_EVERY) return;
+      saveClock = 0;
+      saveNow();
+    }
+    function clearSave() {
+      try {
+        localStorage.removeItem(SAVE_KEY);
+        return true;
+      } catch {
+        return false;
       }
     }
     const territoryGeo = new CircleGeometry(cellSize * 0.52, 14);
@@ -32207,6 +32305,18 @@
     </div>`;
       html += `<div class="row"><span>Holdings</span><b>${mine.length} keep${mine.length === 1 ? "" : "s"}</b></div>`;
       const garrisonTotal = mine.reduce((s, k) => s + k.garrison, 0);
+      const myGround = ownedBy(0);
+      const firstHost = hosts.some((h) => h.owner === 0 && !h.routed);
+      const capNode = realms[0].capital ? nodes2.get(realms[0].capital) : null;
+      let objective = "claim a keep beside your roads (click it)";
+      if (myGround.length > 1) objective = "muster a levy at your capital (M)";
+      if (firstHost) objective = "double-click a keep to order it taken";
+      if (myGround.length > 3) objective = `raise your capital to level ${HEARTH_MIN_LEVEL} (U), then raise the Hearth`;
+      if (realms[0].hearth) objective = "take a rival keep: cut its roads, then march";
+      if (capNode && capNode.level < HEARTH_MIN_LEVEL && myGround.length > 3) objective = `upgrade the capital to level ${HEARTH_MIN_LEVEL} (U), then raise the Hearth`;
+      html += `<div class="row"><span>Next</span><b style="color:#9fd7ff">${objective}</b></div>`;
+      html += `<div class="row"><span>World</span><b>${lastSaveNote.includes("failed") ? "save failing" : "saved \xB7 S to save, Shift+S to reset"}</b></div>`;
+      if (ADMIN) html += `<div class="row"><span>Mode</span><b style="color:#8fd0ff">creative \xB7 unlimited stores</b></div>`;
       html += `<div class="row"><span>Hearth</span><b style="color:${me.hearth ? "#7fd6a2" : "#e8c66a"}">${me.hearth ? "raised \xB7 household" : "not raised \xB7 levies only"}</b></div>`;
       html += `<div class="row"><span>Garrisoned</span><b>${nf(garrisonTotal)} men</b></div>`;
       html += `<div class="row"><span>In the field</span><b>${nf(men)} men${marches ? ` \xB7 ${marches} marching` : ""}</b></div>`;
@@ -32292,13 +32402,13 @@
         return true;
       }
       if (n.owner < 0) {
-        if (!adjacentToRealm(n, 0)) {
+        if (!ADMIN && !adjacentToRealm(n, 0)) {
           selected = n.key;
           say("out of reach: claim a keep that touches your roads first");
           return true;
         }
         const me = realms[0];
-        if (me.res.grain < CLAIM_GRAIN || me.res.gold < CLAIM_GOLD) {
+        if (!ADMIN && (me.res.grain < CLAIM_GRAIN || me.res.gold < CLAIM_GOLD)) {
           selected = n.key;
           say(`claiming needs ${CLAIM_GRAIN} grain and ${CLAIM_GOLD} gold`);
           return true;
@@ -32546,6 +32656,13 @@
       dblclick,
       actForTest: (verb, key2) => act(verb, key2),
       tradeCount: () => tradeRoutes.size,
+      admin: () => ADMIN,
+      tryRestore,
+      tickSave,
+      saveNow,
+      clearSave,
+      saveNote: () => lastSaveNote,
+      ownedTotal,
       cartCount: () => carts.length,
       /** Diagnostic: hide the merchant fleet so its contribution can be measured by frame diff. */
       showCarts: (on) => {
@@ -32768,7 +32885,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 16:40";
+  var BUILD = "2026-11-09 16:58";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
@@ -32924,7 +33041,7 @@
   renderer.shadowMap.needsUpdate = true;
   var shadowClock = 1;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = Number(params.get("expo") ?? 0.72);
+  renderer.toneMappingExposure = Number(params.get("expo") ?? 0.665);
   renderer.outputColorSpace = SRGBColorSpace;
   var scene = new Scene();
   var fog = new Fog(12175554, 1e6, 2e6);
@@ -34390,6 +34507,18 @@
       report();
       return;
     }
+    if (e.key === "s" || e.key === "S") {
+      if (world) {
+        if (e.shiftKey) {
+          world.clearSave();
+          console.log("[realms] checkpoint cleared: this seed starts fresh");
+        } else {
+          world.saveNow();
+          console.log("[realms]", world.saveNote());
+        }
+      }
+      return;
+    }
     if (e.key === "[") location.search = `?seed=${SEED - 1}`;
     if (e.key === "]") location.search = `?seed=${SEED + 1}`;
   });
@@ -34770,6 +34899,7 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
           console.log("[realms]", line);
         },
         build: BUILD,
+        admin: params.get("admin") === "1",
         terrainH: (dir) => sample(dir, false).h,
         meshHeightAt: (dir) => meshHeightAt(dir),
         /** Radius of the ribbon surface at a station, for measuring whether the road is buried. */
@@ -34789,6 +34919,13 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
       window.__world = world;
       if (hud) hud.textContent = `generating planet ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`;
       console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`);
+      if (world) {
+        const r = world.tryRestore();
+        if (r.restored) console.log(`[realms] resumed ${r.keeps} keeps at ${r.at}s of world time`);
+      }
+      window.addEventListener("beforeunload", () => {
+        world?.saveNow();
+      });
       syncCastles();
       tMark = performance.now();
       renderer.compile(scene, camera);
@@ -34909,6 +35046,7 @@ build ${BUILD}`;
     if (world && worldClock >= 0.033) {
       tMark = performance.now();
       world.tick(worldClock);
+      world.tickSave(worldClock);
       world.render();
       const tickCost = performance.now() - tMark;
       emaTickMs = emaTickMs * 0.9 + tickCost * 0.1;
