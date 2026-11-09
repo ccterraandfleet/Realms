@@ -31633,7 +31633,6 @@
         if (myHosts.length < 2 && r.res.grain > 200 && r.res.gold > 80) {
           const from = mine[Math.floor(Math.random() * mine.length)];
           if (muster(from.key)) {
-            const host = hosts[hosts.length - 1];
             let target2 = null;
             let bd = Infinity;
             for (const n of nodes2.values()) {
@@ -31645,7 +31644,7 @@
                 target2 = n;
               }
             }
-            if (target2) orderMarch(host, target2.key);
+            if (target2) marchFrom(from.key, target2.key);
           }
         }
       }
@@ -31855,6 +31854,10 @@
     const _cq = new Quaternion();
     const _cq2 = new Quaternion();
     const _cscale = new Vector3();
+    const _cpos = new Vector3();
+    const _cspin = new Quaternion();
+    const FWD_AXIS = new Vector3(0, 0, 1);
+    const WHEEL_AXIS = new Vector3(1, 0, 0);
     const _ccol = new Color();
     const cartScaleFor = (alt) => Math.max(1, Math.min(3.4, alt / 90));
     function drawCarts() {
@@ -31864,6 +31867,7 @@
       }
       const alt = Math.max(0, o.camera.position.length() - o.R);
       const sc = cartScaleFor(alt);
+      const cartCull = Math.max(340, alt * 7);
       let bedN = 0, wheelN = 0, canopyN = 0;
       for (const c of carts) {
         const e = edges.get(c.edge);
@@ -31881,11 +31885,12 @@
         _cp2.sub(_cp);
         if (_cp2.lengthSq() < 1e-8) continue;
         _cside.crossVectors(_cp2.normalize(), _cup.copy(_cp).normalize()).normalize();
+        if (_cp.distanceToSquared(o.camera.position) > cartCull * cartCull) continue;
         const lane = CART_LANE * sc * 0.5;
         _cp.addScaledVector(_cside, -lane);
         _ctan.copy(_cp2).normalize();
         _cup.copy(_cp).normalize();
-        _cq.setFromUnitVectors(new Vector3(0, 0, 1), _ctan);
+        _cq.setFromUnitVectors(FWD_AXIS, _ctan);
         _cscale.set(sc, sc, sc);
         _cmat.compose(_cp, _cq, _cscale);
         cartBed.setMatrixAt(bedN, _cmat);
@@ -31893,15 +31898,17 @@
         const col = realms[c.owner]?.colour ?? 16777215;
         _ccol.setHex(col);
         cartCanopy.instanceColor.setXYZ(canopyN, _ccol.r, _ccol.g, _ccol.b);
-        _cmat.compose(_cp.clone().addScaledVector(_cup, 0.42 * sc), _cq, _cscale);
+        _cpos.copy(_cp).addScaledVector(_cup, 0.42 * sc);
+        _cmat.compose(_cpos, _cq, _cscale);
         cartCanopy.setMatrixAt(canopyN, _cmat);
         canopyN++;
-        for (const side of [-1, 1]) {
+        for (let w = 0; w < 2; w++) {
+          const side = w === 0 ? -1 : 1;
           _cq2.copy(_cq);
-          const spin = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), c.phase * side);
-          _cq2.multiply(spin);
-          const wp = _cp.clone().addScaledVector(_cside, side * 0.48 * sc).addScaledVector(_cup, 0.16 * sc);
-          _cmat.compose(wp, _cq2, _cscale);
+          _cspin.setFromAxisAngle(WHEEL_AXIS, c.phase * side);
+          _cq2.multiply(_cspin);
+          _cpos.copy(_cp).addScaledVector(_cside, side * 0.48 * sc).addScaledVector(_cup, 0.16 * sc);
+          _cmat.compose(_cpos, _cq2, _cscale);
           cartWheels.setMatrixAt(wheelN, _cmat);
           wheelN++;
         }
@@ -32692,7 +32699,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 15:03";
+  var BUILD = "2026-11-09 15:24";
   var LIFT = Number(params.get("lift") ?? 1.32);
   var R = 2e3;
   var RELIEF = 0.011;
@@ -32828,6 +32835,7 @@
   var SCALE_PIN = Number(params.get("scale") ?? 0);
   var qualityScale = SCALE_PIN > 0 ? SCALE_PIN : Math.min(1, Number(params.get("dpr") ?? 1));
   renderer.setPixelRatio(qualityScale);
+  renderer.debug.checkShaderErrors = new URLSearchParams(location.search).get("shaderdebug") === "1";
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFSoftShadowMap;
@@ -33050,6 +33058,7 @@
       iv,
       mesh,
       trees,
+      lastWanted: performance.now(),
       centre: centreDir.clone().multiplyScalar(R),
       radius: R * span * 0.8
     };
@@ -33078,6 +33087,10 @@
   var liveLevels = 0;
   var considered = 0;
   var passed = 0;
+  var PATCH_KEEP_MS = 8e3;
+  var PATCH_CACHE_MAX = 460;
+  var DISPOSE_PER_PASS = 10;
+  var trash = [];
   var BUILD_BUDGET = 420;
   var BUILD_MS = 6;
   var centreScratch = new Vector3();
@@ -33121,7 +33134,14 @@
       const key = `${face}/${level}/${iu}/${iv}`;
       wanted.add(key);
       deepest = Math.max(deepest, level);
-      if (!nodes.has(key) && builtThisPass < BUILD_BUDGET && buildMs < BUILD_MS) {
+      const reused = nodes.get(key);
+      if (reused) {
+        reused.lastWanted = performance.now();
+        if (!reused.mesh.visible) {
+          reused.mesh.visible = true;
+          if (reused.trees) reused.trees.visible = true;
+        }
+      } else if (builtThisPass < BUILD_BUDGET && buildMs < BUILD_MS) {
         builtThisPass++;
         const bt = performance.now();
         const node = buildNode(face, level, iu, iv);
@@ -33138,12 +33158,20 @@
         for (let iv0 = 0; iv0 < 4; iv0++) consider(f, 2, iu0, iv0);
       }
     }
+    const nowMs2 = performance.now();
     for (const [key, node] of nodes) {
-      if (!wanted.has(key)) {
-        disposeNode(node);
+      if (wanted.has(key)) continue;
+      if (node.mesh.visible) {
+        node.mesh.visible = false;
+        if (node.trees) node.trees.visible = false;
+      }
+      const stale = nowMs2 - node.lastWanted > PATCH_KEEP_MS;
+      if (stale || nodes.size > PATCH_CACHE_MAX) {
+        trash.push(node);
         nodes.delete(key);
       }
     }
+    for (let i = 0; i < DISPOSE_PER_PASS && trash.length; i++) disposeNode(trash.pop());
     buildBacklog = 0;
     for (const k of wanted) if (!nodes.has(k)) buildBacklog++;
     liveLevels = deepest;
@@ -33441,7 +33469,9 @@
   var lastKey = "";
   var stageTimes = { place: [], tree: [], sync: [], seats: [], syncRoads: [], castleBuild: [] };
   var stageMark = 0;
+  var stallStage = "idle";
   var mark = (name) => {
+    stallStage = name;
     const now2 = performance.now();
     const arr = stageTimes[name];
     arr.push(now2 - stageMark);
@@ -34308,6 +34338,10 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
       Object.assign(aim, v);
     },
     cam: () => ({ ...cam }),
+    stalls: () => stallLog.slice(),
+    clearStalls: () => {
+      stallLog.length = 0;
+    },
     aim: () => ({ ...aim }),
     render: () => renderer.render(scene, camera),
     // how far UP the screen world-north points at the current target, and the camera tilt:
@@ -34592,13 +34626,38 @@ build ${BUILD}`;
   var emaGap = 16;
   var qualityFrames = 0;
   var movedLast = false;
+  var MAX_SCALE_CHANGES = 3;
+  var scaleChanges = 0;
+  var scaleLocked = false;
+  var lastScaleChange = performance.now();
+  var emaTickMs = 0;
+  var emaDrawMs = 0;
   var tMark = 0;
   var push = (arr, v) => {
     arr.push(v);
     if (arr.length > 90) arr.shift();
   };
+  var stallLog = [];
+  var lastFrameStamp = performance.now();
+  var lastWorkMs = 0;
   renderer.setAnimationLoop(() => {
     const frameStart = performance.now();
+    const gap = frameStart - lastFrameStamp;
+    lastFrameStamp = frameStart;
+    if (gap > 350 && lastWorkMs > 120 && stallLog.length < 60) {
+      const mem = performance.memory;
+      stallLog.push({
+        ms: Math.round(gap),
+        workMs: Math.round(lastWorkMs),
+        alt: Math.round(cam.alt),
+        patches: nodes.size,
+        considered,
+        roads: roadStats.pairs ?? 0,
+        carts: world ? world.cartCount?.() ?? -1 : -1,
+        heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : -1,
+        stage: stallStage
+      });
+    }
     const now2 = performance.now();
     const dt = Math.min(0.05, (now2 - lastT) / 1e3);
     lastT = now2;
@@ -34634,7 +34693,9 @@ build ${BUILD}`;
       tMark = performance.now();
       world.tick(worldClock);
       world.render();
-      push(fTick, performance.now() - tMark);
+      const tickCost = performance.now() - tMark;
+      emaTickMs = emaTickMs * 0.9 + tickCost * 0.1;
+      push(fTick, tickCost);
       worldClock = 0;
       dirty = true;
     }
@@ -34646,28 +34707,32 @@ build ${BUILD}`;
     if (dirty) {
       tMark = performance.now();
       renderer.render(scene, camera);
-      push(fDraw, performance.now() - tMark);
+      const drawCost = performance.now() - tMark;
+      emaDrawMs = emaDrawMs * 0.9 + drawCost * 0.1;
+      push(fDraw, drawCost);
       dirty = false;
       report();
     }
     const work = performance.now() - frameStart;
+    lastWorkMs = work;
     push(fTotal, work);
-    if (!SCALE_PIN) {
+    if (!SCALE_PIN && !scaleLocked) {
       emaWork = emaWork * 0.9 + work * 0.1;
       emaGap = emaGap * 0.9 + Math.min(dt * 1e3, 100) * 0.1;
       qualityFrames++;
-      if (qualityFrames >= 45) {
+      if (qualityFrames >= 90 && now2 - lastScaleChange > 6e3) {
         qualityFrames = 0;
-        if ((emaWork > 18 || emaGap > 30) && qualityScale > 0.55) {
-          qualityScale = Math.max(0.55, qualityScale * 0.85);
+        let next = qualityScale;
+        if (emaWork > 18 || emaGap > 30) next = Math.max(0.55, qualityScale * 0.85);
+        else if (emaWork < 6 && emaGap < 17 && qualityScale < 1) next = Math.min(1, qualityScale * 1.08);
+        if (Math.abs(next - qualityScale) > 1e-3) {
+          qualityScale = next;
+          scaleChanges++;
+          lastScaleChange = now2;
           renderer.setPixelRatio(qualityScale);
           renderer.setSize(innerWidth, innerHeight, false);
           markDirty();
-        } else if (emaWork < 8 && emaGap < 19 && qualityScale < 1) {
-          qualityScale = Math.min(1, qualityScale * 1.08);
-          renderer.setPixelRatio(qualityScale);
-          renderer.setSize(innerWidth, innerHeight, false);
-          markDirty();
+          if (scaleChanges >= MAX_SCALE_CHANGES) scaleLocked = true;
         }
       }
     }
