@@ -32699,12 +32699,20 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 15:34";
-  var LIFT = Number(params.get("lift") ?? 1.32);
+  var BUILD = "2026-11-09 16:04";
+  var LIFT = Number(params.get("lift") ?? 1.1);
+  var SAT_BOOST = Number(params.get("sat") ?? 1.18);
+  var _hsl = { h: 0, s: 0, l: 0 };
+  var _triCol = new Color();
+  function saturate(c) {
+    c.getHSL(_hsl);
+    c.setHSL(_hsl.h, Math.min(1, _hsl.s * SAT_BOOST), _hsl.l);
+    return c;
+  }
   var R = 2e3;
   var RELIEF = 0.011;
   var SEA = -0.19;
-  var GRID = 16;
+  var GRID = 20;
   var MAX_LEVEL = 13;
   var TERR_PER_FACE = 46;
   var TERRITORIES = 6 * TERR_PER_FACE * TERR_PER_FACE;
@@ -32843,7 +32851,7 @@
   renderer.shadowMap.needsUpdate = true;
   var shadowClock = 1;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = Number(params.get("expo") ?? 1.2);
+  renderer.toneMappingExposure = Number(params.get("expo") ?? 0.72);
   renderer.outputColorSpace = SRGBColorSpace;
   var scene = new Scene();
   var fog = new Fog(12175554, 1e6, 2e6);
@@ -32851,14 +32859,14 @@
   scene.background = new Color(660512);
   var aspect2 = innerWidth / innerHeight;
   var camera = new PerspectiveCamera(38, aspect2, 0.5, 4e4);
-  var sun = new DirectionalLight(16773589, Number(params.get("sun") ?? 2.75));
+  var sun = new DirectionalLight(16773589, Number(params.get("sun") ?? 2.2));
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
   sun.shadow.bias = -9e-4;
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 800;
   scene.add(sun);
-  var hemi = new HemisphereLight(13621974, 9076562, Number(params.get("hemi") ?? 1.5));
+  var hemi = new HemisphereLight(13621974, 9076562, Number(params.get("hemi") ?? 1.18));
   scene.add(hemi);
   var atmo = null;
   var atmoFade = { value: 1 };
@@ -32983,18 +32991,23 @@
         const cls = mean <= SEA ? OCEAN : S[k00].cls;
         const list = cls === OCEAN ? [2912146, 2779273] : PALETTE[cls] ?? PALETTE[PLAINS];
         c.setHex(list[Math.floor(ih3(face, iu * 977 + i, iv * 613 + j, 3) * list.length)]);
-        c.multiplyScalar((0.9 + ih3(face, iu * 131 + i, iv * 197 + j, 11) * 0.2) * LIFT);
+        c.multiplyScalar((0.86 + ih3(face, iu * 131 + i, iv * 197 + j, 11) * 0.34) * LIFT);
         const facing = S[k00].h + S[k01].h - (S[k10].h + S[k11].h);
-        c.multiplyScalar(1 + Math.max(-0.45, Math.min(0.45, facing * 26)) * 0.32);
+        c.multiplyScalar(1 + Math.max(-0.5, Math.min(0.5, facing * 30)) * 0.5);
+        saturate(c);
         const quad = [
           [k00, k10, k11],
           [k00, k11, k01]
         ];
-        for (const tri of quad) {
+        for (let t = 0; t < 2; t++) {
+          const tri = quad[t];
+          _triCol.copy(c).multiplyScalar(
+            0.93 + ih3(face, iu * 313 + i, iv * 271 + j + t * 91, 29) * 0.16
+          );
           for (const k of tri) {
             const r = radiusAt(k);
             positions.push(P[k].x * r, P[k].y * r, P[k].z * r);
-            colors.push(c.r, c.g, c.b);
+            colors.push(_triCol.r, _triCol.g, _triCol.b);
           }
         }
       }
@@ -33087,12 +33100,12 @@
   var liveLevels = 0;
   var considered = 0;
   var passed = 0;
+  var buildBudgetMs = 6;
   var PATCH_KEEP_MS = 8e3;
   var PATCH_CACHE_MAX = 460;
   var DISPOSE_PER_PASS = 10;
   var trash = [];
   var BUILD_BUDGET = 420;
-  var BUILD_MS = 6;
   var centreScratch = new Vector3();
   var lastBuildMs = 0;
   var nodeScratch = 0;
@@ -33141,7 +33154,7 @@
           reused.mesh.visible = true;
           if (reused.trees) reused.trees.visible = true;
         }
-      } else if (builtThisPass < BUILD_BUDGET && buildMs < BUILD_MS) {
+      } else if (builtThisPass < BUILD_BUDGET && buildMs < buildBudgetMs) {
         builtThisPass++;
         const bt = performance.now();
         const node = buildNode(face, level, iu, iv);
@@ -33868,28 +33881,46 @@
   var BEACON_MAX = 1400;
   var beaconGeo = null;
   var beacons = null;
+  var beaconRoofs = null;
+  var _stone = new Color();
   var seatCache = /* @__PURE__ */ new Map();
   var _bm = new Matrix4();
   var _bq = new Quaternion();
   var _bs = new Vector3();
   var _bup = new Vector3(0, 1, 0);
-  function beaconGeometry() {
+  var beaconRoofGeo = null;
+  function beaconWallGeometry() {
     if (beaconGeo) return beaconGeo;
     const parts = [];
-    const keep = new BoxGeometry(0.9, 0.5, 0.9);
-    keep.translate(0, 0.25, 0);
+    const keep = new BoxGeometry(0.86, 0.52, 0.86);
+    keep.translate(0, 0.26, 0);
     parts.push(keep);
-    for (const [x, z] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]]) {
-      const t = new BoxGeometry(0.28, 0.72, 0.28);
-      t.translate(x, 0.36, z);
+    for (const [w, d, x, z] of [[0.62, 0.16, 0, -0.43], [0.62, 0.16, 0, 0.43], [0.16, 0.62, -0.43, 0], [0.16, 0.62, 0.43, 0]]) {
+      const wall = new BoxGeometry(w, 0.3, d);
+      wall.translate(x, 0.15, z);
+      parts.push(wall);
+    }
+    for (const [x, z] of [[-0.43, -0.43], [0.43, -0.43], [-0.43, 0.43], [0.43, 0.43]]) {
+      const t = new BoxGeometry(0.26, 0.8, 0.26);
+      t.translate(x, 0.4, z);
       parts.push(t);
     }
-    const roof = new ConeGeometry(0.46, 0.46, 4);
-    roof.rotateY(Math.PI / 4);
-    roof.translate(0, 0.72, 0);
-    parts.push(roof);
     beaconGeo = mergeGeometries(parts);
     return beaconGeo;
+  }
+  function beaconRoofGeometry() {
+    if (beaconRoofGeo) return beaconRoofGeo;
+    const parts = [];
+    const main = new ConeGeometry(0.52, 0.5, 8);
+    main.translate(0, 0.78, 0);
+    parts.push(main);
+    for (const [x, z] of [[-0.43, -0.43], [0.43, -0.43], [-0.43, 0.43], [0.43, 0.43]]) {
+      const c = new ConeGeometry(0.2, 0.26, 6);
+      c.translate(x, 0.92, z);
+      parts.push(c);
+    }
+    beaconRoofGeo = mergeGeometries(parts);
+    return beaconRoofGeo;
   }
   function seatCached(face, tu, tv) {
     const key = `${face}/${tu}/${tv}`;
@@ -33905,19 +33936,24 @@
   var terrainVersion = 0;
   var cameraMoving = false;
   var roadJob = null;
+  var pendingRoad = null;
   function startRoadJob(face, cu, cv, reach) {
-    roadJob = syncRoadsJob(face, cu, cv, reach);
-    lastRoadBuild = performance.now();
+    pendingRoad = { face, cu, cv, reach };
   }
   function pumpRoadJob(budgetMs) {
-    if (!roadJob) return false;
+    if (!roadJob) {
+      if (!pendingRoad) return false;
+      const q = pendingRoad;
+      pendingRoad = null;
+      roadJob = syncRoadsJob(q.face, q.cu, q.cv, q.reach);
+    }
     const t0 = performance.now();
     for (; ; ) {
       const step = roadJob.next();
       if (step.done) {
         roadJob = null;
         lastRoadBuild = performance.now();
-        return false;
+        return pendingRoad !== null;
       }
       if (performance.now() - t0 > budgetMs) return true;
     }
@@ -33937,6 +33973,7 @@
       clearDetail();
       clearRoads();
       if (beacons) beacons.count = 0;
+      if (beaconRoofs) beaconRoofs.count = 0;
       return;
     }
     const face = faceOf(up);
@@ -33971,11 +34008,12 @@
     }
     lastSeats = seats.length;
     mark("seats");
-    const roadsDue = force || !cameraMoving && performance.now() - lastRoadBuild > 250;
+    const roadsDue = force || performance.now() - lastRoadBuild > 350;
     if (roadsDue) startRoadJob(face, cu, cv, reach);
     if (near) {
       lastTier = "detail";
       if (beacons) beacons.count = 0;
+      if (beaconRoofs) beaconRoofs.count = 0;
       stageMark = performance.now();
       let castleMs = 0;
       for (const s of seats) {
@@ -33988,6 +34026,8 @@
         g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
+        g.userData.bornAt = performance.now();
+        g.scale.setScalar(1.15 * 0.55);
         castles.set(s.key, g);
         castleGroup.add(g);
         castleMs += performance.now() - cb0;
@@ -34005,12 +34045,19 @@
     clearDetail();
     if (!beacons) {
       beacons = new InstancedMesh(
-        beaconGeometry(),
-        new MeshStandardMaterial({ color: 16777215, roughness: 0.8, metalness: 0.02 }),
+        beaconWallGeometry(),
+        new MeshStandardMaterial({ color: 16777215, roughness: 0.86, metalness: 0.02 }),
         BEACON_MAX
       );
       beacons.frustumCulled = false;
       castleGroup.add(beacons);
+      beaconRoofs = new InstancedMesh(
+        beaconRoofGeometry(),
+        new MeshStandardMaterial({ color: 16777215, roughness: 0.62, metalness: 0.05 }),
+        BEACON_MAX
+      );
+      beaconRoofs.frustumCulled = false;
+      castleGroup.add(beaconRoofs);
     }
     const grow = Math.max(1, Math.min(12, cam.alt / 45));
     let n = 0;
@@ -34026,12 +34073,22 @@
         _bs
       );
       beacons.setMatrixAt(n, _bm);
-      beacons.setColorAt(n, tint);
+      _stone.setHex(10130308).multiplyScalar(0.9 + s.key.length % 5 * 0.03);
+      beacons.setColorAt(n, _stone);
+      if (beaconRoofs) {
+        beaconRoofs.setMatrixAt(n, _bm);
+        beaconRoofs.setColorAt(n, tint);
+      }
       n++;
     }
     if (beacons.instanceColor) beacons.instanceColor.needsUpdate = true;
     beacons.count = n;
     beacons.instanceMatrix.needsUpdate = true;
+    if (beaconRoofs) {
+      if (beaconRoofs.instanceColor) beaconRoofs.instanceColor.needsUpdate = true;
+      beaconRoofs.count = n;
+      beaconRoofs.instanceMatrix.needsUpdate = true;
+    }
   }
   function faceOf(d) {
     const ax = Math.abs(d.x);
@@ -34712,7 +34769,23 @@ build ${BUILD}`;
       syncCastles();
       markDirty();
     }
-    if (roadJob) {
+    buildBudgetMs = emaWork > 12 ? 4 : 11;
+    if (castles.size) {
+      const nowMs = performance.now();
+      for (const g of castles.values()) {
+        const born = g.userData.bornAt;
+        if (born === void 0) continue;
+        const k2 = Math.min(1, (nowMs - born) / 200);
+        if (k2 >= 1) {
+          g.scale.setScalar(1.15);
+          g.userData.bornAt = void 0;
+          continue;
+        }
+        const e = 1 - Math.pow(1 - k2, 3);
+        g.scale.setScalar(1.15 * (0.55 + 0.45 * e));
+      }
+    }
+    if (roadJob || pendingRoad) {
       tMark = performance.now();
       pumpRoadJob(emaWork > 12 ? 3 : 9);
       push(fUpdate, performance.now() - tMark);
