@@ -21073,7 +21073,16 @@
     selectedPlot = null;
   };
   cam.resize(vw(), vh());
-  goHome(9);
+  var rawX = params.get("x");
+  var rawZ = params.get("z");
+  var rawS = params.get("s");
+  var pv = { x: Number(rawX), z: Number(rawZ), s: Number(rawS) };
+  var hasView = rawX !== null && rawZ !== null && rawS !== null && Number.isFinite(pv.x) && Number.isFinite(pv.z) && Number.isFinite(pv.s);
+  if (hasView) {
+    cam.centre(Math.floor(pv.z) * world.w + Math.floor(pv.x), pv.s, world);
+  } else {
+    goHome(9);
+  }
   cam.snap();
   window.__realms = { world, game, scene, cam };
   var dragging = false;
@@ -21142,8 +21151,12 @@
     selectedPlot = null;
   }
   window.addEventListener("keydown", (e) => {
+    const target = e.target;
+    if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable)) return;
     const k = e.key.toLowerCase();
     if (k === "f") fitMap();
+    if (/^[1-5]$/.test(e.key)) goToStyle(STYLE_IDS[Number(e.key) - 1]);
+    if (k === "t") document.getElementById("rvtoggle").click();
     if (k === "h") goHome();
     if (k === "=" || k === "+") cam.zoomCentre(1.3, world);
     if (k === "-" || k === "_") cam.zoomCentre(1 / 1.3, world);
@@ -21152,6 +21165,98 @@
       document.getElementById("speed").textContent = speed === 0 ? "Paused" : `${speed}x`;
       e.preventDefault();
     }
+  });
+  var STYLE_IDS = ["A", "B", "C", "D", "E"];
+  var STYLE_NAMES = {
+    A: "facets",
+    B: "grain",
+    C: "terraces",
+    D: "painterly",
+    E: "drawn contours"
+  };
+  var currentStyle = (params.get("land") ?? "A").toUpperCase();
+  function viewLink() {
+    const scale = Math.round(cam.cur.scale * 100) / 100;
+    const cx = ((vw() / 2 - cam.cur.x) / cam.cur.scale).toFixed(1);
+    const cz = ((vh() / 2 - cam.cur.y) / cam.cur.scale).toFixed(1);
+    return `${location.origin}${location.pathname}?land=${currentStyle}&x=${cx}&z=${cz}&s=${scale}`;
+  }
+  function goToStyle(id) {
+    location.href = viewLink().replace(`land=${currentStyle}`, `land=${id}`);
+  }
+  var styleRow = document.getElementById("rvstyles");
+  styleRow.innerHTML = STYLE_IDS.map(
+    (id) => `<button data-style="${id}" class="${id === currentStyle ? "on" : ""}" title="${STYLE_NAMES[id]}">${id}</button>`
+  ).join("");
+  styleRow.querySelectorAll("[data-style]").forEach((btn) => {
+    btn.addEventListener("click", () => goToStyle(btn.dataset.style));
+  });
+  var notesEl = document.getElementById("notes");
+  var copiedEl = document.getElementById("rvcopied");
+  var fallbackEl = document.createElement("textarea");
+  fallbackEl.id = "rvfallback";
+  fallbackEl.readOnly = true;
+  fallbackEl.style.display = "none";
+  copiedEl.after(fallbackEl);
+  var NOTE_KEY = `realms.notes.${currentStyle}`;
+  notesEl.value = localStorage.getItem(NOTE_KEY) ?? "";
+  notesEl.addEventListener("input", () => localStorage.setItem(NOTE_KEY, notesEl.value));
+  async function copyText(text, label) {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      ok = legacyCopy(text);
+    }
+    if (ok) {
+      copiedEl.textContent = label;
+      fallbackEl.style.display = "none";
+    } else {
+      copiedEl.textContent = "Select and copy from the box:";
+      fallbackEl.style.display = "block";
+      fallbackEl.value = text;
+      fallbackEl.focus();
+      fallbackEl.select();
+    }
+    setTimeout(() => {
+      if (ok) copiedEl.textContent = "";
+    }, 3200);
+  }
+  function legacyCopy(text) {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+  document.getElementById("copyview").addEventListener("click", () => {
+    copyText(viewLink(), "View link copied");
+  });
+  document.getElementById("copynote").addEventListener("click", () => {
+    const note = notesEl.value.trim();
+    const lines = [
+      `LAND ${currentStyle} \xB7 ${STYLE_NAMES[currentStyle]}`,
+      viewLink(),
+      note ? `NOTE: ${note}` : "NOTE: (none typed)"
+    ];
+    copyText(lines.join("\n"), "Note copied, paste it to me");
+  });
+  document.getElementById("rvtoggle").addEventListener("click", () => {
+    const el2 = document.getElementById("review");
+    el2.classList.toggle("collapsed");
+    document.getElementById("rvtoggle").textContent = el2.classList.contains("collapsed") ? "+" : "\u2013";
+  });
+  document.querySelectorAll(".rvstyles button").forEach((b) => {
+    if (b.dataset.style === currentStyle) b.classList.add("on");
   });
   var el = (id) => document.getElementById(id);
   var statsEl = el("stats");

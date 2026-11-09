@@ -147,3 +147,81 @@ button.wide em { font-style: normal; font-size: 9px; color: var(--ink-dim); }
   pointer-events: none;
 }
 #flash.show { opacity: 1; }
+
+/* ------------------------------------------------------- review harness */
+#review {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 12;
+  width: 288px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+.rvhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.rvtitle { font-size: 9px; letter-spacing: 0.16em; color: var(--gold); }
+.rvtoggle { padding: 0 7px; font-size: 12px; line-height: 1.1; }
+.rvbody { padding: 9px 10px 10px; }
+#review.collapsed .rvbody { display: none; }
+
+.rvstyles { display: flex; gap: 5px; margin-bottom: 8px; }
+.rvstyles button {
+  flex: 1;
+  padding: 5px 0;
+  font-weight: 700;
+  font-size: 11px;
+}
+.rvstyles button.on {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #1a1a12;
+}
+
+#notes {
+  width: 100%;
+  min-height: 58px;
+  resize: vertical;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: rgba(8, 12, 14, 0.55);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+#notes:focus { outline: none; border-color: rgba(230, 193, 104, 0.6); }
+#notes::placeholder { color: #6f7a78; }
+
+.rvrow { display: flex; gap: 5px; margin-top: 7px; }
+.rvrow button { flex: 1; font-size: 10px; padding: 6px 4px; }
+.rvcopied { margin-top: 6px; font-size: 9.5px; color: #8fc08a; min-height: 12px; }
+.rvhint { margin-top: 6px; font-size: 9px; line-height: 1.5; color: #77817f; }
+
+/* the game's own log sits above the review panel */
+#log { bottom: 226px; max-width: 300px; }
+@media (max-height: 720px) { #log { display: none; } }
+
+#rvfallback {
+  width: 100%;
+  min-height: 54px;
+  margin-top: 6px;
+  font: inherit;
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: rgba(8, 12, 14, 0.7);
+  border: 1px solid rgba(230, 193, 104, 0.5);
+  border-radius: 6px;
+  padding: 6px;
+  resize: vertical;
+}

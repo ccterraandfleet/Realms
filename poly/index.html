@@ -22,13 +22,31 @@
       </div>
     </header>
 
+    <!-- Review harness: switch the land draft, leave notes, copy a link back. -->
+    <div id="review">
+      <div class="rvhead">
+        <span class="rvtitle">LAND DRAFT</span>
+        <button class="rvtoggle" id="rvtoggle" title="hide / show">–</button>
+      </div>
+      <div class="rvbody">
+        <div class="rvstyles" id="rvstyles"></div>
+        <textarea id="notes" placeholder="What should change right here? Type it, then Copy note."></textarea>
+        <div class="rvrow">
+          <button id="copynote">Copy note + view link</button>
+          <button id="copyview">Copy view link</button>
+        </div>
+        <div class="rvcopied" id="rvcopied"></div>
+        <div class="rvhint">Keys 1-5 switch drafts · H your castle · F whole map · scroll to zoom</div>
+      </div>
+    </div>
+
     <aside id="panel"></aside>
     <section id="log"></section>
     <div id="flash"></div>
 
     <script>
-      var BUILD = "20261109.054046";
+      var BUILD = "20261109.061212";
     </script>
-    <script src="dist/game.js?v=20261109.054046"></script>
+    <script src="dist/game.js?v=20261109.061212"></script>
   </body>
 </html>
