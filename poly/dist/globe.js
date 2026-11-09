@@ -31466,24 +31466,61 @@
     }
     markDirty();
   }
+  var BEACON_MAX = 1400;
+  var beaconGeo = null;
+  var beacons = null;
+  var seatCache = /* @__PURE__ */ new Map();
+  var _bm = new Matrix4();
+  var _bq = new Quaternion();
+  var _bs = new Vector3();
+  var _bup = new Vector3(0, 1, 0);
+  function beaconGeometry() {
+    if (beaconGeo) return beaconGeo;
+    const parts = [];
+    const keep = new BoxGeometry(0.9, 0.5, 0.9);
+    keep.translate(0, 0.25, 0);
+    parts.push(keep);
+    for (const [x, z] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]]) {
+      const t = new BoxGeometry(0.28, 0.72, 0.28);
+      t.translate(x, 0.36, z);
+      parts.push(t);
+    }
+    const roof = new ConeGeometry(0.46, 0.46, 4);
+    roof.rotateY(Math.PI / 4);
+    roof.translate(0, 0.72, 0);
+    parts.push(roof);
+    beaconGeo = mergeGeometries(parts);
+    return beaconGeo;
+  }
+  function seatCached(face, tu, tv) {
+    const key = `${face}/${tu}/${tv}`;
+    if (!seatCache.has(key)) seatCache.set(key, seatOf(face, tu, tv));
+    return seatCache.get(key) ?? null;
+  }
+  var lastSeats = 0;
+  var lastTier = "none";
   function syncCastles() {
-    const show = cam.alt < R * 0.05;
-    if (!show) {
+    const near = cam.alt < R * 0.05;
+    const far = cam.alt < R * 0.3;
+    const clearDetail = () => {
       for (const [k, g] of castles) {
         castleGroup.remove(g);
         castles.delete(k);
       }
+    };
+    if (!far) {
+      clearDetail();
+      if (beacons) beacons.count = 0;
       return;
     }
-    const wanted = /* @__PURE__ */ new Set();
     const face = faceOf(up);
     const span = 2 / TERR_PER_FACE;
-    const su = Math.atan2(east.dot(up), 1) * 0 + 0 || 0;
-    void su;
     const camFaceUV = faceUV(face, up);
     const reach = Math.ceil(cam.alt / (R * span) * 2) + 3;
     const cu = Math.floor((camFaceUV.u + 1) / 2 * TERR_PER_FACE);
     const cv = Math.floor((camFaceUV.v + 1) / 2 * TERR_PER_FACE);
+    const wanted = /* @__PURE__ */ new Set();
+    const seats = [];
     for (let dv = -reach; dv <= reach; dv++) {
       for (let du = -reach; du <= reach; du++) {
         const tu = cu + du;
@@ -31491,23 +31528,58 @@
         if (tu < 0 || tv < 0 || tu >= TERR_PER_FACE || tv >= TERR_PER_FACE) continue;
         const key = `${face}/${tu}/${tv}`;
         wanted.add(key);
-        if (castles.has(key)) continue;
-        const seat = seatOf(face, tu, tv);
+        const seat = seatCached(face, tu, tv);
         if (!seat) continue;
-        const g = mergeGroup(buildCastle(0.9, (tu + tv) % 2 ? roofRedMat : roofBlueMat));
-        g.position.copy(seat.dir).multiplyScalar(R + seat.h * RELIEF * R + 0.3);
-        g.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), seat.dir);
-        g.rotateY((tu * 7 + tv * 13) % 6);
-        castles.set(key, g);
+        seats.push({ dir: seat.dir, h: seat.h, key });
+      }
+    }
+    lastSeats = seats.length;
+    if (near) {
+      lastTier = "detail";
+      if (beacons) beacons.count = 0;
+      for (const s of seats) {
+        if (castles.has(s.key)) continue;
+        const g = mergeGroup(buildCastle(0.9, (s.key.length + s.h * 100) % 2 > 1 ? roofRedMat : roofBlueMat));
+        g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
+        g.quaternion.setFromUnitVectors(_bup, s.dir);
+        g.rotateY(s.key.length % 6);
+        castles.set(s.key, g);
         castleGroup.add(g);
       }
-    }
-    for (const [k, g] of castles) {
-      if (!wanted.has(k)) {
-        castleGroup.remove(g);
-        castles.delete(k);
+      for (const [k, g] of castles) {
+        if (!wanted.has(k)) {
+          castleGroup.remove(g);
+          castles.delete(k);
+        }
       }
+      return;
     }
+    lastTier = "beacon";
+    clearDetail();
+    if (!beacons) {
+      beacons = new InstancedMesh(
+        beaconGeometry(),
+        new MeshStandardMaterial({ color: 11972770, roughness: 0.85, metalness: 0.02 }),
+        BEACON_MAX
+      );
+      beacons.frustumCulled = false;
+      castleGroup.add(beacons);
+    }
+    const grow = Math.max(1, Math.min(12, cam.alt / 45));
+    let n = 0;
+    for (const s of seats) {
+      if (n >= BEACON_MAX) break;
+      _bq.setFromUnitVectors(_bup, s.dir);
+      _bs.set(grow, grow, grow);
+      _bm.compose(
+        s.dir.clone().multiplyScalar(R + s.h * RELIEF * R + 0.3),
+        _bq,
+        _bs
+      );
+      beacons.setMatrixAt(n++, _bm);
+    }
+    beacons.count = n;
+    beacons.instanceMatrix.needsUpdate = true;
   }
   function faceOf(d) {
     const ax = Math.abs(d.x);
@@ -31666,14 +31738,19 @@
     cam,
     nodes,
     castles,
+    castleGroup,
     stats: () => ({
+      seats: lastSeats,
+      dbg: `count=${beacons ? beacons.count : -1} visible=${beacons ? beacons.visible : "x"} far=${Math.round(R * 0.3)}`,
+      tier: lastTier,
+      callsNow: renderer.info.render.calls,
       backlog: buildBacklog,
       alt: Math.round(cam.alt * 100) / 100,
       considered,
       passed,
       level: liveLevels,
       patches: nodes.size,
-      keeps: castles.size,
+      keeps: castles.size + (beacons ? beacons.count : 0),
       tris: renderer.info.render.triangles,
       calls: renderer.info.render.calls,
       territories: TERRITORIES
