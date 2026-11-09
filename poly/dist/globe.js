@@ -31480,7 +31480,7 @@
   function factionOf(dir) {
     return dir.angleTo(SPAWN_DIR) < YOUR_REACH ? FACTION_YOU : FACTION_ENEMY;
   }
-  var ROAD_WIDTH = 4.2;
+  var ROAD_WIDTH = 3.2;
   var ROAD_TINT = 13218959;
   var roadMesh = null;
   var roadMat = new MeshStandardMaterial({
@@ -31496,7 +31496,7 @@
     roadMesh = null;
   }
   function syncRoads(face, cu, cv, reach0) {
-    if (cam.alt > R * 0.25) {
+    if (cam.alt > R * 0.3) {
       clearRoads();
       return;
     }
@@ -31512,7 +31512,7 @@
     const side = new Vector3();
     const tint = new Color();
     const K = 9;
-    const wide = Math.max(1, Math.min(3, cam.alt / 150));
+    const wide = Math.max(1, Math.min(1.5, cam.alt / 400));
     let pairs = 0;
     for (let dv = -reach; dv <= reach; dv++) {
       for (let du = -reach; du <= reach; du++) {
