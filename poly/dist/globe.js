@@ -31368,6 +31368,8 @@
     azim: Number(params.get("azim") ?? 0)
   };
   var aim = { lat: cam.lat, lon: cam.lon, alt: cam.alt };
+  var TILT = 0.45;
+  var LAT_LIMIT = 1.5;
   var MIN_ALT = 30;
   var MAX_ALT = R * 3.2;
   var carriedNorth = new Vector3(0, 1, 0);
@@ -31385,9 +31387,8 @@
     return viewHeight / Math.max(1, innerHeight);
   }
   function tiltFor(alt) {
-    const t = Math.log(Math.max(1, alt / 20)) / Math.log(1400 / 20);
-    const k = Math.max(0, Math.min(1, t));
-    return 0.4 + 0.22 * (k * k * (3 - 2 * k));
+    void alt;
+    return TILT;
   }
   var up = new Vector3();
   var north = new Vector3();
@@ -31399,11 +31400,11 @@
     const s = sample(up, false);
     const r = R + Math.max(0, s.h) * RELIEF * R;
     target.copy(up).multiplyScalar(r);
-    north.copy(carriedNorth);
-    north.addScaledVector(up, -north.dot(up));
-    if (north.lengthSq() < 1e-6) {
-      north.set(1, 0, 0).addScaledVector(up, -up.x);
-      if (north.lengthSq() < 1e-6) north.set(0, 0, 1).addScaledVector(up, -up.z);
+    north.set(0, 1, 0).addScaledVector(up, -up.y);
+    if (north.lengthSq() < 3e-3) {
+      north.copy(carriedNorth);
+      north.addScaledVector(up, -north.dot(up));
+      if (north.lengthSq() < 1e-6) north.set(1, 0, 0).addScaledVector(up, -up.x);
     }
     north.normalize();
     east.crossVectors(north, up).normalize();
@@ -31413,6 +31414,7 @@
     const d = Math.max(cam.alt, 0.4);
     camPos.copy(target).addScaledVector(up, Math.cos(cam.tilt) * d).addScaledVector(north, -Math.sin(cam.tilt) * Math.cos(cam.azim) * d).addScaledVector(east, Math.sin(cam.tilt) * Math.sin(cam.azim) * d);
     camera.position.copy(camPos);
+    camera.up.copy(north);
     camera.lookAt(target);
     camera.near = Math.max(0.05, cam.alt * 4e-3);
     camera.far = Math.max(9e3, cam.alt * 8);
@@ -31602,7 +31604,7 @@
         bestLon = aim.lon + dl;
       }
     }
-    aim.lat = bestLat;
+    aim.lat = Math.max(-LAT_LIMIT, Math.min(LAT_LIMIT, bestLat));
     aim.lon = bestLon;
   }
   canvas.addEventListener("pointermove", (e) => {
@@ -31685,6 +31687,13 @@
       report();
     },
     render: () => renderer.render(scene, camera),
+    // how far UP the screen world-north points at the current target, and the camera tilt:
+    // +1 means north is straight up the screen, negative means the view is inverted
+    frameCheck: () => {
+      const a = target.clone().project(camera);
+      const bq = target.clone().addScaledVector(north, 4).project(camera);
+      return { northUp: bq.y - a.y, tilt: cam.tilt };
+    },
     // does the middle of the frame actually land on built ground?
     probe: () => {
       const rc = new Raycaster();
