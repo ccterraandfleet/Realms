@@ -31732,11 +31732,56 @@
         v: SAVE_VERSION,
         seed: o.SEED,
         t: +worldTime.toFixed(1),
+        at: Date.now(),
         nodes: owned,
         realms: realms.map((r) => ({ id: r.id, alive: r.alive, hearth: r.hearth, capital: r.capital, res: { ...r.res } })),
         hosts: hosts.map((h) => ({ ...h, path: h.path.slice() })),
         trade: [...tradeRoutes]
       };
+    }
+    const CATCHUP_SPAN = 1800;
+    const CATCHUP_STEP = 1.5;
+    const CATCHUP_MAX_STEP = 6;
+    const CATCHUP_STEPS = 300;
+    const CATCHUP_BUDGET = 500;
+    let lastCatchUp = { simulated: 0, skipped: 0 };
+    let lastCatchUpProfile = {};
+    function catchUp(elapsedSeconds) {
+      const want = Math.max(0, Math.min(elapsedSeconds, CATCHUP_SPAN));
+      const skipped = Math.max(0, elapsedSeconds - want);
+      if (want < CATCHUP_STEP) {
+        lastCatchUp = { simulated: 0, skipped };
+        return lastCatchUp;
+      }
+      const started = performance.now();
+      let sim = 0;
+      const prof = {};
+      const stage = (name, fn) => {
+        const t = performance.now();
+        fn();
+        prof[name] = (prof[name] ?? 0) + (performance.now() - t);
+      };
+      const step = Math.min(CATCHUP_MAX_STEP, Math.max(CATCHUP_STEP, want / CATCHUP_STEPS));
+      let n = 0;
+      while (sim < want) {
+        if (performance.now() - started > CATCHUP_BUDGET) break;
+        const dt = Math.min(step, want - sim);
+        worldTime += dt;
+        stage("economy", () => tickEconomy(dt));
+        if (n % 6 === 0) stage("supply", () => warmSupply());
+        stage("hosts", () => tickHosts(dt));
+        stage("claims", () => resolveClaims());
+        stage("combat", () => tickCombat(dt));
+        stage("siege", () => tickSiege(dt));
+        stage("ai", () => tickAI(dt));
+        sim += dt;
+        n++;
+      }
+      if (sim > 0) cartsDirty = true;
+      lastCatchUpProfile = prof;
+      lastCatchUp = { simulated: sim, skipped: skipped + (want - sim) };
+      dirtyTerritory = true;
+      return lastCatchUp;
     }
     function restore(b) {
       if (!b || b.v !== SAVE_VERSION || b.seed !== o.SEED) return false;
@@ -31769,6 +31814,9 @@
       worldTime = b.t;
       ownersChanged();
       dirtyTerritory = true;
+      const away = b.at ? Math.max(0, (Date.now() - b.at) / 1e3) : 0;
+      lastCatchUp = { simulated: 0, skipped: 0 };
+      if (away > CATCHUP_STEP) catchUp(away);
       return true;
     }
     function tryRestore() {
@@ -31777,8 +31825,14 @@
         if (!raw) return { restored: false };
         const b = JSON.parse(raw);
         const ok = restore(b);
-        if (ok) lastSaveNote = `restored ${b.nodes.length} keeps from ${new Date(b.t * 1e3).toISOString().slice(11, 19)} of world time`;
-        return { restored: ok, keeps: ok ? b.nodes.length : 0, at: b.t };
+        if (ok) {
+          const c = lastCatchUp;
+          lastSaveNote = c.simulated > 0 ? `resumed ${b.nodes.length} keeps \xB7 world advanced ${Math.round(c.simulated)}s while you were away` : `restored ${b.nodes.length} keeps from ${new Date(b.t * 1e3).toISOString().slice(11, 19)} of world time`;
+          if (c.simulated === 0 && c.skipped > 0) {
+            lastSaveNote = `resumed ${b.nodes.length} keeps \xB7 too long away to fast-forward (${Math.round(c.skipped)}s skipped)`;
+          }
+        }
+        return { restored: ok, keeps: ok ? b.nodes.length : 0, at: b.t, catchUp: lastCatchUp };
       } catch {
         return { restored: false };
       }
@@ -32662,6 +32716,9 @@
       saveNow,
       clearSave,
       saveNote: () => lastSaveNote,
+      catchUp: (seconds) => catchUp(seconds),
+      lastCatchUp: () => lastCatchUp,
+      lastCatchUpProfile: () => lastCatchUpProfile,
       ownedTotal,
       cartCount: () => carts.length,
       /** Diagnostic: hide the merchant fleet so its contribution can be measured by frame diff. */
@@ -32885,7 +32942,7 @@
   // src/globe/globe.ts
   var params = new URLSearchParams(location.search);
   var SEED = Number(params.get("seed") ?? 7);
-  var BUILD = "2026-11-09 16:58";
+  var BUILD = "2026-11-09 17:08";
   var LIFT = Number(params.get("lift") ?? 1.1);
   var SAT_BOOST = Number(params.get("sat") ?? 1.18);
   var _hsl = { h: 0, s: 0, l: 0 };
