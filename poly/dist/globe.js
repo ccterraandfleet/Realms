@@ -30704,11 +30704,150 @@
     let paused = false;
     let lastLog = "press H to fly to your castle \xB7 click an unclaimed keep to claim it";
     const BUILD_TAG = o.build ?? "";
+    const buildMode = o.buildMode ?? "preset";
+    const toolsLegal = () => buildMode !== "preset" || ADMIN;
+    const KEEP_FOUND_COST = { grain: 240, gold: 140 };
+    const ROAD_TIMBER_PER_CELL = 16;
+    const ROAD_GOLD_PER_CELL = 8;
+    const KEEP_MIN_CELLS = 3;
+    const LAND_H = 0.02;
+    let placedCount = 0;
     const ADMIN = !!o.admin;
     const cellSize = Math.PI * o.R / 2 / o.TERR_PER_FACE;
     const nodeKey = (f, tu, tv) => `${f}/${tu}/${tv}`;
     const edgeKeyOf = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
     const surfaceR = (n) => o.R + Math.max(0, n.h) * o.RELIEF * o.R;
+    function makeKeep(dir, owner) {
+      const d = dir.clone().normalize();
+      const h = o.terrainH(d);
+      const uv = o.uvOf ? o.uvOf(d) : { face: 0, tu: 0, tv: 0 };
+      const key2 = `u${placedCount++}`;
+      const n = {
+        key: key2,
+        face: uv.face,
+        tu: uv.tu,
+        tv: uv.tv,
+        dir: d,
+        h,
+        owner,
+        level: 1,
+        morale: 1,
+        garrison: 0,
+        pos: new Vector3()
+      };
+      n.pos.copy(n.dir).multiplyScalar(surfaceR(n) + 0.3);
+      nodes2.set(key2, n);
+      if (!settlements.has(key2)) setPop(key2, POP_START);
+      ownersChanged();
+      dirtyTerritory = true;
+      return n;
+    }
+    function restoreKeep(key2, dir, owner) {
+      const d = dir.clone().normalize();
+      const h = o.terrainH(d);
+      const uv = o.uvOf ? o.uvOf(d) : { face: 0, tu: 0, tv: 0 };
+      const n = {
+        key: key2,
+        face: uv.face,
+        tu: uv.tu,
+        tv: uv.tv,
+        dir: d,
+        h,
+        owner,
+        level: 1,
+        morale: 1,
+        garrison: 0,
+        pos: new Vector3()
+      };
+      n.pos.copy(n.dir).multiplyScalar(surfaceR(n) + 0.3);
+      nodes2.set(key2, n);
+      if (!settlements.has(key2)) setPop(key2, POP_START);
+      const num = parseInt(key2.slice(1), 10);
+      if (Number.isFinite(num) && num >= placedCount) placedCount = num + 1;
+      return n;
+    }
+    function keepNear(dir, maxCells) {
+      let best = null;
+      let bestD = Infinity;
+      const maxAng = maxCells * cellSize / o.R;
+      for (const n of nodes2.values()) {
+        const ang = n.dir.angleTo(dir);
+        if (ang < bestD && ang <= maxAng) {
+          bestD = ang;
+          best = n;
+        }
+      }
+      return best;
+    }
+    function foundKeep(dir, owner = 0) {
+      if (!toolsLegal()) return { ok: false, reason: "this world's keeps are fixed by its seed (preset mode)" };
+      const d = dir.clone().normalize();
+      const h = o.terrainH(d);
+      if (h <= LAND_H) return { ok: false, reason: "that is water: a keep needs dry ground" };
+      for (const n2 of nodes2.values()) {
+        if (n2.owner < 0) continue;
+        if (n2.dir.angleTo(d) < KEEP_MIN_CELLS * cellSize / o.R) {
+          return { ok: false, reason: `too close to an existing keep (${KEEP_MIN_CELLS} cells minimum)` };
+        }
+      }
+      const r = realms[owner];
+      if (r && owner === 0 && !ADMIN) {
+        if (r.res.grain < KEEP_FOUND_COST.grain || r.res.gold < KEEP_FOUND_COST.gold) {
+          return { ok: false, reason: `a keep costs ${KEEP_FOUND_COST.grain} grain and ${KEEP_FOUND_COST.gold} gold` };
+        }
+        r.res.grain -= KEEP_FOUND_COST.grain;
+        r.res.gold -= KEEP_FOUND_COST.gold;
+      }
+      const n = makeKeep(d, owner);
+      say(`keep founded at ${label(n)} \xB7 ${KEEP_FOUND_COST.grain} grain, ${KEEP_FOUND_COST.gold} gold`);
+      return { ok: true, key: n.key };
+    }
+    function roadQuote(aKey, bKey) {
+      const a = nodes2.get(aKey), b = nodes2.get(bKey);
+      if (!a || !b) return null;
+      const cells = a.dir.angleTo(b.dir) * o.R / cellSize;
+      return {
+        cells,
+        timber: Math.round(cells * ROAD_TIMBER_PER_CELL),
+        gold: Math.round(cells * ROAD_GOLD_PER_CELL)
+      };
+    }
+    function drawRoad(aKey, bKey, pts) {
+      if (!toolsLegal()) return { ok: false, reason: "roads in this world are laid by its seed (preset mode)" };
+      if (aKey === bKey) return { ok: false, reason: "a road needs two different keeps" };
+      const a = nodes2.get(aKey), b = nodes2.get(bKey);
+      if (!a || !b) return { ok: false, reason: "a road must run between two keeps" };
+      if (a.owner !== 0 && b.owner !== 0) return { ok: false, reason: "one end of the road must be yours" };
+      const ek = edgeKeyOf(aKey, bKey);
+      if (edges.has(ek)) return { ok: false, reason: "a road already runs there" };
+      const q = roadQuote(aKey, bKey);
+      const samples = 12;
+      let dry = 0;
+      for (let i = 0; i <= samples; i++) {
+        const t = i / samples;
+        let d;
+        if (pts && pts.length > 1) {
+          const f = t * (pts.length - 1);
+          const i0 = Math.min(pts.length - 2, Math.floor(f));
+          d = pts[i0].clone().lerp(pts[i0 + 1], f - i0).normalize();
+        } else {
+          d = a.dir.clone().lerp(b.dir, t).normalize();
+        }
+        if (o.terrainH(d) > LAND_H) dry++;
+      }
+      if (dry / (samples + 1) < 0.7) return { ok: false, reason: "that line crosses too much water" };
+      const me = realms[0];
+      if (me && !ADMIN) {
+        if (me.res.timber < q.timber || me.res.gold < q.gold) {
+          return { ok: false, reason: `that road costs ${q.timber} timber and ${q.gold} gold (${q.cells.toFixed(1)} cells)` };
+        }
+        me.res.timber -= q.timber;
+        me.res.gold -= q.gold;
+      }
+      addEdge(aKey, bKey, 0, 1, pts && pts.length > 1 ? pts : [a.dir.clone(), b.dir.clone()]);
+      say(`road drawn ${q.cells.toFixed(1)} cells \xB7 ${q.timber} timber, ${q.gold} gold`);
+      return { ok: true, key: ek };
+    }
     const t0 = performance.now();
     for (let f = 0; f < 6; f++) {
       for (let tu = 0; tu < o.TERR_PER_FACE; tu++) {
@@ -31242,10 +31381,21 @@
     function isolated(n) {
       return !hasRoad(n);
     }
-    function addEdge(a, b, tier, seed) {
+    function addEdge(a, b, tier, seed, pts) {
       const key2 = edgeKeyOf(a, b);
       if (edges.has(key2)) return key2;
-      edges.set(key2, { key: key2, a: a < b ? a : b, b: a < b ? b : a, tier, seed, cut: false });
+      let path = pts;
+      if (path && a > b) path = path.slice().reverse();
+      edges.set(key2, {
+        key: key2,
+        a: a < b ? a : b,
+        b: a < b ? b : a,
+        tier,
+        seed,
+        cut: false,
+        pts: path,
+        drawn: !!path
+      });
       const ia = incident.get(a) ?? [];
       ia.push(key2);
       incident.set(a, ia);
@@ -31997,6 +32147,21 @@
         at: Date.now(),
         nodes: owned,
         realms: realms.map((r) => ({ id: r.id, alive: r.alive, hearth: r.hearth, capital: r.capital, res: { ...r.res } })),
+        mode: buildMode,
+        placed: [...nodes2.values()].filter((n) => n.key.startsWith("u")).map((n) => ({
+          k: n.key,
+          d: [n.dir.x, n.dir.y, n.dir.z],
+          o: n.owner,
+          l: n.level,
+          g: n.garrison,
+          m: n.morale,
+          p: popOf(n.key)
+        })),
+        drawn: [...edges.values()].filter((e) => e.drawn).map((e) => ({
+          a: e.a,
+          b: e.b,
+          p: (e.pts ?? []).map((v) => [v.x, v.y, v.z])
+        })),
         hosts: hosts.map((h) => ({ ...h, path: h.path.slice() })),
         people,
         trade: [...tradeRoutes]
@@ -32057,6 +32222,9 @@
       hosts.length = 0;
       tradeRoutes.clear();
       plots.clear();
+      for (const k of b.placed ?? []) {
+        restoreKeep(k.k, new Vector3(k.d[0], k.d[1], k.d[2]), k.o ?? -1);
+      }
       for (const [key2, owner, level, garrison, morale, f, t, q] of b.nodes) {
         const n = nodes2.get(key2);
         if (!n) continue;
@@ -32077,6 +32245,10 @@
       settlements.clear();
       for (const [key2, pop] of b.people ?? []) if (nodes2.has(key2)) setPop(key2, pop);
       for (const h of b.hosts) hosts.push({ ...h, path: h.path.slice() });
+      for (const e of b.drawn ?? []) {
+        if (!nodes2.has(e.a) || !nodes2.has(e.b)) continue;
+        addEdge(e.a, e.b, 0, 1, (e.p ?? []).map((v) => new Vector3(v[0], v[1], v[2])));
+      }
       for (const t of b.trade) tradeRoutes.add(t);
       worldTime = b.t;
       ownersChanged();
@@ -33241,7 +33413,8 @@
           fed: fed.has(e.key),
           trade: tradeRoutes.has(e.key),
           mid: mid.clone().multiplyScalar(o.R + 1),
-          seed: (a.tu * 7919 + a.tv * 104729 + b.tu * 1299709 + b.tv * 15485863) % 1e5
+          seed: (a.tu * 7919 + a.tv * 104729 + b.tu * 1299709 + b.tv * 15485863) % 1e5,
+          pts: e.pts
         });
       }
       return out;
@@ -33337,6 +33510,16 @@
       })),
       wealth: () => ({ ...realms[0].res }),
       lastLog: () => lastLog,
+      buildMode: () => buildMode,
+      placedKeys: () => [...nodes2.values()].filter((n) => n.key.startsWith("u")).map((n) => n.key),
+      sayNow: (m) => say(m),
+      marchFrom: (from, to, men) => marchFrom(from, to, men),
+      foundKeep: (dir) => foundKeep(dir),
+      drawRoad: (aKey, bKey, pts) => drawRoad(aKey, bKey, pts),
+      keepNear: (dir, cells) => keepNear(dir, cells)?.key ?? null,
+      roadQuote: (aKey, bKey) => roadQuote(aKey, bKey),
+      nodeDir: (k) => nodes2.get(k)?.dir.clone() ?? null,
+      drawnRoads: () => [...edges.values()].filter((e) => e.drawn).length,
       popOf: (k) => popOf(k),
       popCap: (k) => {
         const n = nodes2.get(k);
@@ -34769,7 +34952,7 @@
       sway.crossVectors(cA, cB).normalize().multiplyScalar((ih3(s1, s2, 5, 73) - 0.5) * 0.08);
       const band = cam.alt < 260 ? 1 : 0;
       const cached = centreCache.get(e.key);
-      const fresh = cached && cached.band === band && (band === 0 || performance.now() - cached.at < 4e3);
+      const fresh = !e.pts && cached && cached.band === band && (band === 0 || performance.now() - cached.at < 4e3);
       let pts;
       if (fresh && cached) {
         pts = cached.pts;
@@ -34779,7 +34962,14 @@
           const pts2 = built;
           for (let i = -1; i <= K + 1; i++) {
             const t = i / K;
-            dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
+            if (e.pts && e.pts.length > 1) {
+              const tt = Math.max(0, Math.min(1, t));
+              const f = tt * (e.pts.length - 1);
+              const i0 = Math.max(0, Math.min(e.pts.length - 2, Math.floor(f)));
+              dir.copy(e.pts[i0]).lerp(e.pts[i0 + 1], Math.max(0, Math.min(1, f - i0))).normalize();
+            } else {
+              dir.copy(cA).lerp(cB, t).addScaledVector(sway, Math.sin(Math.PI * t)).normalize();
+            }
             lateralScratch.crossVectors(chord, dir).normalize();
             const lateral = lateralScratch;
             let h = sample(dir, false).h;
@@ -35252,7 +35442,152 @@
   var dragging = false;
   var lastX = 0;
   var lastY = 0;
+  var buildTool = { mode: "none", from: null, pts: [], down: false };
+  var toolRc = new Raycaster();
+  function screenToDir(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const ndc = new Vector2(
+      (clientX - rect.left) / (rect.width || 1) * 2 - 1,
+      -((clientY - rect.top) / (rect.height || 1)) * 2 + 1
+    );
+    toolRc.setFromCamera(ndc, camera);
+    const o = toolRc.ray.origin;
+    const d = toolRc.ray.direction.clone().normalize();
+    let r = R;
+    let hit = null;
+    for (let i = 0; i < 4; i++) {
+      const b = o.dot(d);
+      const c = o.lengthSq() - r * r;
+      const disc = b * b - c;
+      if (disc < 0) return null;
+      const t = -b - Math.sqrt(disc);
+      if (t <= 0) return null;
+      hit = o.clone().addScaledVector(d, t).normalize();
+      const hh = Math.max(sample(hit, false).h, 0);
+      const nr = R + hh * RELIEF * R;
+      if (Math.abs(nr - r) < 0.6) break;
+      r = nr;
+    }
+    return hit;
+  }
+  var ghostGeo = new BufferGeometry();
+  ghostGeo.setAttribute("position", new BufferAttribute(new Float32Array(3 * 512), 3));
+  var ghostLine = new Line(
+    ghostGeo,
+    new LineBasicMaterial({ color: 16769162, transparent: true, opacity: 0.95, depthTest: false })
+  );
+  ghostLine.frustumCulled = false;
+  ghostLine.renderOrder = 999;
+  ghostLine.visible = false;
+  scene.add(ghostLine);
+  function ghostShow(dirs, ok) {
+    const pos = ghostGeo.getAttribute("position");
+    const n = Math.min(dirs.length, 512);
+    for (let i = 0; i < n; i++) {
+      const d = dirs[i];
+      const hh = Math.max(sample(d, false).h, 0);
+      const rr = R + hh * RELIEF * R + 2.2;
+      pos.setXYZ(i, d.x * rr, d.y * rr, d.z * rr);
+    }
+    pos.needsUpdate = true;
+    ghostGeo.setDrawRange(0, n);
+    ghostLine.material.color.setHex(ok ? 10482352 : 16751242);
+    ghostLine.visible = n > 1;
+  }
+  function ghostHide() {
+    ghostLine.visible = false;
+  }
+  function setBuildTool(m) {
+    buildTool.mode = m;
+    buildTool.from = null;
+    buildTool.pts = [];
+    buildTool.down = false;
+    ghostHide();
+    const W = world;
+    if (!W) return;
+    if (m !== "none" && W.buildMode() === "preset") {
+      W.sayNow("this world's keeps and roads are fixed by its seed \xB7 add ?build=hand or ?build=modular to experiment");
+      buildTool.mode = "none";
+      return;
+    }
+    if (m === "keep") W.sayNow("place keep: click dry ground you can afford \xB7 Esc to stop");
+    if (m === "road") W.sayNow(`draw road (${W.buildMode()}): drag from one of your keeps to another \xB7 Esc to stop`);
+    buildToolBar();
+  }
+  var toolBarEl = null;
+  function buildToolBar() {
+    if (!toolBarEl) {
+      toolBarEl = document.createElement("div");
+      toolBarEl.id = "realms-build";
+      toolBarEl.style.cssText = [
+        "position:fixed",
+        "top:14px",
+        "right:14px",
+        "z-index:40",
+        "display:flex",
+        "gap:6px",
+        "padding:7px 8px",
+        "border-radius:10px",
+        "background:rgba(14,20,26,.82)",
+        "border:1px solid rgba(150,200,230,.25)",
+        "font:12px/1.2 ui-sans-serif,system-ui,sans-serif",
+        "color:#dfe9f2",
+        "backdrop-filter:blur(6px)",
+        "align-items:center"
+      ].join(";");
+      document.body.appendChild(toolBarEl);
+    }
+    const W = world;
+    const mode = W ? W.buildMode() : "preset";
+    const btn = (label, active, fn) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.style.cssText = [
+        "all:unset",
+        "cursor:pointer",
+        "padding:5px 9px",
+        "border-radius:7px",
+        `background:${active ? "rgba(120,200,255,.24)" : "rgba(255,255,255,.06)"}`,
+        `border:1px solid ${active ? "rgba(140,210,255,.55)" : "rgba(255,255,255,.12)"}`,
+        "font:12px/1 ui-sans-serif,system-ui,sans-serif",
+        "color:#dfe9f2"
+      ].join(";");
+      b.onclick = fn;
+      return b;
+    };
+    toolBarEl.innerHTML = "";
+    const tag = document.createElement("span");
+    tag.textContent = mode === "preset" ? "map: preset" : `map: ${mode}`;
+    tag.style.cssText = "opacity:.62;margin-right:4px";
+    toolBarEl.appendChild(tag);
+    if (mode !== "preset") {
+      toolBarEl.appendChild(btn("Place keep (P)", buildTool.mode === "keep", () => setBuildTool(buildTool.mode === "keep" ? "none" : "keep")));
+      toolBarEl.appendChild(btn("Draw road (G)", buildTool.mode === "road", () => setBuildTool(buildTool.mode === "road" ? "none" : "road")));
+      if (buildTool.mode !== "none") toolBarEl.appendChild(btn("Cancel (Esc)", false, () => setBuildTool("none")));
+    }
+  }
   canvas.addEventListener("pointerdown", (e) => {
+    if (buildTool.mode !== "none") {
+      const dir = screenToDir(e.clientX, e.clientY);
+      if (!dir) return;
+      if (buildTool.mode === "keep") {
+        buildTool.down = true;
+        ghostShow([dir, dir.clone().multiplyScalar(1.0006).normalize()], true);
+        return;
+      }
+      const W = world;
+      const near = W ? W.keepNear(dir, 1.6) : null;
+      if (!near) {
+        W?.sayNow("start a road on one of your keeps");
+        return;
+      }
+      buildTool.from = near;
+      buildTool.down = true;
+      buildTool.pts = [dir];
+      const fromDir = W.nodeDir(near);
+      if (fromDir) ghostShow([fromDir, dir], true);
+      return;
+    }
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -35262,6 +35597,35 @@
   var lastClickX = 0;
   var lastClickY = 0;
   canvas.addEventListener("pointerup", (e) => {
+    if (buildTool.mode !== "none" && buildTool.down) {
+      const W = world;
+      const dir = screenToDir(e.clientX, e.clientY);
+      buildTool.down = false;
+      ghostHide();
+      if (!W || !dir) {
+        buildTool.from = null;
+        buildTool.pts = [];
+        return;
+      }
+      if (buildTool.mode === "keep") {
+        const res2 = W.foundKeep(dir);
+        if (!res2.ok && res2.reason) W.sayNow(res2.reason);
+        return;
+      }
+      const from = buildTool.from;
+      const target2 = W.keepNear(dir, 1.6);
+      buildTool.from = null;
+      const pts = buildTool.pts.slice();
+      buildTool.pts = [];
+      if (!from) return;
+      if (!target2) {
+        W.sayNow("a road has to end at a keep");
+        return;
+      }
+      const res = W.drawRoad(from, target2, W.buildMode() === "hand" ? pts : void 0);
+      if (!res.ok && res.reason) W.sayNow(res.reason);
+      return;
+    }
     const moved = Math.hypot(e.clientX - lastX, e.clientY - lastY);
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
@@ -35338,6 +35702,24 @@
     aim.lon = bestLon;
   }
   canvas.addEventListener("pointermove", (e) => {
+    if (buildTool.mode !== "none" && buildTool.down) {
+      const dir = screenToDir(e.clientX, e.clientY);
+      const W = world;
+      if (!dir || !W || !buildTool.from) return;
+      const startDir = W.nodeDir(buildTool.from);
+      if (!startDir) return;
+      if (W.buildMode() === "modular") {
+        buildTool.pts = [startDir, dir];
+      } else {
+        const last = buildTool.pts[buildTool.pts.length - 1] ?? startDir;
+        if (last.angleTo(dir) > 25e-4) buildTool.pts.push(dir);
+        if (buildTool.pts.length > 480) buildTool.pts.shift();
+      }
+      const target2 = W.keepNear(dir, 1.6);
+      const ok = !!target2 && target2 !== buildTool.from;
+      ghostShow(W.buildMode() === "modular" ? [startDir, dir] : [startDir, ...buildTool.pts], ok);
+      return;
+    }
     if (!dragging) return;
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
@@ -35365,6 +35747,18 @@
     aim.lat += dNorth / R;
   }, { passive: false });
   addEventListener("keydown", (e) => {
+    if (e.key === "p" || e.key === "P") {
+      setBuildTool(buildTool.mode === "keep" ? "none" : "keep");
+      return;
+    }
+    if (e.key === "g" || e.key === "G") {
+      setBuildTool(buildTool.mode === "road" ? "none" : "road");
+      return;
+    }
+    if (e.key === "Escape" && buildTool.mode !== "none") {
+      setBuildTool("none");
+      return;
+    }
     if (world && world.key(e.key)) return;
     if (e.key === "r" || e.key === "R") {
       for (const mid of roadEdgeMid.values()) {
@@ -35458,6 +35852,15 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
       return worst;
     },
     castleGroup,
+    /** Sampled vertices of the DRAWN road mesh, for measuring what actually got rendered. */
+    roadVerts: (want = 4e3) => {
+      if (!roadMesh) return [];
+      const pos = roadMesh.geometry.getAttribute("position");
+      const out = [];
+      const step = Math.max(1, Math.floor(pos.count / want));
+      for (let i = 0; i < pos.count; i += step) out.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+      return out;
+    },
     roadMidpoints: (trunkOnly = false) => Array.from(roadEdgeMid.values()).filter((v) => !trunkOnly || v.tier === 1).map((v) => ({ x: v.p.x, y: v.p.y, z: v.p.z })),
     /** Percentiles of each update stage, for the drag-lag hunt. */
     stageStats: () => {
@@ -35756,11 +36159,33 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
   setTimeout(() => {
     const t0 = performance.now();
     try {
+      const savedMode = (() => {
+        try {
+          const raw = localStorage.getItem("realms.save.v1");
+          if (!raw) return null;
+          const b = JSON.parse(raw);
+          return b.mode === "hand" || b.mode === "modular" || b.mode === "preset" ? b.mode : null;
+        } catch {
+          return null;
+        }
+      })();
+      const modeParam = new URLSearchParams(location.search).get("build");
+      const BUILD_MODE = modeParam === "hand" || modeParam === "modular" || modeParam === "preset" ? modeParam : savedMode ?? "preset";
       world = createWorld({
         R,
         TERR_PER_FACE,
         RELIEF,
         SEED,
+        buildMode: BUILD_MODE,
+        uvOf: (dir) => {
+          const f = faceOf(dir);
+          const uv = faceUV(f, dir);
+          return {
+            face: f,
+            tu: Math.round((uv.u + 1) / 2 * TERR_PER_FACE),
+            tv: Math.round((uv.v + 1) / 2 * TERR_PER_FACE)
+          };
+        },
         seatOf: seatCached,
         SPAWN_DIR,
         castleGroup,
@@ -35816,6 +36241,12 @@ build ${BUILD}`;
     }
   }, 250);
   var worldClock = 0;
+  setTimeout(() => {
+    try {
+      buildToolBar();
+    } catch {
+    }
+  }, 1200);
   var lastT = performance.now();
   var fTotal = [];
   var fUpdate = [];
