@@ -31216,6 +31216,15 @@
       if (!n) return;
       const mine = n.owner === 0;
       const verbs = [];
+      if (!mine && n.owner > 0 && n.garrison > 0) {
+        const at = ownHostAt(key2);
+        verbs.push({
+          verb: "storm",
+          label: "Storm",
+          hint: at ? `deploy the assault \xB7 you have ${at.men} at the walls` : "march a column to the walls first",
+          blocked: at ? void 0 : "no column here yet"
+        });
+      }
       const me0 = realms[0];
       const afford = (c) => me0.res.grain >= (c.grain ?? 0) && me0.res.timber >= (c.timber ?? 0) && me0.res.ore >= (c.ore ?? 0) && me0.res.gold >= (c.gold ?? 0);
       const money = (c) => [
@@ -31328,6 +31337,10 @@
       closeWheel();
       if (verb === "fields" || verb === "woodlot" || verb === "quarry") {
         upgradePlot(verb, key2);
+        return;
+      }
+      if (verb === "storm") {
+        enterSiege(key2);
         return;
       }
       if (verb === "muster") {
@@ -32117,6 +32130,131 @@
           h.assaultKey = void 0;
         }
       }
+    }
+    let siegeBattle = null;
+    function ownHostAt(key2) {
+      return hosts.find((h) => h.owner === 0 && !h.routed && h.men > 0 && h.to === null && h.path[h.path.length - 1] === key2) ?? null;
+    }
+    function enterSiege(key2) {
+      const n = nodes2.get(key2);
+      if (!n || n.owner <= 0) {
+        say("nothing to storm there: that keep is not held against you");
+        return;
+      }
+      const h = ownHostAt(key2);
+      if (!h) {
+        say("no column at the walls \xB7 march an army to that keep first");
+        return;
+      }
+      if (n.garrison <= 0) {
+        say("the garrison is already gone \xB7 order the march and it flips");
+        return;
+      }
+      siegeBattle = {
+        key: key2,
+        hostId: h.id,
+        phase: "deploy",
+        commit: 1,
+        beat: 0,
+        men0: h.men,
+        gar0: n.garrison,
+        losses: 0,
+        swings: 0,
+        party: 0
+      };
+      paused = true;
+      o.flyToDir(n.dir, 30);
+      say(`SIEGE OF ${keepName(key2)} \xB7 your ${h.men} against ${n.garrison} behind the walls`);
+      paint();
+    }
+    function leaveSiege(msg) {
+      siegeBattle = null;
+      paused = false;
+      if (msg) say(msg);
+      paint();
+    }
+    const siegeCommitted = () => {
+      const s = siegeBattle;
+      if (!s) return 0;
+      const h = hosts.find((x) => x.id === s.hostId);
+      if (!h || h.men <= 0) return 0;
+      if (s.phase === "fight") return Math.max(0, s.party);
+      return Math.max(1, Math.round(h.men * s.commit));
+    };
+    function siegeButton(what) {
+      const s = siegeBattle;
+      if (!s) return;
+      if (what === "less") {
+        s.commit = Math.max(0.1, Math.round((s.commit - 0.1) * 10) / 10);
+        paint();
+        return;
+      }
+      if (what === "more") {
+        s.commit = Math.min(1, Math.round((s.commit + 0.1) * 10) / 10);
+        paint();
+        return;
+      }
+      if (what === "withdraw") {
+        leaveSiege(`withdrew from ${keepName(s.key)} \xB7 the column lives to fight again`);
+        return;
+      }
+      if (what === "attack") {
+        const h = hosts.find((x) => x.id === s.hostId);
+        if (!h) return;
+        if (s.phase === "deploy") {
+          s.party = Math.max(1, Math.round(h.men * s.commit));
+          s.phase = "fight";
+          s.beat = 0;
+          say(`the storm goes in \xB7 ${s.party} men over the wall \xB7 ${Math.max(0, h.men - s.party)} held back`);
+        } else {
+          const extra = Math.min(Math.max(0, h.men - s.party), Math.max(1, Math.round(h.men * s.commit)));
+          if (extra <= 0) return;
+          s.party += extra;
+          say(`the reserve goes in \xB7 ${extra} more men over the wall`);
+        }
+        paint();
+        return;
+      }
+    }
+    function tickBattle(dt) {
+      const s = siegeBattle;
+      if (!s || s.phase !== "fight") return;
+      const h = hosts.find((x) => x.id === s.hostId);
+      const n = nodes2.get(s.key);
+      if (!h || !n) {
+        leaveSiege("the siege is over");
+        return;
+      }
+      if (s.party <= 0) {
+        leaveSiege(`STORM REPULSED \xB7 ${keepName(s.key)} holds with ${n.garrison} \xB7 the storm party is gone, ${h.men} held back`);
+        return;
+      }
+      s.beat += dt;
+      if (s.beat < BEAT) return;
+      s.beat = 0;
+      s.swings++;
+      const men = s.party;
+      const gs = Math.max(1, n.garrison) * WALL_BONUS;
+      const p = power(h) * (men / Math.max(1, s.men0));
+      const ratio = p / gs;
+      const dmgGar = Math.min(Math.round(Math.max(0, n.garrison) * 0.9) + 1, Math.round(men * 0.11 * Math.min(2.2, ratio)));
+      const dmgMen = Math.min(Math.round(men * 0.22) + 1, Math.round(n.garrison * 0.075 * WALL_BONUS / Math.max(0.35, ratio)));
+      const lost = Math.min(dmgMen, s.party);
+      n.garrison = Math.max(0, n.garrison - dmgGar);
+      s.party = Math.max(0, s.party - lost);
+      h.men = Math.max(0, h.men - lost);
+      s.losses += lost;
+      h.fightingUntil = worldTime + 0.9;
+      if (n.garrison <= 0) {
+        takeCastle(n, h.owner);
+        leaveSiege(`STORM CARRIED \xB7 ${keepName(s.key)} taken \xB7 your ${s.men0} to ${h.men} \xB7 their ${s.gar0} to 0`);
+        return;
+      }
+      if (s.party <= 0) {
+        leaveSiege(`STORM REPULSED \xB7 ${keepName(s.key)} holds with ${n.garrison} \xB7 the storm party is gone, ${h.men} held back`);
+        return;
+      }
+      paint();
     }
     function tickCombat(dt) {
       for (let i = 0; i < hosts.length; i++) {
@@ -33149,9 +33287,21 @@
           }
         }
       }
+      if (siegeBattle) {
+        const sb = siegeBattle;
+        const bh = hosts.find((x) => x.id === sb.hostId);
+        const bn = nodes2.get(sb.key);
+        const live = bh ? bh.men : 0;
+        const men2 = siegeCommitted();
+        const od = bn ? oddsFor(men2, bn.garrison, bh ? power(bh) * (men2 / Math.max(1, live)) : men2) : null;
+        html += `<div style="margin:8px 0;padding:8px;border:1px solid #d9695a55;border-radius:7px;background:#d9695a14"><div class="row"><span style="color:#ffb3a0">SIEGE</span><b>${esc(keepName(sb.key))} \xB7 ${sb.phase === "fight" ? `storming \xB7 ${sb.swings} beats` : "deploying"}</b></div><div class="row"><span>At the walls</span><b>${nf(live)} men</b></div><div class="row"><span>Garrison</span><b>${nf(bn ? bn.garrison : 0)} \xB7 walls \xD7${WALL_BONUS}</b></div><div class="row"><span>Over the wall</span><b>${nf(men2)} \xB7 reserve ${nf(Math.max(0, live - men2))}</b></div>` + (od ? `<div class="row"><span>Odds</span><b style="color:${od.carries ? "#7fd6a2" : "#ef8080"}">${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>` : "") + `<div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button data-sb="less" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">\u2212 10%</button><button data-sb="more" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">+ 10%</button><button data-sb="attack" style="flex:1.4;cursor:pointer;background:#d9695a;color:#fff;border:0;border-radius:6px;padding:5px;font-weight:600">${sb.phase === "fight" ? "Send more in" : "Storm the walls"}</button><button data-sb="withdraw" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Withdraw</button></div></div>`;
+      }
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
       panel.innerHTML = html;
+      panel.querySelectorAll("[data-sb]").forEach((el) => {
+        el.onclick = () => siegeButton(el.dataset.sb ?? "");
+      });
       const close = panel.querySelector('[data-rp="close"]');
       if (close) close.onclick = () => {
         panelCollapsed = true;
@@ -33603,7 +33753,17 @@
       return out;
     };
     function tick(dt) {
-      if (paused) return;
+      if (paused) {
+        if (siegeBattle && siegeBattle.phase === "fight") {
+          tickBattle(dt);
+          panelUpdateAt += dt;
+          if (panelUpdateAt > 0.2) {
+            panelUpdateAt = 0;
+            paint();
+          }
+        }
+        return;
+      }
       const t02 = performance.now();
       worldTime += dt;
       timeIt("economy", () => tickEconomy(dt));
@@ -33847,6 +34007,10 @@
           dirtyTerritory = true;
           return popOf(k);
         },
+        enterSiege: (k) => enterSiege(k),
+        siege: () => siegeBattle,
+        siegeButton: (a) => siegeButton(a),
+        siegeState: () => siegeBattle ? { ...siegeBattle, committed: siegeCommitted(), paused } : null,
         odds: (keepKey, men) => {
           const n = nodes2.get(keepKey);
           if (!n) return null;
