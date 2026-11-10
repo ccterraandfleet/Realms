@@ -34232,6 +34232,27 @@
         siegeState: () => siegeBattle ? { ...siegeBattle, committed: siegeCommitted(), paused } : null,
         res: () => ({ ...realms[0].res }),
         worldSize: () => ({ keeps: nodes2.size, roads: edges.size, inhabited: [...nodes2.values()].filter((n) => n.owner >= 0).length }),
+        /* SUPPLY AND MOVEMENT PROOF FOR AI-BUILT LAND: does a rival's own road network actually feed
+         * its keeps, and can an army march along it? These answer that in numbers instead of eyeballing. */
+        suppliedSites: (id) => {
+          const fed = fedFor(id);
+          let inSup = 0, total2 = 0;
+          for (const n of nodes2.values()) {
+            if (n.owner !== id) continue;
+            total2++;
+            if ((incident.get(n.key) ?? []).some((ek) => fed.has(ek))) inSup++;
+          }
+          return { inSup, total: total2 };
+        },
+        roadBetween: (a, b) => {
+          for (const ek of incident.get(a) ?? []) {
+            const e = edges.get(ek);
+            if (e && (e.a === a && e.b === b || e.b === a && e.a === b)) return { key: ek, tier: e.tier, cut: !!e.cut };
+          }
+          return null;
+        },
+        rivalKeepKeys: (id) => ownedBy(id).map((n) => n.key),
+        hostsOf: (id) => hosts.filter((h) => h.owner === id && !h.routed && h.men > 0).map((h) => ({ id: h.id, men: h.men, to: h.to, at: h.path[h.path.length - 1], seg: h.seg, prog: h.prog })),
         foundNear: (nudge = 0) => {
           const d = o.SPAWN_DIR.clone();
           const tx = new Vector3(0, 1, 0).cross(d).normalize();
