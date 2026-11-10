@@ -32039,6 +32039,27 @@
       return out;
     }
     const WALL_BONUS = 1.35;
+    function oddsFor(men, garrison, p = men) {
+      const g = Math.max(1, garrison);
+      const gs = g * WALL_BONUS;
+      const ratio = p / gs;
+      const perBeatTheirLoss = Math.min(Math.round(g * 0.9) + 1, Math.round(men * 0.11 * Math.min(2.2, ratio)));
+      const perBeatOurLoss = Math.min(
+        Math.round(men * 0.22) + 1,
+        Math.round(g * 0.075 * WALL_BONUS / Math.max(0.35, ratio))
+      );
+      const beats = Math.ceil(g / Math.max(1, perBeatTheirLoss));
+      const expectedLosses = Math.min(men, beats * perBeatOurLoss);
+      return {
+        men,
+        garrison: g,
+        beats,
+        expectedLosses,
+        carries: expectedLosses < men * 0.6,
+        starving: men < gs * 0.6
+      };
+    }
+    const assaultOdds = (h, n) => oddsFor(h.men, n.garrison, power(h));
     function tickAssaults(dt) {
       for (const h of hosts) {
         if (h.routed || h.men <= 0 || h.to !== null) continue;
@@ -32046,6 +32067,11 @@
         const n = nodes2.get(key2);
         if (!n || n.owner < 0 || n.owner === h.owner) continue;
         const garrisonStrength = Math.max(1, n.garrison) * WALL_BONUS;
+        if (h.assaultMen0 === void 0) {
+          h.assaultMen0 = h.men;
+          h.assaultGar0 = n.garrison;
+          h.assaultKey = key2;
+        }
         if (h.men < garrisonStrength * 0.6) {
           h.assaultBeat = (h.assaultBeat ?? 0) + dt;
           if (h.assaultBeat < BEAT) continue;
@@ -32055,7 +32081,10 @@
           n.morale = Math.max(0, n.morale - 8e-3);
           if (n.garrison <= 0) {
             takeCastle(n, h.owner);
-            say(`${label(n)} starved out and taken \xB7 ${h.men} men still in the field`);
+            say(`SIEGE WON \xB7 ${keepName(key2)} starved out \xB7 their ${h.assaultGar0 ?? 0} to 0 \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men}`);
+            h.assaultMen0 = void 0;
+            h.assaultGar0 = void 0;
+            h.assaultKey = void 0;
           }
           continue;
         }
@@ -32077,9 +32106,15 @@
         h.fightingUntil = worldTime + 0.9;
         if (n.garrison <= 0) {
           takeCastle(n, h.owner);
-          say(`${label(n)} taken by storm \xB7 ${h.men} men left standing`);
+          say(`STORM CARRIED \xB7 ${keepName(key2)} taken \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men} \xB7 their ${h.assaultGar0 ?? 0} to 0`);
+          h.assaultMen0 = void 0;
+          h.assaultGar0 = void 0;
+          h.assaultKey = void 0;
         } else if (h.men <= 0) {
-          say(`the storm of ${label(n)} failed \xB7 the garrison holds with ${n.garrison} men`);
+          say(`STORM REPULSED \xB7 ${keepName(key2)} holds with ${n.garrison} men \xB7 your column is gone`);
+          h.assaultMen0 = void 0;
+          h.assaultGar0 = void 0;
+          h.assaultKey = void 0;
         }
       }
     }
@@ -33101,6 +33136,18 @@
         html += `<div class="row"><span>Selected</span><b><span class="tag" style="background:${tagColour}22;color:${tagColour}">${esc(owner)}</span> ${esc(label(sel))}</b></div>`;
         html += `<div class="row"><span>Level ${sel.level} \xB7 morale</span><b>${(sel.morale * 100).toFixed(0)}%</b></div>`;
         html += `<div class="row"><span>Garrison here</span><b>${nf(sel.garrison)} \xB7 field ${nf(fieldAt(sel.key))}</b></div>`;
+        if (!isMine && sel.owner >= 0) {
+          const here = hosts.find((h) => h.owner === 0 && !h.routed && h.men > 0 && h.to === null && h.path[h.path.length - 1] === sel.key);
+          const field = hosts.filter((h) => h.owner === 0 && !h.routed && h.men > 0).sort((a, b) => b.men - a.men)[0];
+          const who = here ?? field;
+          const men2 = who ? who.men : cap ? cap.garrison : 0;
+          if (men2 > 0) {
+            const od = oddsFor(men2, sel.garrison, who ? power(who) : men2);
+            const col = od.carries ? "#7fd6a2" : "#ef8080";
+            html += `<div class="row"><span>${here ? "Assault odds" : "If you march"}</span><b style="color:${col}">${od.men} vs ${od.garrison} \xB7 ${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>`;
+            html += `<div class="row"><span>Walls</span><b>\xD7${WALL_BONUS} to the defenders \xB7 ${od.beats} beats to clear</b></div>`;
+          }
+        }
       }
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
@@ -33799,6 +33846,13 @@
           setPop(k, v);
           dirtyTerritory = true;
           return popOf(k);
+        },
+        odds: (keepKey, men) => {
+          const n = nodes2.get(keepKey);
+          if (!n) return null;
+          if (men !== void 0) return oddsFor(men, n.garrison);
+          const h = hosts.filter((x) => x.owner === 0 && x.men > 0).sort((a, b) => b.men - a.men)[0];
+          return h ? assaultOdds(h, n) : oddsFor(0, n.garrison);
         },
         setOwner: (k, owner) => {
           const n = nodes2.get(k);
