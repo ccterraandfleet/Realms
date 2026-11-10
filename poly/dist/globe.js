@@ -30712,6 +30712,7 @@
     const KEEP_MIN_CELLS = 3;
     const LAND_H = 0.02;
     let placedCount = 0;
+    const largeKeeps = /* @__PURE__ */ new Set();
     const ADMIN = !!o.admin;
     const cellSize = Math.PI * o.R / 2 / o.TERR_PER_FACE;
     const nodeKey = (f, tu, tv) => `${f}/${tu}/${tv}`;
@@ -30766,6 +30767,74 @@
       if (Number.isFinite(num) && num >= placedCount) placedCount = num + 1;
       return n;
     }
+    const NAME_A = [
+      "Dun",
+      "Raven",
+      "Ash",
+      "Black",
+      "Grim",
+      "Storm",
+      "Thorn",
+      "Cold",
+      "Iron",
+      "Bright",
+      "Wolf",
+      "Bram",
+      "Fen",
+      "Har",
+      "Mor",
+      "Oak",
+      "Red",
+      "Salt",
+      "Stone",
+      "Wyd"
+    ];
+    const NAME_B = [
+      "march",
+      "hold",
+      "ford",
+      "wick",
+      "stead",
+      "bury",
+      "crest",
+      "fell",
+      "gate",
+      "hollow",
+      "moor",
+      "reach",
+      "rest",
+      "ridge",
+      "vale",
+      "watch",
+      "well",
+      "wood",
+      "barrow",
+      "cairn"
+    ];
+    const NAME_SUF = ["", "", "", " Keep", " Castle", " Bastion", " Hall", " Watch"];
+    const keepName = (key2) => {
+      let h = 2166136261;
+      for (let i = 0; i < key2.length; i++) {
+        h ^= key2.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      const a = (h >>> 0) % NAME_A.length;
+      const b = (h >>> 8) % NAME_B.length;
+      const c = (h >>> 16) % NAME_SUF.length;
+      return NAME_A[a] + NAME_B[b] + NAME_SUF[c];
+    };
+    const TRAITS = ["ford", "hill", "quarry", "none"];
+    const traitOf = (key2) => {
+      let h = 5381;
+      for (let i = 0; i < key2.length; i++) h = (h << 5) + h + key2.charCodeAt(i) | 0;
+      return TRAITS[(h >>> 0) % TRAITS.length];
+    };
+    const TRAIT_LABEL = {
+      ford: "+20% trade gold",
+      hill: "+1 army cap",
+      quarry: "+15% ore",
+      none: ""
+    };
     function keepNear(dir, maxCells) {
       let best = null;
       let bestD = Infinity;
@@ -30784,22 +30853,32 @@
       const d = dir.clone().normalize();
       const h = o.terrainH(d);
       if (h <= LAND_H) return { ok: false, reason: "that is water: a keep needs dry ground" };
+      let parent2 = null;
       for (const n2 of nodes2.values()) {
         if (n2.owner < 0) continue;
-        if (n2.dir.angleTo(d) < KEEP_MIN_CELLS * cellSize / o.R) {
-          return { ok: false, reason: `too close to an existing keep (${KEEP_MIN_CELLS} cells minimum)` };
+        if (n2.dir.angleTo(d) >= KEEP_MIN_CELLS * cellSize / o.R) continue;
+        if (n2.owner !== 0) {
+          return { ok: false, reason: `too close to a rival keep (${KEEP_MIN_CELLS} cells minimum)` };
         }
+        if (!parent2 || n2.dir.angleTo(d) < parent2.dir.angleTo(d)) parent2 = n2;
       }
+      const costMul = parent2 ? 1.6 : 1;
       const r = realms[owner];
+      const grainCost = Math.round(KEEP_FOUND_COST.grain * costMul);
+      const goldCost = Math.round(KEEP_FOUND_COST.gold * costMul);
       if (r && owner === 0 && !ADMIN) {
-        if (r.res.grain < KEEP_FOUND_COST.grain || r.res.gold < KEEP_FOUND_COST.gold) {
-          return { ok: false, reason: `a keep costs ${KEEP_FOUND_COST.grain} grain and ${KEEP_FOUND_COST.gold} gold` };
+        if (r.res.grain < grainCost || r.res.gold < goldCost) {
+          return { ok: false, reason: `a keep costs ${grainCost} grain and ${goldCost} gold${parent2 ? " (satellite surcharge)" : ""}` };
         }
-        r.res.grain -= KEEP_FOUND_COST.grain;
-        r.res.gold -= KEEP_FOUND_COST.gold;
+        r.res.grain -= grainCost;
+        r.res.gold -= goldCost;
       }
       const n = makeKeep(d, owner);
-      say(`keep founded at ${label(n)} \xB7 ${KEEP_FOUND_COST.grain} grain, ${KEEP_FOUND_COST.gold} gold`);
+      if (parent2) {
+        largeKeeps.add(parent2.key);
+        largeKeeps.add(n.key);
+      }
+      say(`${keepName(n.key)} founded \xB7 ${grainCost} grain, ${goldCost} gold${parent2 ? " \xB7 satellite of your holding" : ""}`);
       return { ok: true, key: n.key };
     }
     function roadQuote(aKey, bKey) {
@@ -32126,7 +32205,7 @@
         }
       }
     }
-    const SAVE_KEY = "realms.save.v1";
+    const SAVE_KEY = `realms.save.v1.${o.SEED}.${buildMode}`;
     const SAVE_VERSION = 1;
     const AUTOSAVE_EVERY = 12;
     let saveClock = 0;
@@ -32148,6 +32227,7 @@
         nodes: owned,
         realms: realms.map((r) => ({ id: r.id, alive: r.alive, hearth: r.hearth, capital: r.capital, res: { ...r.res } })),
         mode: buildMode,
+        large: [...largeKeeps],
         placed: [...nodes2.values()].filter((n) => n.key.startsWith("u")).map((n) => ({
           k: n.key,
           d: [n.dir.x, n.dir.y, n.dir.z],
@@ -32245,6 +32325,7 @@
       settlements.clear();
       for (const [key2, pop] of b.people ?? []) if (nodes2.has(key2)) setPop(key2, pop);
       for (const h of b.hosts) hosts.push({ ...h, path: h.path.slice() });
+      for (const k of b.large ?? []) largeKeeps.add(k);
       for (const e of b.drawn ?? []) {
         if (!nodes2.has(e.a) || !nodes2.has(e.b)) continue;
         addEdge(e.a, e.b, 0, 1, (e.p ?? []).map((v) => new Vector3(v[0], v[1], v[2])));
@@ -32848,6 +32929,19 @@
       border:1px solid rgba(255,255,255,0.10); border-radius:11px;
       box-shadow:0 8px 26px rgba(0,0,0,0.42); backdrop-filter:blur(3px);
     }
+    /* THE THIN BAR (Mason, Nov 9 2026: "collapsible option that makes it a thin bar in the corner.
+       Must be thin bar with the arrow that opens it back up"). Collapsed, the card is one row of
+       icons and numbers with a chevron; nothing else of it remains on screen. */
+    #realms-panel.thin { padding:6px 8px; }
+    #realms-panel .thinbar { display:flex; align-items:center; gap:7px; }
+    #realms-panel .tchip { font:11px/1 ui-sans-serif,system-ui,sans-serif; color:#dfe9f2;
+      background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.10);
+      border-radius:6px; padding:4px 6px; white-space:nowrap; }
+    #realms-panel .chev { all:unset; cursor:pointer; color:#9fd7ff; font:13px/1 ui-sans-serif,sans-serif;
+      padding:4px 6px; border-radius:6px; background:rgba(120,200,255,.14);
+      border:1px solid rgba(140,210,255,.32); }
+    #realms-panel .chev:hover { background:rgba(120,200,255,.26); }
+    #realms-panel .ric { font-size:12px; margin-right:4px; }
     #realms-panel .rh { display:flex; align-items:baseline; justify-content:space-between;
       margin-bottom:9px; letter-spacing:0.14em; font-size:10px; color:#9fb4c9; }
     #realms-panel .rh b { color:#f3f7fb; letter-spacing:0.22em; font-weight:600; }
@@ -32873,6 +32967,11 @@
     }
     const esc = (v) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;");
     const nf = (v) => Math.floor(v).toLocaleString("en-US");
+    let panelCollapsed = false;
+    try {
+      panelCollapsed = localStorage.getItem("realms.panel.v1") === "thin";
+    } catch {
+    }
     function paint() {
       const me = realms[0];
       const mine = ownedBy(0);
@@ -32881,12 +32980,27 @@
       const myHosts = hosts.filter((h) => h.owner === 0 && !h.routed);
       const men = myHosts.reduce((s, h) => s + h.men, 0);
       const marches = myHosts.filter((h) => h.to !== null).length;
-      let html = `<div class="rh"><b>REALMS</b><span>${esc(BUILD_TAG || "live")}</span></div>`;
+      if (panelCollapsed) {
+        panel.className = "thin";
+        panel.innerHTML = `<div class="thinbar"><button class="chev" data-rp="open" title="Open the panel">&#9656;</button><span class="tchip">&#127806; ${nf(me.res.grain)}</span><span class="tchip">&#129717; ${nf(me.res.timber)}</span><span class="tchip">&#9935; ${nf(me.res.ore)}</span><span class="tchip">&#129689; ${nf(me.res.gold)}</span><span class="tchip">&#127984; ${mine.length}</span></div>`;
+        const open = panel.querySelector('[data-rp="open"]');
+        if (open) open.onclick = () => {
+          panelCollapsed = false;
+          try {
+            localStorage.setItem("realms.panel.v1", "open");
+          } catch {
+          }
+          paint();
+        };
+        return;
+      }
+      panel.className = "";
+      let html = `<div class="rh"><b>REALMS</b><span>${esc(BUILD_TAG || "live")} <button class="chev" data-rp="close" title="Collapse to a thin bar">&#9662;</button></span></div>`;
       html += `<div class="chips">
-      <div class="chip"><span>Grain</span><b>${nf(me.res.grain)}</b></div>
-      <div class="chip"><span>Timber</span><b>${nf(me.res.timber)}</b></div>
-      <div class="chip"><span>Ore</span><b>${nf(me.res.ore)}</b></div>
-      <div class="chip"><span>Gold</span><b>${nf(me.res.gold)}</b></div>
+      <div class="chip"><span><i class="ric">&#127806;</i>Grain</span><b>${nf(me.res.grain)}</b></div>
+      <div class="chip"><span><i class="ric">&#129717;</i>Timber</span><b>${nf(me.res.timber)}</b></div>
+      <div class="chip"><span><i class="ric">&#9935;</i>Ore</span><b>${nf(me.res.ore)}</b></div>
+      <div class="chip"><span><i class="ric">&#129689;</i>Gold</span><b>${nf(me.res.gold)}</b></div>
     </div>`;
       html += `<div class="row"><span>Holdings</span><b>${mine.length} keep${mine.length === 1 ? "" : "s"}</b></div>`;
       const garrisonTotal = mine.reduce((s, k) => s + k.garrison, 0);
@@ -32927,6 +33041,8 @@
         const owner = sel.owner >= 0 ? realms[sel.owner].name : "unclaimed";
         const tagColour = isMine ? "#5fa8e8" : sel.owner < 0 ? "#8d9aa8" : "#d9695a";
         html += `<div class="bar"><i style="width:${Math.max(3, Math.min(100, sel.morale * 100)).toFixed(0)}%;background:${tagColour}"></i></div>`;
+        const trait = traitOf(sel.key);
+        html += `<div class="row"><span>Place</span><b>${esc(keepName(sel.key))}` + (trait !== "none" ? ` <span class="tag" style="background:#7fd6a222;color:#7fd6a2">${esc(TRAIT_LABEL[trait])}</span>` : "") + `</b></div>`;
         html += `<div class="row"><span>Selected</span><b><span class="tag" style="background:${tagColour}22;color:${tagColour}">${esc(owner)}</span> ${esc(label(sel))}</b></div>`;
         html += `<div class="row"><span>Level ${sel.level} \xB7 morale</span><b>${(sel.morale * 100).toFixed(0)}%</b></div>`;
         html += `<div class="row"><span>Garrison here</span><b>${nf(sel.garrison)} \xB7 field ${nf(fieldAt(sel.key))}</b></div>`;
@@ -32934,6 +33050,15 @@
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
       panel.innerHTML = html;
+      const close = panel.querySelector('[data-rp="close"]');
+      if (close) close.onclick = () => {
+        panelCollapsed = true;
+        try {
+          localStorage.setItem("realms.panel.v1", "thin");
+        } catch {
+        }
+        paint();
+      };
     }
     function projectToScreen(p) {
       const v = p.clone().project(o.camera);
@@ -33395,6 +33520,16 @@
       arr.push(performance.now() - t02);
       if (arr.length > 120) arr.shift();
     }
+    function nodesInView(center, maxAngle) {
+      const out = [];
+      for (const n of nodes2.values()) {
+        const ang = n.dir.angleTo(center);
+        if (ang > maxAngle) continue;
+        out.push({ key: n.key, dir: n.dir, h: n.h, owner: n.owner, ang });
+      }
+      out.sort((a, b) => a.ang - b.ang);
+      return out;
+    }
     function edgesInView(center, maxAngle) {
       const fed = fedFor(0);
       const out = [];
@@ -33465,6 +33600,7 @@
       click,
       key,
       edgesInView,
+      nodesInView,
       toggleCutKey,
       stats,
       tickProfile,
@@ -33511,6 +33647,10 @@
       wealth: () => ({ ...realms[0].res }),
       lastLog: () => lastLog,
       buildMode: () => buildMode,
+      keepName: (k) => keepName(k),
+      traitOf: (k) => ({ trait: traitOf(k), label: TRAIT_LABEL[traitOf(k)] }),
+      isLarge: (k) => largeKeeps.has(k),
+      ownerClass: (id) => id === 0 ? playerClass : ["vanguard", "steward", "necromancer"][id % 3],
       placedKeys: () => [...nodes2.values()].filter((n) => n.key.startsWith("u")).map((n) => n.key),
       sayNow: (m) => say(m),
       marchFrom: (from, to, men) => marchFrom(from, to, men),
@@ -33984,6 +34124,9 @@
   var stoneDarkMat = new MeshStandardMaterial({ color: 7302245, roughness: 0.92, flatShading: true });
   var roofRedMat = new MeshStandardMaterial({ color: 11552556, roughness: 0.72, flatShading: true });
   var roofBlueMat = new MeshStandardMaterial({ color: 2850726, roughness: 0.72, flatShading: true });
+  var flagBlueMat = new MeshBasicMaterial({ color: 4165592, side: DoubleSide });
+  var flagRedMat = new MeshBasicMaterial({ color: 13652794, side: DoubleSide });
+  var flagNeutralMat = new MeshBasicMaterial({ color: 14207400, side: DoubleSide });
   var woodMat = new MeshStandardMaterial({ color: 7031343, roughness: 0.95, flatShading: true });
   var goldMat = new MeshStandardMaterial({ color: 13214247, roughness: 0.5, metalness: 0.25 });
   var treeMat = new MeshStandardMaterial({ roughness: 0.95, flatShading: true });
@@ -34366,13 +34509,14 @@
     g.position.set(x, 0, z);
     return g;
   }
-  function buildCastle(scale, roof, variant = 0) {
+  function buildCastle(scale, roof, variant = 0, flag) {
     const g = new Group();
     const A = 6.2 * scale;
     const wallH = 2.1 * scale;
     const wallT = 0.55 * scale;
-    const plinth = new Mesh(new CylinderGeometry(A * 1.45, A * 1.75, 2.2 * scale, 7), stoneDarkMat);
-    plinth.position.y = -0.85 * scale;
+    const plinthH = 10 * scale;
+    const plinth = new Mesh(new CylinderGeometry(A * 1.45, A * 1.85, plinthH, 7), stoneDarkMat);
+    plinth.position.y = 0.9 * scale - plinthH / 2;
     plinth.castShadow = true;
     plinth.receiveShadow = true;
     g.add(plinth);
@@ -34407,6 +34551,14 @@
     } else {
       g.add(tower(1.05 * scale, 3.2 * scale, roof, -A, -A));
       g.add(tower(1.05 * scale, 3.2 * scale, roof, A, -A));
+    }
+    if (flag) {
+      const poleH = 7.6 * scale;
+      g.add(box(0.14 * scale, poleH, 0.14 * scale, woodMat, 0, poleH / 2, -A * 1.02));
+      const cloth = new Mesh(new PlaneGeometry(2.6 * scale, 1.5 * scale), flag);
+      cloth.position.set(1.3 * scale, poleH - 1.1 * scale, -A * 1.02);
+      cloth.rotation.y = Math.PI / 2;
+      g.add(cloth);
     }
     if (variant === 1) {
       const drumH = 13.5 * scale;
@@ -34445,6 +34597,32 @@
       g.add(stRoof);
       g.add(box(0.09 * scale, 3 * scale, 0.09 * scale, woodMat, 0, drumH + 5 * scale, 0));
       g.add(box(1.3 * scale, 0.75 * scale, 0.05 * scale, goldMat, 0.68 * scale, drumH + 5.9 * scale, 0));
+    } else if (variant === 3) {
+      const mausW = 5.4 * scale;
+      const mausH = 4.2 * scale;
+      g.add(box(mausW, mausH, 4.2 * scale, stoneMat, 0, mausH / 2, -0.6 * scale));
+      const mausRoof = new Mesh(new ConeGeometry(3.9 * scale, 2.6 * scale, 4), roof);
+      mausRoof.position.set(0, mausH + 1.3 * scale, -0.6 * scale);
+      mausRoof.rotation.y = Math.PI / 4;
+      mausRoof.castShadow = true;
+      g.add(mausRoof);
+      g.add(box(1.1 * scale, 2 * scale, 0.14 * scale, windowMat, 0, 1 * scale, 1.52 * scale));
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 3; col++) {
+          for (const side of [-1, 1]) {
+            const hx = side * (1.7 + col * 1.05) * scale;
+            const hz = (1.9 + row * 1.35) * scale;
+            const h = (0.85 + (row + col + (side > 0 ? 1 : 0)) % 3 * 0.22) * scale;
+            const stone = box(0.62 * scale, h, 0.24 * scale, stoneDarkMat, hx, h / 2, hz);
+            stone.rotation.y = (col % 2 ? 1 : -1) * 0.08;
+            g.add(stone);
+          }
+        }
+      }
+      g.add(box(2.4 * scale, 0.5 * scale, 1.2 * scale, stoneDarkMat, 0, 0.5 * scale, 3.4 * scale));
+      for (const bx of [-1.9, 1.9]) {
+        g.add(box(0.32 * scale, 1.5 * scale, 0.32 * scale, stoneDarkMat, bx * scale, 0.75 * scale, 3.4 * scale));
+      }
     } else if (variant === 2) {
       const hallW = 9.6 * scale;
       const hallD = 5.8 * scale;
@@ -34752,6 +34930,16 @@
   var FACTION_YOU = 0;
   var FACTION_ENEMY = 1;
   var roofNeutralMat = new MeshStandardMaterial({ color: 9274744, roughness: 0.85, metalness: 0.02 });
+  var roofNeutralByVariant = [
+    new MeshStandardMaterial({ color: 7176076, roughness: 0.86, flatShading: true }),
+    // slate
+    new MeshStandardMaterial({ color: 6126174, roughness: 0.86, flatShading: true }),
+    // moss
+    new MeshStandardMaterial({ color: 10119757, roughness: 0.86, flatShading: true }),
+    // clay
+    new MeshStandardMaterial({ color: 4933462, roughness: 0.88, flatShading: true })
+    // iron
+  ];
   var windowMat = new MeshStandardMaterial({ color: 1777444, roughness: 0.95, flatShading: true });
   var OWN_COLOUR = new Color(4161488);
   var ENEMY_COLOUR = new Color(12597547);
@@ -35297,18 +35485,25 @@
     const wanted = /* @__PURE__ */ new Set();
     const seats = [];
     stageMark = performance.now();
-    for (let dv = -reach; dv <= reach; dv++) {
-      for (let du = -reach; du <= reach; du++) {
-        const tu = cu + du;
-        const tv = cv + dv;
-        if (tu < 0 || tv < 0 || tu >= TERR_PER_FACE || tv >= TERR_PER_FACE) continue;
-        const key = `${face}/${tu}/${tv}`;
-        wanted.add(key);
-        const seat = seatCached(face, tu, tv);
-        if (!seat) continue;
-        seats.push({ dir: seat.dir, h: seat.h, key });
+    const fromWorld = world ? world.nodesInView(up.clone().normalize(), Math.min(1.2, (reach + 1) * (R * span) / R + 0.02)) : null;
+    if (fromWorld && fromWorld.length) {
+      for (const n of fromWorld) {
+        wanted.add(n.key);
+        seats.push({ dir: n.dir, h: n.h, key: n.key });
       }
-    }
+    } else
+      for (let dv = -reach; dv <= reach; dv++) {
+        for (let du = -reach; du <= reach; du++) {
+          const tu = cu + du;
+          const tv = cv + dv;
+          if (tu < 0 || tv < 0 || tu >= TERR_PER_FACE || tv >= TERR_PER_FACE) continue;
+          const key = `${face}/${tu}/${tv}`;
+          wanted.add(key);
+          const seat = seatCached(face, tu, tv);
+          if (!seat) continue;
+          seats.push({ dir: seat.dir, h: seat.h, key });
+        }
+      }
     lastSeats = seats.length;
     mark("seats");
     const roadsDue = force || performance.now() - lastRoadBuild > 350;
@@ -35324,13 +35519,21 @@
         if (castleMs > 9) continue;
         const cb0 = performance.now();
         const owner = seatOwner(s.key, s.dir);
-        const roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
+        let roof = owner === 0 ? roofBlueMat : owner > 0 ? roofRedMat : roofNeutralMat;
+        const flag = owner === 0 ? flagBlueMat : owner > 0 ? flagRedMat : flagNeutralMat;
         let kh = 7;
         for (let ci = 0; ci < s.key.length; ci++) kh = (kh * 31 + s.key.charCodeAt(ci)) % 100003;
-        const variant = kh % 3;
-        const g = mergeGroup(buildCastle(1.15, roof, variant));
+        const ownClass = owner >= 0 ? world?.ownerClass?.(owner) ?? "" : "";
+        const variant = ownClass === "necromancer" ? 3 : ownClass === "steward" ? 2 : ownClass === "vanguard" ? 0 : kh % 3;
+        if (owner < 0) roof = roofNeutralByVariant[variant] ?? roofNeutralMat;
+        const g = mergeGroup(buildCastle(1.15, roof, variant, flag));
         g.userData.variant = variant;
-        g.position.copy(s.dir).multiplyScalar(R + s.h * RELIEF * R + 0.3);
+        g.userData.owner = owner;
+        g.userData.cls = owner >= 0 ? world?.ownerClass?.(owner) ?? "" : "";
+        const meshRad = meshHeightAt(s.dir);
+        const fieldRad = R + s.h * RELIEF * R;
+        const groundRad = Number.isFinite(meshRad) ? Math.max(fieldRad, meshRad) : fieldRad;
+        g.position.copy(s.dir).multiplyScalar(groundRad + 0.3);
         g.quaternion.setFromUnitVectors(_bup, s.dir);
         g.rotateY(s.key.length % 6);
         g.userData.bornAt = performance.now();
@@ -35341,6 +35544,13 @@
       }
       for (const [k, g] of castles) {
         if (!wanted.has(k)) {
+          castleGroup.remove(g);
+          castles.delete(k);
+          continue;
+        }
+        const nowOwner = seatOwner(k, g.position.clone().normalize());
+        const nowCls = nowOwner >= 0 ? world?.ownerClass?.(nowOwner) ?? "" : "";
+        if ((g.userData.owner ?? -2) !== nowOwner || (g.userData.cls ?? "") !== nowCls) {
           castleGroup.remove(g);
           castles.delete(k);
         }
@@ -35506,7 +35716,7 @@
     const W = world;
     if (!W) return;
     if (m !== "none" && W.buildMode() === "preset") {
-      W.sayNow("this world's keeps and roads are fixed by its seed \xB7 add ?build=hand or ?build=modular to experiment");
+      W.sayNow("preset map: keeps and roads belong to the seed \xB7 switch to hand-drawn or modular in the Map selector, top right");
       buildTool.mode = "none";
       return;
     }
@@ -35556,10 +35766,35 @@
       return b;
     };
     toolBarEl.innerHTML = "";
-    const tag = document.createElement("span");
-    tag.textContent = mode === "preset" ? "map: preset" : `map: ${mode}`;
-    tag.style.cssText = "opacity:.62;margin-right:4px";
-    toolBarEl.appendChild(tag);
+    const sel = document.createElement("select");
+    sel.style.cssText = [
+      "all:unset",
+      "cursor:pointer",
+      "padding:5px 8px",
+      "border-radius:7px",
+      "background:rgba(255,255,255,.06)",
+      "border:1px solid rgba(255,255,255,.14)",
+      "font:12px/1 ui-sans-serif,system-ui,sans-serif",
+      "color:#dfe9f2"
+    ].join(";");
+    for (const [val, text] of [["preset", "Map: preset"], ["hand", "Map: hand-drawn"], ["modular", "Map: modular"]]) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = text;
+      opt.selected = val === mode;
+      opt.style.cssText = "background:#141b22;color:#dfe9f2";
+      sel.appendChild(opt);
+    }
+    sel.onchange = () => {
+      try {
+        localStorage.setItem("realms.mode.v1", sel.value);
+      } catch {
+      }
+      const q = new URLSearchParams(location.search);
+      q.set("build", sel.value);
+      location.search = q.toString();
+    };
+    toolBarEl.appendChild(sel);
     if (mode !== "preset") {
       toolBarEl.appendChild(btn("Place keep (P)", buildTool.mode === "keep", () => setBuildTool(buildTool.mode === "keep" ? "none" : "keep")));
       toolBarEl.appendChild(btn("Draw road (G)", buildTool.mode === "road", () => setBuildTool(buildTool.mode === "road" ? "none" : "road")));
@@ -36161,10 +36396,8 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
     try {
       const savedMode = (() => {
         try {
-          const raw = localStorage.getItem("realms.save.v1");
-          if (!raw) return null;
-          const b = JSON.parse(raw);
-          return b.mode === "hand" || b.mode === "modular" || b.mode === "preset" ? b.mode : null;
+          const m = localStorage.getItem("realms.mode.v1");
+          return m === "hand" || m === "modular" || m === "preset" ? m : null;
         } catch {
           return null;
         }
