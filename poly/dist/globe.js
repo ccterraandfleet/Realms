@@ -30704,9 +30704,10 @@
     let paused = false;
     let lastLog = "press H to fly to your castle \xB7 click an unclaimed keep to claim it";
     const BUILD_TAG = o.build ?? "";
-    const buildMode = o.buildMode ?? "preset";
-    const toolsLegal = () => buildMode !== "preset" || ADMIN;
-    const KEEP_FOUND_COST = { grain: 240, gold: 140 };
+    const buildMode = "hand";
+    const EMPTY_WORLD = true;
+    const toolsLegal = () => true;
+    const KEEP_FOUND_COST = { grain: 160, gold: 90 };
     const ROAD_TIMBER_PER_CELL = 16;
     const ROAD_GOLD_PER_CELL = 8;
     const KEEP_MIN_CELLS = 3;
@@ -30866,7 +30867,9 @@
       const r = realms[owner];
       const grainCost = Math.round(KEEP_FOUND_COST.grain * costMul);
       const goldCost = Math.round(KEEP_FOUND_COST.gold * costMul);
-      if (r && owner === 0 && !ADMIN) {
+      const landless = !realms[owner]?.capital;
+      if (r && owner === 0 && landless) {
+      } else if (r && (owner > 0 || !ADMIN)) {
         if (r.res.grain < grainCost || r.res.gold < goldCost) {
           return { ok: false, reason: `a keep costs ${grainCost} grain and ${goldCost} gold${parent2 ? " (satellite surcharge)" : ""}` };
         }
@@ -30874,6 +30877,11 @@
         r.res.gold -= goldCost;
       }
       const n = makeKeep(d, owner);
+      const realm = realms[owner];
+      if (realm && !realm.capital) {
+        realm.capital = n.key;
+        realm.home.copy(n.dir);
+      }
       if (parent2) {
         largeKeeps.add(parent2.key);
         largeKeeps.add(n.key);
@@ -31102,6 +31110,13 @@
       }
       return best;
     };
+    if (EMPTY_WORLD) {
+      nodes2.clear();
+      edges.clear();
+      incident.clear();
+      allNodes.length = 0;
+      placedCount = 0;
+    }
     const playerCapital = nearestTo(o.SPAWN_DIR, allNodes);
     if (playerCapital) {
       playerCapital.owner = 0;
@@ -31135,6 +31150,32 @@
         taken.push(best);
       }
     }
+    function rivalFirstCapital(r) {
+      if (ownedBy(r.id).length) return;
+      for (let s = 0; s < 90; s++) {
+        const a = (r.id * 2.399963 + s * 0.618) % (Math.PI * 2);
+        const z = 1 - 2 * ((r.id * 0.173 + s * 0.137) % 1);
+        const rr = Math.sqrt(Math.max(0, 1 - z * z));
+        const dir = new Vector3(rr * Math.cos(a), z, rr * Math.sin(a)).normalize();
+        const h = o.terrainH(dir);
+        if (h <= LAND_H) continue;
+        let clash = false;
+        for (const n2 of nodes2.values()) {
+          if (n2.dir.angleTo(dir) < KEEP_MIN_CELLS * 2 * cellSize / o.R) {
+            clash = true;
+            break;
+          }
+        }
+        if (clash) continue;
+        const n = makeKeep(dir, r.id);
+        if (!r.capital) {
+          r.capital = n.key;
+          r.home.copy(n.dir);
+        }
+        return;
+      }
+    }
+    let rivalSeeded = false;
     const ownerOf = (key2) => nodes2.get(key2)?.owner ?? -1;
     const plots = /* @__PURE__ */ new Map();
     const PLOT_MAX = 3;
@@ -32478,9 +32519,44 @@
     let worldTime = 0;
     const AI_GRACE = 120;
     let aiClock = 0;
+    let lastAiNote = "";
+    function aiFound(r) {
+      const mine = ownedBy(r.id);
+      if (!mine.length) {
+        rivalFirstCapital(r);
+        return true;
+      }
+      if (mine.length >= 14) return false;
+      const parent2 = mine[(r.id * 7 + aiPass) % mine.length];
+      const tx = new Vector3(0, 1, 0).cross(parent2.dir).normalize();
+      const ty = parent2.dir.clone().cross(tx).normalize();
+      for (let s = 0; s < 48; s++) {
+        const ring2 = Math.floor(s / 12);
+        const a = r.id * 1.7 + s * 0.9 + aiPass * 0.37;
+        const spread = 0.045 + ring2 * 0.045;
+        const dir = parent2.dir.clone().addScaledVector(tx, Math.cos(a) * spread).addScaledVector(ty, Math.sin(a) * spread).normalize();
+        if (o.terrainH(dir) <= LAND_H) continue;
+        const res = foundKeep(dir, r.id);
+        if (!res.ok || !res.key) {
+          lastAiNote = `refused: ${res.reason}`;
+          continue;
+        }
+        const q = roadQuote(parent2.key, res.key);
+        if (q && r.res.timber >= q.timber && r.res.gold >= q.gold) {
+          r.res.timber -= q.timber;
+          r.res.gold -= q.gold;
+          addEdge(parent2.key, res.key, 0, r.id * 977 + aiPass);
+        }
+        lastAiNote = `founded ${res.key} off ${parent2.key}`;
+        return true;
+      }
+      lastAiNote = "no dry site among 10 probes";
+      return false;
+    }
     function aiDevelop(r) {
       const mine = ownedBy(r.id);
       if (!mine.length) return;
+      if (r.res.grain < 420 || r.res.gold < 200) return;
       let best = null;
       let bestScore = 1e9;
       for (const n of mine) {
@@ -32529,7 +32605,11 @@
       aiPass++;
       for (const r of realms) {
         if (r.id === 0 || !r.alive) continue;
-        if ((aiPass + r.id) % 3 === 0) aiDevelop(r);
+        if ((aiPass + r.id) % 3 === 0) {
+          const canExpand = r.res.grain > 200 && r.res.gold > 110 && r.res.timber > 100 && r.res.ore > 40 && ownedBy(r.id).length < 14;
+          if ((aiPass + r.id) % 3 === 0 && canExpand) aiFound(r);
+          else aiDevelop(r);
+        }
       }
       for (const r of realms) {
         if (r.id === 0 || !r.alive) continue;
@@ -33374,7 +33454,7 @@
       const totalPlots = myGround.reduce((s2, k) => s2 + plotLevelsOf(k.key), 0);
       const workersShort = totalPlots * WORKERS_PER_PLOT - Math.floor(totalPop);
       const grainRate = incomeRate().grain - totalPop * POP_EAT;
-      let objective = "claim a keep beside your roads (click it)";
+      let objective = me.capital ? "claim a keep beside your roads (click it)" : "you hold nothing yet \xB7 press P and click dry ground to found your first keep (it is free)";
       if (myGround.length >= 1 && totalPlots === 0) objective = "build your first plot: double-click your keep, pick Fields";
       if (totalPlots > 0 && workersShort > 0) objective = `staff your plots: ${Math.max(0, Math.floor(totalPop))} people for ${totalPlots * WORKERS_PER_PLOT} jobs, keep is fed so they grow`;
       if (totalPlots > 0 && workersShort <= 0 && grainRate > 0.15) objective = "your farm is working \xB7 upgrade the keep to grow more people (U)";
@@ -33888,6 +33968,10 @@
       return out;
     };
     function tick(dt) {
+      if (!rivalSeeded) {
+        rivalSeeded = true;
+        if (EMPTY_WORLD) for (let i = 1; i < realms.length; i++) rivalFirstCapital(realms[i]);
+      }
       if (paused) {
         if (siegeBattle && siegeBattle.phase === "fight") {
           tickBattle(dt);
@@ -34147,6 +34231,19 @@
         siegeButton: (a) => siegeButton(a),
         siegeState: () => siegeBattle ? { ...siegeBattle, committed: siegeCommitted(), paused } : null,
         res: () => ({ ...realms[0].res }),
+        worldSize: () => ({ keeps: nodes2.size, roads: edges.size, inhabited: [...nodes2.values()].filter((n) => n.owner >= 0).length }),
+        foundNear: (nudge = 0) => {
+          const d = o.SPAWN_DIR.clone();
+          const tx = new Vector3(0, 1, 0).cross(d).normalize();
+          const dir = d.clone().addScaledVector(tx, nudge).normalize();
+          return foundKeep(dir, 0);
+        },
+        rivalSize: (id) => ownedBy(id).length,
+        rivalRes: (id) => ({ grain: Math.round(realms[id].res.grain), gold: Math.round(realms[id].res.gold), timber: Math.round(realms[id].res.timber), ore: Math.round(realms[id].res.ore) }),
+        aiPass: () => aiPass,
+        aiFoundNow: (id) => aiFound(realms[id]),
+        aiNote: () => lastAiNote,
+        planarGap: (a, b) => nodes2.get(a) && nodes2.get(b) ? nodes2.get(a).dir.angleTo(nodes2.get(b).dir) * o.R : null,
         rivalPlots: () => {
           let t = 0;
           for (const n of nodes2.values()) {
@@ -36228,25 +36325,8 @@
       "font:12px/1 ui-sans-serif,system-ui,sans-serif",
       "color:#dfe9f2"
     ].join(";");
-    for (const [val, text] of [["preset", "Map: preset"], ["hand", "Map: hand-drawn"], ["modular", "Map: modular"]]) {
-      const opt = document.createElement("option");
-      opt.value = val;
-      opt.textContent = text;
-      opt.selected = val === mode;
-      opt.style.cssText = "background:#141b22;color:#dfe9f2";
-      sel.appendChild(opt);
-    }
-    sel.onchange = () => {
-      try {
-        localStorage.setItem("realms.mode.v1", sel.value);
-      } catch {
-      }
-      const q = new URLSearchParams(location.search);
-      q.set("build", sel.value);
-      location.search = q.toString();
-    };
-    toolBarEl.appendChild(sel);
-    if (mode !== "preset") {
+    sel.remove();
+    {
       toolBarEl.appendChild(btn("Place keep (P)", buildTool.mode === "keep", () => setBuildTool(buildTool.mode === "keep" ? "none" : "keep")));
       toolBarEl.appendChild(btn("Draw road (G)", buildTool.mode === "road", () => setBuildTool(buildTool.mode === "road" ? "none" : "road")));
       if (buildTool.mode !== "none") toolBarEl.appendChild(btn("Cancel (Esc)", false, () => setBuildTool("none")));
