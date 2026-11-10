@@ -36516,7 +36516,7 @@
     }
     _dragNorth.normalize();
     _dragEast.crossVectors(_dragNorth, _dragUp).normalize();
-    const dragSign = params.get("draginvert") === "0" ? -1 : 1;
+    const dragSign = params.get("draginvert") === "1" ? 1 : -1;
     _dragD.applyAxisAngle(_dragEast, dragSign * dy * upp / R);
     _dragD.applyAxisAngle(_dragNorth, -dragSign * dx * upp / R);
     const nlat = Math.asin(Math.max(-1, Math.min(1, _dragD.y)));
@@ -36669,6 +36669,17 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
   syncCastles();
   markDirty();
   var api = {
+    /* MEASUREMENT, NOT GUESSWORK: where a world direction projects on screen, and a drag that can be
+     * driven from a test. "The drag feels backwards" is only answerable by watching a land feature move
+     * with or against the hand. */
+    screenOfDir: (x, y, z) => {
+      const v = new Vector3(x, y, z).normalize().multiplyScalar(R).project(camera);
+      return { x: (v.x * 0.5 + 0.5) * canvas.clientWidth, y: (-v.y * 0.5 + 0.5) * canvas.clientHeight, z: v.z };
+    },
+    drag: (dx, dy) => {
+      dragBy(dx, dy);
+    },
+    aim: () => ({ lat: aim.lat, lon: aim.lon, alt: aim.alt }),
     THREE: three_module_exports,
     scene,
     camera,
