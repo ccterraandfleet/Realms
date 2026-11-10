@@ -31609,7 +31609,7 @@
       const eco = realmId === 0 ? classInfo[playerClass].eco : 1;
       for (const n of ownedBy(realmId)) {
         const mult = 1 + 0.3 * (n.level - 1);
-        const pl = realmId === 0 ? plotsOf(n.key) : emptyPlots();
+        const pl = plotsOf(n.key);
         const staff = staffingOf(n);
         out.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields * staff);
         out.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot * staff);
@@ -31632,7 +31632,7 @@
         const eco = r.id === 0 ? classInfo[playerClass].eco : 1;
         for (const n of mine) {
           const mult = 1 + 0.3 * (n.level - 1);
-          const pl = r.id === 0 ? plotsOf(n.key) : emptyPlots();
+          const pl = plotsOf(n.key);
           const staff = staffingOf(n);
           add.grain += 0.6 * mult * (1 + PLOT_GAIN * pl.fields * staff);
           add.timber += 0.35 * mult * (1 + PLOT_GAIN * pl.woodlot * staff);
@@ -32122,8 +32122,8 @@
           n.garrison = Math.max(0, n.garrison - bleed);
           n.morale = Math.max(0, n.morale - 8e-3);
           if (n.garrison <= 0) {
-            takeCastle(n, h.owner);
-            say(`SIEGE WON \xB7 ${keepName(key2)} starved out \xB7 their ${h.assaultGar0 ?? 0} to 0 \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men}`);
+            const lootA = takeCastle(n, h.owner);
+            say(`SIEGE WON \xB7 ${keepName(key2)} starved out \xB7 their ${h.assaultGar0 ?? 0} to 0 \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men}${lootA}`);
             h.assaultMen0 = void 0;
             h.assaultGar0 = void 0;
             h.assaultKey = void 0;
@@ -32147,8 +32147,8 @@
         h.men = Math.max(0, h.men - dmgToColumn);
         h.fightingUntil = worldTime + 0.9;
         if (n.garrison <= 0) {
-          takeCastle(n, h.owner);
-          say(`STORM CARRIED \xB7 ${keepName(key2)} taken \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men} \xB7 their ${h.assaultGar0 ?? 0} to 0`);
+          const lootB = takeCastle(n, h.owner);
+          say(`STORM CARRIED \xB7 ${keepName(key2)} taken \xB7 your ${h.assaultMen0 ?? h.men} to ${h.men} \xB7 their ${h.assaultGar0 ?? 0} to 0${lootB}`);
           h.assaultMen0 = void 0;
           h.assaultGar0 = void 0;
           h.assaultKey = void 0;
@@ -32272,6 +32272,7 @@
         return;
       }
     }
+    const SIEGE_BEAT = 0.55;
     function tickBattle(dt) {
       const s = siegeBattle;
       if (!s || s.phase !== "fight") return;
@@ -32286,7 +32287,7 @@
         return;
       }
       s.beat += dt;
-      if (s.beat < BEAT) return;
+      if (s.beat < SIEGE_BEAT) return;
       s.beat = 0;
       s.swings++;
       if (!s.contact) {
@@ -32320,8 +32321,8 @@
       s.losses += lost;
       h.fightingUntil = worldTime + 0.9;
       if (n.garrison <= 0) {
-        takeCastle(n, h.owner);
-        leaveSiege(`STORM CARRIED \xB7 ${keepName(s.key)} taken \xB7 your ${s.men0} to ${h.men} \xB7 their ${s.gar0} to 0`);
+        const lootC = takeCastle(n, h.owner);
+        leaveSiege(`STORM CARRIED \xB7 ${keepName(s.key)} taken \xB7 your ${s.men0} to ${h.men} \xB7 their ${s.gar0} to 0${lootC}`);
         return;
       }
       if (s.party <= 0) {
@@ -32419,6 +32420,16 @@
     }
     function takeCastle(n, by) {
       const prev = n.owner;
+      const pl = plotsOf(n.key);
+      const dev = pl.fields + pl.woodlot + pl.quarry;
+      let note = "";
+      if (by === 0 && prev > 0) {
+        const grain = Math.round((70 * n.level + 55 * dev) * (1 + 0.12 * dev));
+        const gold = Math.round(grain * 0.6);
+        realms[0].res.grain += grain;
+        realms[0].res.gold += gold;
+        note = ` \xB7 sacked for ${grain} grain, ${gold} gold${dev ? ` \xB7 ${dev} worked plots taken intact` : ""}`;
+      }
       n.owner = by;
       ownersChanged();
       n.morale = 0.5;
@@ -32432,6 +32443,7 @@
           say(`${realms[prev].name} has lost its last castle`);
         }
       }
+      return note;
     }
     function hostOwnersChanged() {
       for (const h of hosts) if (h.owner >= 0 && !realms[h.owner]?.alive) route(h);
@@ -32466,10 +32478,59 @@
     let worldTime = 0;
     const AI_GRACE = 120;
     let aiClock = 0;
+    function aiDevelop(r) {
+      const mine = ownedBy(r.id);
+      if (!mine.length) return;
+      let best = null;
+      let bestScore = 1e9;
+      for (const n of mine) {
+        const pl2 = plotsOf(n.key);
+        const score = (pl2.fields + pl2.woodlot + pl2.quarry) * 10 - n.level;
+        if (score < bestScore) {
+          bestScore = score;
+          best = n;
+        }
+      }
+      if (!best) return;
+      const pl = plotsOf(best.key);
+      const track = pl.fields <= pl.woodlot && pl.fields <= pl.quarry ? "fields" : pl.woodlot <= pl.quarry ? "woodlot" : "quarry";
+      const lv = pl[track];
+      if (lv < PLOT_MAX) {
+        const c = plotCost(lv);
+        if (r.res.grain >= c.grain && r.res.gold >= c.gold && r.res.timber >= c.timber && r.res.ore >= c.ore) {
+          r.res.grain -= c.grain;
+          r.res.gold -= c.gold;
+          r.res.timber -= c.timber;
+          r.res.ore -= c.ore;
+          plots.set(best.key, { ...pl, [track]: lv + 1 });
+          return;
+        }
+      }
+      if (best.level < 8) {
+        const up2 = {
+          grain: Math.round(300 * Math.pow(1.8, best.level - 1)),
+          gold: Math.round(120 * Math.pow(1.8, best.level - 1)),
+          ore: Math.round(60 * Math.pow(1.8, best.level - 1))
+        };
+        if (r.res.grain >= up2.grain && r.res.gold >= up2.gold && r.res.ore >= up2.ore) {
+          r.res.grain -= up2.grain;
+          r.res.gold -= up2.gold;
+          r.res.ore -= up2.ore;
+          best.level += 1;
+          dirtyTerritory = true;
+        }
+      }
+    }
+    let aiPass = 0;
     function tickAI(dt) {
       aiClock += dt;
       if (aiClock < 6) return;
       aiClock = 0;
+      aiPass++;
+      for (const r of realms) {
+        if (r.id === 0 || !r.alive) continue;
+        if ((aiPass + r.id) % 3 === 0) aiDevelop(r);
+      }
       for (const r of realms) {
         if (r.id === 0 || !r.alive) continue;
         const mine = ownedBy(r.id);
@@ -34085,6 +34146,18 @@
         siege: () => siegeBattle,
         siegeButton: (a) => siegeButton(a),
         siegeState: () => siegeBattle ? { ...siegeBattle, committed: siegeCommitted(), paused } : null,
+        res: () => ({ ...realms[0].res }),
+        rivalPlots: () => {
+          let t = 0;
+          for (const n of nodes2.values()) {
+            if (n.owner > 0) {
+              const q = plotsOf(n.key);
+              t += q.fields + q.woodlot + q.quarry;
+            }
+          }
+          return t;
+        },
+        plotsAt: (k) => plotsOf(k),
         siegeDrawn: () => siegeFormations().length,
         siegeProg: () => siegeFormations()[0]?.prog ?? null,
         siegeRoute: () => siegeFormations()[0]?.path?.[1] ?? null,
