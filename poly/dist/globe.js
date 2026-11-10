@@ -31819,7 +31819,35 @@
       return true;
     }
     function garrisonCacheSeeded() {
-      return hosts.concat(garrisonFormations());
+      return hosts.concat(garrisonFormations(), siegeFormations());
+    }
+    function siegeFormations() {
+      const s = siegeBattle;
+      if (!s) return [];
+      const n = nodes2.get(s.key);
+      if (!n) return [];
+      const road = (incident.get(n.key) ?? [])[0];
+      if (!road) return [];
+      const e = edges.get(road);
+      if (!e) return [];
+      const toT = e.a === n.key ? e.b : e.a;
+      const h = hosts.find((x) => x.id === s.hostId);
+      const men = s.phase === "deploy" ? Math.max(1, Math.round((h?.men ?? 0) * s.commit)) : Math.max(1, s.party);
+      return [{
+        id: -900,
+        owner: 0,
+        men,
+        startMen: men,
+        path: [n.key, toT],
+        seg: 0,
+        prog: s.approach,
+        from: n.key,
+        to: null,
+        routed: false,
+        lastBeat: 0,
+        tier: 1,
+        garrison: true
+      }];
     }
     let garrisonCache = [];
     let garrisonStamp = -1e9;
@@ -32160,7 +32188,9 @@
         gar0: n.garrison,
         losses: 0,
         swings: 0,
-        party: 0
+        party: 0,
+        approach: 0.45,
+        contact: false
       };
       paused = true;
       o.flyToDir(n.dir, 30);
@@ -32233,6 +32263,24 @@
       if (s.beat < BEAT) return;
       s.beat = 0;
       s.swings++;
+      if (!s.contact) {
+        s.approach = Math.max(0.06, s.approach - 0.1);
+        const volley = Math.min(Math.max(1, Math.round(s.party * 0.05) + 1), Math.max(1, Math.round(n.garrison * 0.03)));
+        const fell = Math.min(volley, s.party);
+        s.party = Math.max(0, s.party - fell);
+        h.men = Math.max(0, h.men - fell);
+        s.losses += fell;
+        if (s.party <= 0) {
+          leaveSiege(`STORM BROKEN UP \xB7 ${keepName(s.key)} shot the party down in the open \xB7 ${h.men} held back`);
+          return;
+        }
+        if (s.approach <= 0.061) {
+          s.contact = true;
+          say(`the party reaches the walls \xB7 ${s.party} men at the gate`);
+        }
+        paint();
+        return;
+      }
       const men = s.party;
       const gs = Math.max(1, n.garrison) * WALL_BONUS;
       const p = power(h) * (men / Math.max(1, s.men0));
@@ -33294,7 +33342,7 @@
         const live = bh ? bh.men : 0;
         const men2 = siegeCommitted();
         const od = bn ? oddsFor(men2, bn.garrison, bh ? power(bh) * (men2 / Math.max(1, live)) : men2) : null;
-        html += `<div style="margin:8px 0;padding:8px;border:1px solid #d9695a55;border-radius:7px;background:#d9695a14"><div class="row"><span style="color:#ffb3a0">SIEGE</span><b>${esc(keepName(sb.key))} \xB7 ${sb.phase === "fight" ? `storming \xB7 ${sb.swings} beats` : "deploying"}</b></div><div class="row"><span>At the walls</span><b>${nf(live)} men</b></div><div class="row"><span>Garrison</span><b>${nf(bn ? bn.garrison : 0)} \xB7 walls \xD7${WALL_BONUS}</b></div><div class="row"><span>Over the wall</span><b>${nf(men2)} \xB7 reserve ${nf(Math.max(0, live - men2))}</b></div>` + (od ? `<div class="row"><span>Odds</span><b style="color:${od.carries ? "#7fd6a2" : "#ef8080"}">${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>` : "") + `<div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button data-sb="less" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">\u2212 10%</button><button data-sb="more" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">+ 10%</button><button data-sb="attack" style="flex:1.4;cursor:pointer;background:#d9695a;color:#fff;border:0;border-radius:6px;padding:5px;font-weight:600">${sb.phase === "fight" ? "Send more in" : "Storm the walls"}</button><button data-sb="withdraw" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Withdraw</button></div></div>`;
+        html += `<div style="margin:8px 0;padding:8px;border:1px solid #d9695a55;border-radius:7px;background:#d9695a14"><div class="row"><span style="color:#ffb3a0">SIEGE</span><b>${esc(keepName(sb.key))} \xB7 ${sb.phase === "fight" ? `storming \xB7 ${sb.swings} beats` : "deploying"}</b></div><div class="row"><span>At the walls</span><b>${nf(live)} men</b></div><div class="row"><span>Garrison</span><b>${nf(bn ? bn.garrison : 0)} \xB7 walls \xD7${WALL_BONUS}</b></div><div class="row"><span>Over the wall</span><b>${nf(men2)} \xB7 reserve ${nf(Math.max(0, live - men2))}</b></div>` + (sb.phase === "fight" ? `<div class="row"><span>${sb.contact ? "At the gate" : "Crossing"}</span><b style="color:${sb.contact ? "#7fd6a2" : "#e8c66a"}">${sb.contact ? "under the walls" : `${Math.round(sb.approach * 100)}% up the road \xB7 taking fire`}</b></div>` : "") + (od ? `<div class="row"><span>Odds</span><b style="color:${od.carries ? "#7fd6a2" : "#ef8080"}">${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>` : "") + `<div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button data-sb="less" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">\u2212 10%</button><button data-sb="more" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">+ 10%</button><button data-sb="attack" style="flex:1.4;cursor:pointer;background:#d9695a;color:#fff;border:0;border-radius:6px;padding:5px;font-weight:600">${sb.phase === "fight" ? "Send more in" : "Storm the walls"}</button><button data-sb="withdraw" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Withdraw</button></div></div>`;
       }
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
@@ -34011,6 +34059,8 @@
         siege: () => siegeBattle,
         siegeButton: (a) => siegeButton(a),
         siegeState: () => siegeBattle ? { ...siegeBattle, committed: siegeCommitted(), paused } : null,
+        siegeDrawn: () => siegeFormations().length,
+        siegeProg: () => siegeFormations()[0]?.prog ?? null,
         odds: (keepKey, men) => {
           const n = nodes2.get(keepKey);
           if (!n) return null;
