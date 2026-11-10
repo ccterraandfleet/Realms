@@ -31140,9 +31140,9 @@
     const PLOT_MAX = 3;
     const PLOT_GAIN = 0.35;
     const settlements = /* @__PURE__ */ new Map();
-    const POP_START = 10;
-    const POP_BASE = 14;
-    const POP_PER_LEVEL = 9;
+    const POP_START = 50;
+    const POP_BASE = 80;
+    const POP_PER_LEVEL = 50;
     const POP_EAT = 45e-4;
     const POP_GROW = 0.3;
     const POP_STARVE = 0.55;
@@ -31885,13 +31885,14 @@
       n.garrison += toRaise;
       say(`${toRaise} ${r.hearth ? "household troops" : "levies"} mustered at ${label(n)} \xB7 garrison ${n.garrison} of ${cap}` + (toRaise < raise ? ` \xB7 only ${room} fit: upgrade the keep or raise a Hearth for more room` : "") + ` \xB7 attack to march them out`);
       return true;
-      return true;
     }
     function marchFrom(key2, to, men) {
       const n = nodes2.get(key2);
       if (!n || n.owner < 0) return false;
       const take = Math.min(n.garrison, men ?? n.garrison);
       if (take <= 0) {
+        const standing = hosts.find((h) => h.owner === n.owner && !h.routed && h.men > 0 && h.to === null && h.path[h.path.length - 1] === key2);
+        if (standing) return orderMarch(standing, to);
         say("no garrison there to march: muster first (M)");
         return false;
       }
@@ -31985,8 +31986,11 @@
       }
       for (let i = hosts.length - 1; i >= 0; i--) {
         const h = hosts[i];
+        if (h.men <= 0 && h.to === null) {
+          hosts.splice(i, 1);
+          continue;
+        }
         if (h.routed && h.to === null) hosts.splice(i, 1);
-        else if (!h.routed && h.to === null && h.path.length === 1 && h.men <= 0) hosts.splice(i, 1);
       }
     }
     function arrive(h) {
@@ -31995,19 +31999,24 @@
       if (!n) return;
       if (n.owner === h.owner) {
         const cap = capFor(n, realms[h.owner].hearth);
-        const before = n.garrison;
-        n.garrison = Math.min(cap, n.garrison + h.men);
-        h.men = 0;
-        say(`${n.garrison - before} men garrisoned at ${label(n)}`);
+        const room = Math.max(0, cap - n.garrison);
+        const take = Math.min(room, h.men);
+        n.garrison += take;
+        h.men -= take;
+        if (h.men > 0) {
+          say(`${take} men joined the garrison at ${label(n)} \xB7 garrison full at ${cap}, ${h.men} stay in the field`);
+        } else {
+          say(`${take} men garrisoned at ${label(n)}`);
+        }
         return;
       }
       if (n.owner >= 0) {
-        const garrison = Math.max(capFor(n, realms[n.owner].hearth) * 0.25, n.garrison);
-        if (h.men > garrison * 2.2) {
-          takeCastle(n, h.owner);
-          say(`${label(n)} stormed and taken`);
+        const garrison = Math.max(1, Math.max(capFor(n, realms[n.owner].hearth) * 0.15, n.garrison));
+        if (h.men >= garrison * 0.6) {
+          say(`${label(n)} stormed \xB7 ${h.men} against ${n.garrison} behind the walls`);
+          h.assaultBeat = 0;
         } else {
-          say(`besieging ${label(n)} \xB7 waiting for the road to be cut`);
+          say(`besieging ${label(n)} \xB7 too few to storm it (${h.men} against ${n.garrison}) \xB7 cut its road or bring more men`);
         }
         return;
       }
@@ -32028,6 +32037,51 @@
       if (h.to) out.push(h.to);
       else if (h.path.length) out.push(h.path[h.path.length - 1]);
       return out;
+    }
+    const WALL_BONUS = 1.35;
+    function tickAssaults(dt) {
+      for (const h of hosts) {
+        if (h.routed || h.men <= 0 || h.to !== null) continue;
+        const key2 = h.path[h.path.length - 1];
+        const n = nodes2.get(key2);
+        if (!n || n.owner < 0 || n.owner === h.owner) continue;
+        const garrisonStrength = Math.max(1, n.garrison) * WALL_BONUS;
+        if (h.men < garrisonStrength * 0.6) {
+          h.assaultBeat = (h.assaultBeat ?? 0) + dt;
+          if (h.assaultBeat < BEAT) continue;
+          h.assaultBeat = 0;
+          const bleed = Math.max(1, Math.round(n.garrison * 0.02));
+          n.garrison = Math.max(0, n.garrison - bleed);
+          n.morale = Math.max(0, n.morale - 8e-3);
+          if (n.garrison <= 0) {
+            takeCastle(n, h.owner);
+            say(`${label(n)} starved out and taken \xB7 ${h.men} men still in the field`);
+          }
+          continue;
+        }
+        h.assaultBeat = (h.assaultBeat ?? 0) + dt;
+        if (h.assaultBeat < BEAT) continue;
+        h.assaultBeat = 0;
+        const p = power(h);
+        const ratio = p / garrisonStrength;
+        const dmgToGarrison = Math.min(
+          Math.round(Math.max(0, n.garrison) * 0.9) + 1,
+          Math.round(h.men * 0.11 * Math.min(2.2, ratio))
+        );
+        const dmgToColumn = Math.min(
+          Math.round(h.men * 0.22) + 1,
+          Math.round(n.garrison * 0.075 * WALL_BONUS / Math.max(0.35, ratio))
+        );
+        n.garrison = Math.max(0, n.garrison - dmgToGarrison);
+        h.men = Math.max(0, h.men - dmgToColumn);
+        h.fightingUntil = worldTime + 0.9;
+        if (n.garrison <= 0) {
+          takeCastle(n, h.owner);
+          say(`${label(n)} taken by storm \xB7 ${h.men} men left standing`);
+        } else if (h.men <= 0) {
+          say(`the storm of ${label(n)} failed \xB7 the garrison holds with ${n.garrison} men`);
+        }
+      }
     }
     function tickCombat(dt) {
       for (let i = 0; i < hosts.length; i++) {
@@ -32280,6 +32334,7 @@
         stage("hosts", () => tickHosts(dt));
         stage("claims", () => resolveClaims());
         stage("combat", () => tickCombat(dt));
+        stage("assault", () => tickAssaults(dt));
         stage("siege", () => tickSiege(dt));
         stage("ai", () => tickAI(dt));
         sim += dt;
@@ -33487,6 +33542,7 @@
       hosts: [],
       claims: [],
       combat: [],
+      assault: [],
       siege: [],
       ai: [],
       total: []
@@ -33509,6 +33565,7 @@
       timeIt("hosts", () => tickHosts(dt));
       timeIt("claims", () => resolveClaims());
       timeIt("combat", () => tickCombat(dt));
+      timeIt("assault", () => tickAssaults(dt));
       timeIt("siege", () => tickSiege(dt));
       timeIt("ai", () => tickAI(dt));
       panelUpdateAt += dt;
@@ -33735,6 +33792,28 @@
           };
           hosts.push(h);
           return h.id;
+        },
+        /* Test and creative-mode hooks. Staging a siege by waiting for a village to grow takes minutes,
+         * and a capture test that cannot be staged proves nothing. */
+        setPop: (k, v) => {
+          setPop(k, v);
+          dirtyTerritory = true;
+          return popOf(k);
+        },
+        setOwner: (k, owner) => {
+          const n = nodes2.get(k);
+          if (!n) return -2;
+          n.owner = owner;
+          ownersChanged();
+          dirtyTerritory = true;
+          hostOwnersChanged();
+          return n.owner;
+        },
+        setGarrison: (k, v) => {
+          const n = nodes2.get(k);
+          if (!n) return -1;
+          n.garrison = v;
+          return n.garrison;
         },
         morale: (k) => nodes2.get(k)?.morale ?? -1,
         owner: (k) => nodes2.get(k)?.owner ?? -2,
