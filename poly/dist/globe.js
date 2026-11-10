@@ -30886,8 +30886,34 @@
         largeKeeps.add(parent2.key);
         largeKeeps.add(n.key);
       }
+      connectFounder(n.key, owner);
       say(`${keepName(n.key)} founded \xB7 ${grainCost} grain, ${goldCost} gold${parent2 ? " \xB7 satellite of your holding" : ""}`);
       return { ok: true, key: n.key };
+    }
+    function connectFounder(key2, owner) {
+      const n = nodes2.get(key2);
+      if (!n || (incident.get(key2) ?? []).length) return;
+      let best = null;
+      let bd = Infinity;
+      for (const o2 of nodes2.values()) {
+        if (o2.key === key2 || o2.owner < 0) continue;
+        const d = o2.dir.angleTo(n.dir);
+        if (d < bd) {
+          bd = d;
+          best = o2;
+        }
+      }
+      if (!best) return;
+      const reachCells = bd * o.R / cellSize;
+      if (reachCells > 26) return;
+      const q = roadQuote(best.key, key2);
+      if (!q) return;
+      const r = realms[owner];
+      if (r) {
+        r.res.timber = Math.max(0, r.res.timber - q.timber);
+        r.res.gold = Math.max(0, r.res.gold - q.gold);
+      }
+      addEdge(best.key, key2, 0, n.tu * 7919 + n.tv);
     }
     function roadQuote(aKey, bKey) {
       const a = nodes2.get(aKey), b = nodes2.get(bKey);
@@ -31148,6 +31174,32 @@
         realms[i].capital = best.key;
         realms[i].home.copy(best.dir);
         taken.push(best);
+      }
+    }
+    function linkCapitals() {
+      const caps = [];
+      for (let i = 1; i < realms.length; i++) {
+        const k = realms[i].capital;
+        const n = k ? nodes2.get(k) : null;
+        if (n) caps.push(n);
+      }
+      const linked = /* @__PURE__ */ new Set();
+      for (const a of caps) {
+        if (linked.has(a.key)) continue;
+        let best = null;
+        let bd = Infinity;
+        for (const b of caps) {
+          if (b.key === a.key || linked.has(b.key)) continue;
+          const d = a.dir.angleTo(b.dir);
+          if (d < bd) {
+            bd = d;
+            best = b;
+          }
+        }
+        if (!best) break;
+        addEdge(a.key, best.key, 1, a.tu * 131 + best.tv);
+        linked.add(a.key);
+        linked.add(best.key);
       }
     }
     function rivalFirstCapital(r) {
@@ -32628,7 +32680,7 @@
           if (frontier.length) claimNode(frontier[Math.floor(Math.random() * frontier.length)], r.id);
         }
         const myHosts = hosts.filter((h) => h.owner === r.id && !h.routed);
-        if (myHosts.length < 2 && r.res.grain > 200 && r.res.gold > 80) {
+        if (myHosts.length < 2 && r.res.grain > 120 && r.res.gold > 30) {
           const from = mine[Math.floor(Math.random() * mine.length)];
           if (muster(from.key)) {
             let target2 = null;
@@ -33970,7 +34022,10 @@
     function tick(dt) {
       if (!rivalSeeded) {
         rivalSeeded = true;
-        if (EMPTY_WORLD) for (let i = 1; i < realms.length; i++) rivalFirstCapital(realms[i]);
+        if (EMPTY_WORLD) {
+          for (let i = 1; i < realms.length; i++) rivalFirstCapital(realms[i]);
+          linkCapitals();
+        }
       }
       if (paused) {
         if (siegeBattle && siegeBattle.phase === "fight") {
