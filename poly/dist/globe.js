@@ -32285,7 +32285,11 @@
         party: 0,
         approach: 0.45,
         routeIdx: 0,
-        contact: false
+        contact: false,
+        party0: 0,
+        partyMorale: 1,
+        garMorale: 1,
+        brokeWho: ""
       };
       paused = true;
       o.flyToDir(n.dir, 30);
@@ -32352,6 +32356,7 @@
         if (!h) return;
         if (s.phase === "deploy") {
           s.party = Math.max(1, Math.round(h.men * s.commit));
+          s.party0 = s.party;
           s.phase = "fight";
           s.beat = 0;
           say(`the storm goes in \xB7 ${s.party} men over the wall \xB7 ${Math.max(0, h.men - s.party)} held back`);
@@ -32413,13 +32418,26 @@
       h.men = Math.max(0, h.men - lost);
       s.losses += lost;
       h.fightingUntil = worldTime + 0.9;
-      if (n.garrison <= 0) {
+      const relTheirDamage = dmgGar / Math.max(1, s.gar0);
+      const relOurDamage = lost / Math.max(1, s.party0 || s.party);
+      s.garMorale = Math.max(0, Math.min(1, s.garMorale - relTheirDamage * 1.3 - (ratio > 1 ? 0.015 : 0)));
+      const noProgress = dmgGar <= 0 ? 0.07 : 0;
+      s.partyMorale = Math.max(0, Math.min(1, s.partyMorale - relOurDamage * 1.4 - 0.012 - noProgress));
+      const BREAK_AT = 0.25;
+      if (s.garMorale <= BREAK_AT && n.garrison > 0) s.brokeWho = "garrison";
+      else if (s.partyMorale <= BREAK_AT && s.party > 0) s.brokeWho = "party";
+      if (n.garrison <= 0 || s.brokeWho === "garrison") {
+        const surrendered = Math.max(0, n.garrison);
+        n.garrison = 0;
         const lootC = takeCastle(n, h.owner);
-        leaveSiege(`STORM CARRIED \xB7 ${keepName(s.key)} taken \xB7 your ${s.men0} to ${h.men} \xB7 their ${s.gar0} to 0${lootC}`);
+        leaveSiege(s.brokeWho === "garrison" ? `GARRISON BROKE \xB7 ${keepName(s.key)} taken \xB7 ${surrendered} threw down arms \xB7 your ${s.men0} to ${h.men}${lootC}` : `STORM CARRIED \xB7 ${keepName(s.key)} taken \xB7 your ${s.men0} to ${h.men} \xB7 their ${s.gar0} to 0${lootC}`);
         return;
       }
-      if (s.party <= 0) {
-        leaveSiege(`STORM REPULSED \xB7 ${keepName(s.key)} holds with ${n.garrison} \xB7 the storm party is gone, ${h.men} held back`);
+      if (s.party <= 0 || s.brokeWho === "party") {
+        const routed = Math.max(0, s.party);
+        s.party = 0;
+        h.men = Math.max(0, h.men - routed);
+        leaveSiege(s.brokeWho === "party" ? `STORM BROKE \xB7 ${keepName(s.key)} holds with ${n.garrison} \xB7 ${routed} routed off the field \xB7 ${h.men} held back` : `STORM REPULSED \xB7 ${keepName(s.key)} holds with ${n.garrison} \xB7 the storm party is gone, ${h.men} held back`);
         return;
       }
       paint();
@@ -33561,7 +33579,7 @@
         const live = bh ? bh.men : 0;
         const men2 = siegeCommitted();
         const od = bn ? oddsFor(men2, bn.garrison, bh ? power(bh) * (men2 / Math.max(1, live)) : men2) : null;
-        html += `<div style="margin:8px 0;padding:8px;border:1px solid #d9695a55;border-radius:7px;background:#d9695a14"><div class="row"><span style="color:#ffb3a0">SIEGE</span><b>${esc(keepName(sb.key))} \xB7 ${sb.phase === "fight" ? `storming \xB7 ${sb.swings} beats` : "deploying"}</b></div><div class="row"><span>At the walls</span><b>${nf(live)} men</b></div><div class="row"><span>Garrison</span><b>${nf(bn ? bn.garrison : 0)} \xB7 walls \xD7${WALL_BONUS}</b></div><div class="row"><span>Over the wall</span><b>${nf(men2)} \xB7 reserve ${nf(Math.max(0, live - men2))}</b></div>` + (sb.phase === "fight" ? `<div class="row"><span>${sb.contact ? "At the gate" : "Crossing"}</span><b style="color:${sb.contact ? "#7fd6a2" : "#e8c66a"}">${sb.contact ? "under the walls" : `${Math.round(sb.approach * 100)}% up the road \xB7 taking fire`}</b></div>` : "") + (od ? `<div class="row"><span>Odds</span><b style="color:${od.carries ? "#7fd6a2" : "#ef8080"}">${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>` : "") + `<div class="row"><span>Approach</span><b style="color:#9fd7ff">${esc(routeName(sb.key, sb.routeIdx))}</b></div><div class="row"><span>Form up</span><b>${Math.round(sb.approach * 100)}% out \xB7 ${sb.phase === "deploy" ? "closer means less time under fire" : "on the way in"}</b></div><div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button data-sb="route" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Approach</button><button data-sb="standoff" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Form up</button></div><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button data-sb="less" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">\u2212 10%</button><button data-sb="more" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">+ 10%</button><button data-sb="attack" style="flex:1.4;cursor:pointer;background:#d9695a;color:#fff;border:0;border-radius:6px;padding:5px;font-weight:600">${sb.phase === "fight" ? "Send more in" : "Storm the walls"}</button><button data-sb="withdraw" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Withdraw</button></div></div>`;
+        html += `<div style="margin:8px 0;padding:8px;border:1px solid #d9695a55;border-radius:7px;background:#d9695a14"><div class="row"><span style="color:#ffb3a0">SIEGE</span><b>${esc(keepName(sb.key))} \xB7 ${sb.phase === "fight" ? `storming \xB7 ${sb.swings} beats` : "deploying"}</b></div><div class="row"><span>At the walls</span><b>${nf(live)} men</b></div><div class="row"><span>Garrison</span><b>${nf(bn ? bn.garrison : 0)} \xB7 walls \xD7${WALL_BONUS}</b></div><div class="row"><span>Over the wall</span><b>${nf(men2)} \xB7 reserve ${nf(Math.max(0, live - men2))}</b></div>` + (sb.phase === "fight" ? `<div class="row"><span>${sb.contact ? "At the gate" : "Crossing"}</span><b style="color:${sb.contact ? "#7fd6a2" : "#e8c66a"}">${sb.contact ? "under the walls" : `${Math.round(sb.approach * 100)}% up the road \xB7 taking fire`}</b></div>` : "") + (od ? `<div class="row"><span>Odds</span><b style="color:${od.carries ? "#7fd6a2" : "#ef8080"}">${od.carries ? "should carry" : "would be repelled"} \xB7 expect ~${od.expectedLosses} lost</b></div>` : "") + `<div class="row"><span>Nerve</span><b>yours ${Math.round(sb.partyMorale * 100)}% \xB7 theirs ${Math.round(sb.garMorale * 100)}%` + (sb.partyMorale <= 0.35 || sb.garMorale <= 0.35 ? ` <span style="color:#e8c66a">\xB7 breaking</span>` : "") + `</b></div><div class="row"><span>Approach</span><b style="color:#9fd7ff">${esc(routeName(sb.key, sb.routeIdx))}</b></div><div class="row"><span>Form up</span><b>${Math.round(sb.approach * 100)}% out \xB7 ${sb.phase === "deploy" ? "closer means less time under fire" : "on the way in"}</b></div><div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap"><button data-sb="route" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Approach</button><button data-sb="standoff" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Form up</button></div><div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap"><button data-sb="less" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">\u2212 10%</button><button data-sb="more" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">+ 10%</button><button data-sb="attack" style="flex:1.4;cursor:pointer;background:#d9695a;color:#fff;border:0;border-radius:6px;padding:5px;font-weight:600">${sb.phase === "fight" ? "Send more in" : "Storm the walls"}</button><button data-sb="withdraw" style="flex:1;cursor:pointer;background:#ffffff14;color:#dfe9f3;border:1px solid #ffffff26;border-radius:6px;padding:5px">Withdraw</button></div></div>`;
       }
       if (lastLog) html += `<div class="log">${esc(lastLog)}</div>`;
       html += `<div class="keys">Double-click a keep for orders (attack \xB7 trade \xB7 blockade \xB7 build road)<br>H home \xB7 1-9 keeps \xB7 F follow \xB7 M muster \xB7 U upgrade \xB7 R roads \xB7 space pause</div>`;
@@ -34315,6 +34333,28 @@
           return foundKeep(dir, 0);
         },
         rivalSize: (id) => ownedBy(id).length,
+        /* STAGE A SIEGE FROM A TEST: found a keep three cells off your capital, hand it to a rival with a
+         * chosen garrison, and march a column at it. Removes the guesswork of picking a target. */
+        stageSiege: (garrison = 20) => {
+          const cap = realms[0].capital;
+          if (!cap) return { ok: false, reason: "found a capital first" };
+          const c = nodes2.get(cap);
+          const tx = new Vector3(0, 1, 0).cross(c.dir).normalize();
+          const ty = c.dir.clone().cross(tx).normalize();
+          const dir = c.dir.clone().addScaledVector(tx, 0.1).addScaledVector(ty, 0.02).normalize();
+          const res = foundKeep(dir, 0);
+          if (!res.ok || !res.key) return { ok: false, reason: res.reason };
+          const foe = res.key;
+          const n = nodes2.get(foe);
+          n.owner = 11;
+          n.garrison = garrison;
+          n.morale = 1;
+          ownersChanged();
+          setPop(cap, 600);
+          const mus = muster(cap);
+          const marched = marchFrom(cap, foe);
+          return { ok: true, cap, foe, mustered: mus, marched, road: !!roadQuote(cap, foe), garrison };
+        },
         rivalRes: (id) => ({ grain: Math.round(realms[id].res.grain), gold: Math.round(realms[id].res.gold), timber: Math.round(realms[id].res.timber), ore: Math.round(realms[id].res.ore) }),
         aiPass: () => aiPass,
         aiFoundNow: (id) => aiFound(realms[id]),
