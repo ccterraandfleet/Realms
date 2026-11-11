@@ -585,6 +585,35 @@ rivet(0, -0.2, 0, 0.008, sword, brass);
  * the index. Authored with seg() so the joints actually meet. */
 seg([0.035, -0.42, 0.14], [0.012, -0.185, 0.045], 0.049, linen, sword);
 seg([0.012, -0.185, 0.045], [0.004, -0.135, 0.022], 0.052, mail, sword);
+/* rows of mail: visible rings, because a smooth capsule under a metal material reads as
+ * a plastic tube, and mail is the one armour a player looks at constantly */
+for (let i = 0; i < 4; i++) {
+  const t = i / 3;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0545 - t * 0.002, 0.0036, 4, 14), mail);
+  ring.rotation.x = Math.PI / 2 + 0.36;
+  ring.position.set(0.011 - t * 0.007, -0.176 + t * 0.036, 0.043 - t * 0.017);
+  sword.add(ring);
+}
+/* cloth folds in the sleeve so it is not a smooth cone */
+for (let i = 0; i < 4; i++) {
+  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.046 + i * 0.006, 0.0075, 4, 10), linen);
+  fold.rotation.x = Math.PI / 2 + 0.52;
+  fold.rotation.z = i * 0.7;
+  fold.position.set(0.03 - i * 0.006, -0.30 - i * 0.045, 0.10 + i * 0.017);
+  sword.add(fold);
+}
+/* glove cuff with stitching, so wrist and hand read as two separate objects */
+const gloveCuff = new THREE.Mesh(new THREE.CylinderGeometry(0.049, 0.052, 0.03, 12), glove);
+gloveCuff.position.set(0.005, -0.128, 0.024);
+gloveCuff.rotation.set(0.42, 0, -0.1);
+sword.add(gloveCuff);
+for (let i = 0; i < 7; i++) {
+  const a = (i / 7) * Math.PI * 2;
+  const st = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.009, 0.004), leather);
+  st.position.set(0.005 + Math.cos(a) * 0.049, -0.128, 0.024 + Math.sin(a) * 0.049);
+  st.lookAt(0.005, -0.128, 0.024);
+  sword.add(st);
+}
 const bracer = seg([0.014, -0.215, 0.055], [0.002, -0.132, 0.026], 0.057, leather, sword);
 for (let i = 0; i < 3; i++) {
   const st = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.0055, 4, 12), leather);
@@ -601,6 +630,12 @@ backPlate.scale.set(1.18, 0.92, 0.52);
 backPlate.position.set(0, -0.062, 0.040);
 sword.add(backPlate);
 /* the knuckle guard: a thin steel bar across the back of the hand, not a dome */
+for (let i = 0; i < 5; i++) {
+  const st = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.0035, 0.0035), gripMat);
+  st.position.set(-0.04 + i * 0.02, -0.0745, 0.0625);
+  st.rotation.z = 0.25;
+  sword.add(st);
+}
 const knuckleBar = new THREE.Mesh(new THREE.BoxGeometry(0.106, 0.014, 0.022), steelDark);
 knuckleBar.position.set(0, -0.048, 0.043);
 sword.add(knuckleBar);
@@ -719,6 +754,20 @@ for (const y of [0.1, -0.1]) {
 const shieldHand = new THREE.Group();
 seg([0.02, -0.30, -0.28], [0.0, -0.17, -0.06], 0.05, linen, shieldHand);
 seg([0.0, -0.17, -0.06], [-0.005, -0.12, -0.02], 0.054, mail, shieldHand);
+for (let i = 0; i < 3; i++) {
+  const t = i / 2;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0555 - t * 0.002, 0.0036, 4, 14), mail);
+  ring.rotation.x = Math.PI / 2 - 0.55;
+  ring.position.set(-0.002 - t * 0.003, -0.156 + t * 0.03, -0.05 + t * 0.016);
+  shieldHand.add(ring);
+}
+for (let i = 0; i < 3; i++) {
+  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.048 + i * 0.007, 0.0075, 4, 10), linen);
+  fold.rotation.x = Math.PI / 2 - 0.5;
+  fold.rotation.z = i * 0.9;
+  fold.position.set(0.02 - i * 0.005, -0.22 - i * 0.04, -0.16 - i * 0.02);
+  shieldHand.add(fold);
+}
 const lbracer = seg([0.01, -0.22, -0.10], [-0.004, -0.145, -0.035], 0.058, leather, shieldHand);
 for (let i = 0; i < 2; i++) {
   const st = new THREE.Mesh(new THREE.TorusGeometry(0.059, 0.0055, 4, 12), leather);
@@ -1260,7 +1309,17 @@ function render(dt) {
     shieldPose.pos[i] = lerp(shieldPose.pos[i], target.s.pos[i], k);
     shieldPose.rot[i] = lerp(shieldPose.rot[i], target.s.rot[i], k);
   }
-  if (!INSPECT) { sword.position.fromArray(pose.pos); sword.rotation.fromArray(pose.rot); }
+  if (!INSPECT) {
+    /* breathing sway: a held weapon is never perfectly still, and a totally rigid hand
+     * reads as a graphic pasted on the screen */
+    const t = performance.now() / 1000;
+    const swayX = Math.sin(t * 1.1) * 0.0022 + Math.sin(t * 2.7) * 0.0009;
+    const swayY = Math.cos(t * 0.9) * 0.0026 + Math.sin(t * 3.1) * 0.0007;
+    sword.position.fromArray(pose.pos);
+    sword.rotation.fromArray(pose.rot);
+    sword.position.x += swayX; sword.position.y += swayY;
+    sword.rotation.z += swayX * 1.6;
+  }
   shield.position.fromArray(shieldPose.pos);
   shield.rotation.fromArray(shieldPose.rot);
   /* the shield hides the upper body while guarding: a real cost to turtling */
