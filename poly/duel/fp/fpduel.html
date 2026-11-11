@@ -66,6 +66,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
+import { RGBELoader } from './lib/RGBELoader.js';
 import { CFG, Duel, Fighter } from './fpduel.core.js';
 import { STYLES, think, makeBrain } from './fpduel.ai.js';
 
@@ -93,7 +94,8 @@ scene.fog = new THREE.Fog(0xc9d8d8, 62, 275);
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 500);
 
-/* sky dome: a real gradient, because one flat background colour reads as a wall */
+/* sky dome: gradient placeholder, replaced by a real CC0 HDRI the moment it loads */
+let skyDome = null;
 {
   const m = new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
@@ -101,19 +103,25 @@ const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 5
     vertexShader: 'varying float vy; void main(){ vy = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
     fragmentShader: 'varying float vy; uniform vec3 top; uniform vec3 hor; void main(){ float t = clamp(vy * 1.4 + 0.10, 0.0, 1.0); gl_FragColor = vec4(mix(hor, top, t), 1.0); }',
   });
-  scene.add(new THREE.Mesh(new THREE.SphereGeometry(260, 24, 16), m));
+  skyDome = new THREE.Mesh(new THREE.SphereGeometry(260, 24, 16), m);
+  scene.add(skyDome);
 }
 
 /* light: warm key from the west, cold fill, thin blue rim to separate silhouettes */
-scene.add(new THREE.HemisphereLight(0xbcd9f0, 0x59684a, 0.92));
-const sun = new THREE.DirectionalLight(0xfff1d8, 2.6);
-sun.position.set(24, 30, 15);
+/* the HDRI carries the sky fill now, so the fake hemisphere drops to a whisper;
+ * at full strength it double counts the sky and flattens every form */
+scene.add(new THREE.HemisphereLight(0xbcd9f0, 0x59684a, 0.22));
+const sun = new THREE.DirectionalLight(0xfff2e0, 2.0);
+/* measured off the HDRI's own bright spot: azimuth toward -Z, 44.5 deg elevation,
+ * so the shadows on the ground and the visible sun cannot disagree */
+sun.position.set(12.6, 31.5, -29.5);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
 sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 95;
 sun.shadow.bias = -0.0008;
+sun.shadow.radius = 2.5;
 sun.shadow.normalBias = 0.02;
 scene.add(sun);
 const rim = new THREE.DirectionalLight(0x9fc4ff, 0.6);
@@ -399,18 +407,23 @@ const linen = new THREE.MeshStandardMaterial({ color: 0x4d5a66, roughness: 1 });
 /* A metal with nothing to reflect renders black, which is how the first sword ended up
  * invisible while technically in frame. A 32x64 gradient probe is enough to give every
  * blade a horizon and a sky. */
+/* REAL SKY, REAL LIGHT. A gradient in the reflection slot is not lighting: steel,
+ * cloth and stone only read as real when the light arriving has structure. This loads a
+ * CC0 HDRI (Poly Haven kloofendal clear sky) and drives the scene's image based
+ * lighting AND the visible background from it. Shadows are then matched to the sky's
+ * own bright spot by measuring the rendered frame, so light and sky cannot disagree. */
 try {
-  const cv = document.createElement('canvas'); cv.width = 32; cv.height = 64;
-  const cx = cv.getContext('2d');
-  const grd = cx.createLinearGradient(0, 0, 0, 64);
-  grd.addColorStop(0, '#7fa8cc'); grd.addColorStop(0.5, '#eef3f6'); grd.addColorStop(1, '#4a4235');
-  cx.fillStyle = grd; cx.fillRect(0, 0, 32, 64);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.mapping = THREE.EquirectangularReflectionMapping;
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromEquirectangular(tex).texture;
-  pmrem.dispose();
-} catch (e) { /* a missing environment only costs shine, never the page */ }
+  new RGBELoader().load('./env/sky_1k.hdr', (hdr) => {
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    scene.environment = pmrem.fromEquirectangular(hdr).texture;
+    scene.background = hdr;
+    if (skyDome) skyDome.visible = false;
+    pmrem.dispose();
+    window.__skyReady = true;
+  }, undefined, () => { window.__skyReady = false; });
+} catch (e) { /* the gradient dome stays if the sky file is missing */ }
 
 const vmLight = new THREE.PointLight(0xfff2df, 1.6, 2.2, 2);
 vmLight.position.set(0.14, 0.1, 0.18);
@@ -838,6 +851,11 @@ function tick(dt) {
   }
   foePrev = fst;
 }
+
+/* frame hooks, used by the test rigs to aim the camera and read the sky */
+window.__setPitch = (v) => { pitch = v; };
+window.__setYaw = (v) => { yaw = v; };
+window.__setSun = (x, y, z, intensity) => { sun.position.set(x, y, z); if (intensity) sun.intensity = intensity; return sun.position.toArray(); };
 
 function render(dt) {
   if (!duel) return;
