@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-11 12:23</div>
+  <div id="build">BUILD 2026-11-11 12:36</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -91,6 +91,7 @@ import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
 import { STYLES, styleRule } from './chiv.styles.js';
+import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
 import { EffectComposer } from './lib/EffectComposer.js';
 import { RenderPass } from './lib/RenderPass.js';
@@ -931,6 +932,27 @@ function stepBits(dt) {
 }
 /* the opponent's rig, mixer and clip table live here; the loader below fills them */
 let foeModel = null, foeMixer = null, foeActions = {}, knightClips = null, foeRig = null;
+/* ============================ THE ARMOUR ============================
+ * The body mesh stays exactly as it is, so the skeleton, the 76 clips and the
+ * rigpose swing driver all keep working, and real plate is LAYERED onto it in
+ * realm colours: our men in Terra blue, Corvane in red, heraldry on the tabard.
+ * ================================================================== */
+let FORGE = null;
+async function initForge() {
+  if (FORGE) return FORGE;
+  const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+  FORGE = { atlas };
+  return FORGE;
+}
+function dressBody(root, side) {
+  if (!FORGE || !root) return null;
+  const M = FORGE.atlas.m;
+  const cloth = side < 0 ? M.clothBlue : M.clothRed;
+  const kit = buildKit(M, { side: 'R', tabardMat: cloth, capeMat: cloth });
+  const res = dressRig(root, kit);
+  root.updateWorldMatrix(true, true);
+  return res;
+}
 const foeRoot = new THREE.Group();
 scene.add(foeRoot);
 
@@ -981,7 +1003,7 @@ window.__lab = { model: LAB.model, style: LAB.style };
 const ROUND_MSG = $('#msg');
 const loader = new GLTFLoader();
 let ready = false;
-loader.load(MODEL_FILE[LAB.model], (gltf) => {
+loader.load(MODEL_FILE[LAB.model], async (gltf) => {
   const src = gltf.scene;
   scene.add(src);
   /* THE SCALE HAS TO BE DECIDED PER ASSET. A skinned mesh's bounding box is not
@@ -1030,6 +1052,10 @@ loader.load(MODEL_FILE[LAB.model], (gltf) => {
     return { x:+lp.x.toFixed(3), y:+lp.y.toFixed(3), z:+lp.z.toFixed(3) };
   };
   window.__foeRig = foeRig ? { kind: foeRig.kind, ok: foeRig.ok, reach: +foeRig.reach.toFixed(3), forward: foeRig.forward } : null;
+  await initForge();
+  const foeDress = dressBody(foeModel, 1);
+  window.__armour = foeDress ? { placed: foeDress.placed, draws: foeDress.draws,
+    pieces: foeDress.pieces, unit: +foeDress.unit.toFixed(3) } : null;
   buildTheField();
 }, undefined, (e) => {
   ROUND_MSG.textContent = 'COULD NOT LOAD THE OPPONENT';
@@ -1069,7 +1095,13 @@ function tintByRole(model, tint) {
 function makeSoldier(f, side, tint) {
   const root = new THREE.Group();
   const model = skeletonClone(foeModel);
+  /* a clone inherits Corvane's plate, so strip it back to the bare body first and
+   * dress each man in his own realm's colours instead */
+  const inherited = [];
+  model.traverse((n) => { if (n.isMesh && n.userData.isKit) inherited.push(n); });
+  for (const n of inherited) { if (n.parent) n.parent.remove(n); }
   tintByRole(model, tint);
+  dressBody(model, side);
   root.add(model);
   scene.add(root);
   const mixer = new THREE.AnimationMixer(model);
@@ -1277,7 +1309,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-11 12:23');
+console.log('REALMS KINGDOM BUILD 2026-11-11 12:36');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is

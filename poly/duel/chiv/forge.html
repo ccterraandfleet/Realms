@@ -1,0 +1,101 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Forge</title>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+<style>html,body{margin:0;background:#0b0f13;overflow:hidden;font:600 12px/1.4 ui-monospace,Menlo,monospace;color:#dfe8ef}
+canvas{display:block}.lab{position:absolute;transform:translateX(-50%);text-align:center;pointer-events:none}
+.name{font-size:15px;letter-spacing:.16em}.spec{font-size:10.5px;color:#8fa2b1;margin-top:3px;font-weight:400}</style>
+</head><body><script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { RGBELoader } from './lib/RGBELoader.js';
+import { clone as skeletonClone } from './lib/SkeletonUtils.js';
+import { autoFit, bindRig, applySwing } from './rigpose.js';
+import { Atlas, buildKit, dressRig, kitStats } from './forge.js';
+
+const W = Math.max(900, innerWidth), H = Math.max(500, innerHeight);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1218);
+const camera = new THREE.PerspectiveCamera(30, W / H, 0.1, 120);
+new RGBELoader().load('./env/sky_1k.hdr', (hdr) => {
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromEquirectangular(hdr).texture;
+  scene.environmentIntensity = 0.7;
+});
+const key = new THREE.DirectionalLight(0xfff2df, 2.7); key.position.set(3.0, 5.6, 4.6);
+key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = .5; key.shadow.camera.far = 22;
+key.shadow.camera.left = -5; key.shadow.camera.right = 5; key.shadow.camera.top = 5; key.shadow.camera.bottom = -5;
+key.shadow.bias = -0.0012; scene.add(key);
+const ra = new THREE.DirectionalLight(0x9fc4ff, 2.2); ra.position.set(-5, 3.2, -4.2); scene.add(ra);
+const rb = new THREE.DirectionalLight(0xffd9a8, 1.0); rb.position.set(5.2, 2.0, -3.0); scene.add(rb);
+scene.add(new THREE.AmbientLight(0x30404f, 1.0));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(9, 64).rotateX(-Math.PI/2),
+  new THREE.MeshStandardMaterial({ color: 0x2a3138, roughness: .92 })); ground.receiveShadow = true; scene.add(ground);
+
+const loader = new GLTFLoader();
+const load = (u) => new Promise((res, rej) => loader.load(u, res, undefined, rej));
+const gltf = await load('./knight.glb');
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+
+function makeKnight(x, dressed) {
+  const root = gltf.scene.clone(true);
+  root.traverse((o) => { if (o.isSkinnedMesh) { o.frustumCulled = false; } });
+  scene.add(root);
+  const fit = autoFit(root, 1.86);
+  root.position.x = x;
+  const rig = bindRig(root);
+  if (dressed) {
+    const kit = buildKit(atlas.m, { side: 'R' });
+    root.userData.kit = kitStats(kit);          /* BEFORE dressing: pieces leave the group */
+    const res = dressRig(root, kit);
+    root.userData.placed = res;
+    root.userData.unit = res.unit;
+    root.updateWorldMatrix(true, true);
+    /* where did the kit actually land? a piece parented with the wrong unit shows up
+       here as a bounding box far larger than a body */
+    const box = new THREE.Box3();
+    for (const m of res.meshes) box.union(new THREE.Box3().setFromObject(m));
+    const bodyBox = new THREE.Box3().setFromObject(root);
+    root.userData.box = {
+      kit: [+box.min.x.toFixed(2), +box.min.y.toFixed(2), +box.min.z.toFixed(2),
+            +box.max.x.toFixed(2), +box.max.y.toFixed(2), +box.max.z.toFixed(2)],
+      bodyH: +(bodyBox.max.y - bodyBox.min.y).toFixed(2),
+      kitH: +(box.max.y - box.min.y).toFixed(2),
+    };
+  }
+  if (rig && rig.ok) {
+    applySwing(rig, { attack: { name: 'Slash', dir: 'Left' }, state: 'release', stateT: 0.46, stateDur: 1, guard: false }, { faceSign: 1 });
+    root.updateWorldMatrix(true, true);
+  }
+  return { root, fit, rig };
+}
+
+const a = makeKnight(-0.62, false);
+const b = makeKnight(0.62, true);
+[['SHIPPED KNIGHT', '6,952 tris · 13 KB atlas'], ['FORGED', 'layered plate · full PBR set']].forEach(([n, s], i) => {
+  const d = document.createElement('div'); d.className = 'lab';
+  d.style.left = (W/2 + (i? 1:-1) * (W/4.6)) + 'px'; d.style.bottom = '18px';
+  d.innerHTML = `<div class="name">${n}</div><div class="spec">${s}</div>`;
+  document.body.appendChild(d);
+});
+
+camera.position.set(0, 1.28, 3.85);
+camera.lookAt(0, 1.12, 0);
+renderer.render(scene, camera);
+
+window.__forge = {
+  dressed: { kit: b.root.userData.kit, placed: { placed: b.root.userData.placed.placed, of: b.root.userData.placed.of, draws: b.root.userData.placed.draws, pieces: b.root.userData.placed.pieces }, unit: +b.root.userData.unit.toFixed(3), box: b.root.userData.box },
+  fits: { shipped: a.fit, forged: b.fit },
+  materials: Object.keys(atlas.m).length,
+};
+</script></body></html>
