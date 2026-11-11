@@ -491,6 +491,15 @@ function seg(a, b, r, mat, parent) {
   parent.add(m);
   return m;
 }
+function ringAt(a, b, t, R, tube, mat, parent) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  const d = new THREE.Vector3().subVectors(B, A);
+  const m = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 4, 14), mat);
+  m.position.copy(A).addScaledVector(d, t);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d.clone().normalize());
+  parent.add(m);
+  return m;
+}
 function rivet(x, y, z, r, parent, mat) {
   const m = new THREE.Mesh(new THREE.SphereGeometry(r, 6, 5), mat || steelDark);
   m.position.set(x, y, z);
@@ -531,7 +540,7 @@ function buildFist(opts) {
 
   /* four fingers, stacked pinky to index along the grip, each wrapping around it */
   const ys = [-0.064, -0.040, -0.016, 0.008];
-  const rads = [0.0085, 0.0091, 0.0095, 0.0091];
+  const rads = [0.0094, 0.0100, 0.0105, 0.0100];
   const angs = [0.95, -0.46, -1.72, -2.62];
   for (let i = 0; i < 4; i++) {
     const y = ys[i], r0 = rads[i];
@@ -660,6 +669,7 @@ rivet(0, -0.2, 0, 0.008, sword, brass);
 /* THE RIGHT HAND: forearm with mail at the wrist, a strapped bracer, and the fist on the
  * grip. The fist is placed so its grip axis (local Y) is the hilt's axis. */
 const swordFist = buildFist({ side: 1, R: 0.021 });
+swordFist.scale.setScalar(1.15);   /* a hand has to dwarf the hilt, not match it */
 swordFist.position.set(0, -0.055, 0);
 sword.add(swordFist);
 
@@ -777,37 +787,46 @@ for (let i = 0; i < 4; i++) {
 /* leather enarmes behind, and the left fist gripping the middle one */
 /* ENARMES: two horizontal leather bars on the INNER face (+Z), because you hold a shield
  * by its back, and the first-person view should show your own arm behind it. */
-for (const y of [0.085, -0.075]) {
-  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 8), leather);
-  bar.rotation.z = Math.PI / 2;
-  bar.position.set(0, y, 0.052);
-  shield.add(bar);
-  for (const sx of [-0.085, 0.085]) rivet(sx, y, 0.052, 0.006, shield, steelDark);
+/* a VERTICAL grip bar, so the hand holding it is upright with the fingers stacked up the
+ * bar. A horizontal enarme needed the fist turned a quarter turn, which is what made the
+ * hand read sideways. */
+const GRIP_X = 0.018, GRIP_Y = 0.010, GRIP_Z = 0.054;
+const gripBar = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.22, 10), leather);
+gripBar.position.set(GRIP_X, GRIP_Y, GRIP_Z);
+shield.add(gripBar);
+for (const dy of [0.108, -0.108]) {
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.012, 10), steelDark);
+  cap.position.set(GRIP_X, GRIP_Y + dy, GRIP_Z);
+  shield.add(cap);
+  rivet(GRIP_X, GRIP_Y + dy, GRIP_Z + 0.012, 0.006, shield, steelDark);
 }
+/* a forearm strap below the hand, which is what actually carries a shield's weight */
+const armStrap = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.16, 8), leather);
+armStrap.rotation.z = Math.PI / 2;
+armStrap.position.set(0, -0.115, GRIP_Z - 0.004);
+shield.add(armStrap);
+for (const sx of [-0.070, 0.070]) rivet(sx, -0.115, GRIP_Z - 0.004, 0.006, shield, steelDark);
 
 /* THE LEFT HAND gripping the upper enarme. The bar runs along X, so the fist (whose grip
  * axis is local Y) is turned a quarter turn and its hand mass ends up below the bar. */
 const shieldHand = new THREE.Group();
-const shieldFist = buildFist({ side: 1, R: 0.011 });
-shieldFist.rotation.z = -Math.PI / 2;
-shieldFist.position.set(0.005, 0.085, 0.052);
+/* LEFT HAND on the vertical grip: no rotation at all now, so the knuckles face the player
+ * and the four fingers stack up the bar the way they do on a real shield hand. */
+const shieldFist = buildFist({ side: -1, R: 0.0125 });
+shieldFist.position.set(GRIP_X, GRIP_Y, GRIP_Z);
+shieldFist.scale.setScalar(1.15);
 shieldHand.add(shieldFist);
-seg([0.030, 0.055, 0.080], [0.005, 0.030, 0.075], 0.047, mail, shieldHand);
-seg([0.070, -0.32, 0.20], [0.030, 0.055, 0.080], 0.046, linen, shieldHand);
-for (let i = 0; i < 3; i++) {
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.049 - i * 0.002, 0.0034, 4, 14), mail);
-  ring.rotation.x = Math.PI / 2 + 0.7;
-  ring.rotation.z = -0.5;
-  ring.position.set(0.033 + i * 0.002, 0.048 - i * 0.008, 0.079 - i * 0.002);
-  shieldHand.add(ring);
-}
-for (let i = 0; i < 3; i++) {
-  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.047 + i * 0.007, 0.0072, 4, 10), linen);
-  fold.rotation.x = Math.PI / 2 + 0.7;
-  fold.rotation.z = -0.5 + i * 0.8;
-  fold.position.set(0.048 + i * 0.010, -0.02 - i * 0.075, 0.105 + i * 0.018);
-  shieldHand.add(fold);
-}
+/* wrist out of the bottom of the grip, then the forearm and sleeve */
+const cuffA = [GRIP_X - 0.004, GRIP_Y - 0.075, GRIP_Z + 0.010];
+const cuffB = [GRIP_X + 0.004, GRIP_Y - 0.030, GRIP_Z + 0.006];
+seg(cuffA, cuffB, 0.050, mail, shieldHand);
+const armA = [0.085, -0.36, 0.20];
+const armB = cuffA;
+seg(armA, armB, 0.048, linen, shieldHand);
+seg([GRIP_X - 0.006, GRIP_Y - 0.135, GRIP_Z + 0.016], cuffA, 0.053, leather, shieldHand);
+for (let i = 0; i < 3; i++) ringAt(cuffB, cuffA, 0.25 + i * 0.25, 0.0505, 0.0034, mail, shieldHand);
+for (let i = 0; i < 3; i++) ringAt(armB, armA, 0.18 + i * 0.26, 0.048 + i * 0.006, 0.0072, linen, shieldHand);
+for (let i = 0; i < 2; i++) ringAt(cuffA, [GRIP_X - 0.006, GRIP_Y - 0.135, GRIP_Z + 0.016], 0.3 + i * 0.4, 0.0545, 0.0052, leather, shieldHand);
 shield.add(shieldHand);
 shield.scale.setScalar(0.84);
 shield.position.set(-0.345, -0.385, -0.615);
@@ -1209,14 +1228,22 @@ if (INSPECT) {
   if (!/[?&]part=shield\b/.test(location.search)) {
     shield.visible = false; sword.visible = true;
     sword.scale.setScalar(1.0);
-    /* put the FIST at the centre of the frame: the fist sits at sword-local y -0.055 */
-    sword.position.set(0.0, 0.055, -0.26);
     sword.rotation.set(back ? -0.10 : 0.10, back ? 2.95 : 0.42, 0.08);
+    sword.position.set(0, 0, -0.26);
+    /* centre the FIST itself rather than guessing an offset: measure where it ended up
+     * and slide the whole weapon back by that much */
+    sword.updateMatrixWorld(true);
+    const fw = new THREE.Vector3();
+    swordFist.getWorldPosition(fw);
+    sword.position.x -= fw.x; sword.position.y -= fw.y;
   } else {
     sword.visible = false; shield.visible = true;
-    /* the left fist is at shield-local (0.005, 0.085, 0.052) */
-    shield.position.set(-0.005, -0.085, -0.30);
     shield.rotation.set(0.04, back ? 3.05 : -0.30, -0.06);
+    shield.position.set(0, 0, -0.30);
+    shield.updateMatrixWorld(true);
+    const fw2 = new THREE.Vector3();
+    shieldFist.getWorldPosition(fw2);
+    shield.position.x -= fw2.x; shield.position.y -= fw2.y;
   }
 }
 if (!LOWQ) {
@@ -1345,8 +1372,7 @@ function render(dt) {
     sword.position.x += swayX; sword.position.y += swayY;
     sword.rotation.z += swayX * 1.6;
   }
-  shield.position.fromArray(shieldPose.pos);
-  shield.rotation.fromArray(shieldPose.rot);
+  if (!INSPECT) { shield.position.fromArray(shieldPose.pos); shield.rotation.fromArray(shieldPose.rot); }
   /* the shield hides the upper body while guarding: a real cost to turtling */
   shield.visible = true;
 
