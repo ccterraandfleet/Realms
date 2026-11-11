@@ -30663,6 +30663,47 @@
   var TRUNK_SPEED = 26;
   var LANE_SPEED = 15;
   var BEAT = 1;
+  var MAX_PIPS = 5;
+  var PIP_GAIN = 0.03;
+  var COMMANDERS_NAMED = [
+    "Aldric",
+    "Bram",
+    "Corin",
+    "Dagen",
+    "Edric",
+    "Falk",
+    "Gareth",
+    "Halden",
+    "Ivo",
+    "Jorun",
+    "Kestrel",
+    "Lorne",
+    "Maud",
+    "Nedric",
+    "Osric",
+    "Perrin",
+    "Quill",
+    "Rannoch",
+    "Sable",
+    "Torvald",
+    "Ulric",
+    "Vesna",
+    "Wend",
+    "Yara",
+    "Zephan",
+    "Alys",
+    "Bettina",
+    "Cassian",
+    "Dorian",
+    "Elspeth"
+  ];
+  var COMMANDER_TRAITS = {
+    wallbreaker: { label: "wall-breaker", blurb: "his men hit the garrison 18% harder in a storm" },
+    sapper: { label: "sapper", blurb: "his picks take a wall down 25% faster" },
+    steady: { label: "steady", blurb: "his men lose 20% less nerve in the storm" },
+    butcher: { label: "butcher", blurb: "he kills 12% harder in the open field" }
+  };
+  var TRAIT_KEYS = Object.keys(COMMANDER_TRAITS);
   var INTERCEPT_HOPS = 3;
   var INVEST_DRAIN = 55e-4;
   var SIEGE_DRAIN = 0.02;
@@ -32336,6 +32377,24 @@
         }
       }
     }
+    function makeCommander(owner, id, tier = 1) {
+      let x = id * 2654435761 + owner * 40503 >>> 0;
+      x ^= x >>> 13;
+      x = x * 1274126177 >>> 0;
+      const name = COMMANDERS_NAMED[x % COMMANDERS_NAMED.length];
+      const pick = tier >= 2 ? TRAIT_KEYS[(x >>> 7) % 2] : TRAIT_KEYS[(x >>> 7) % TRAIT_KEYS.length];
+      return { name, trait: pick, pips: 0 };
+    }
+    function ensureCommanders() {
+      for (const h of hosts) {
+        if (!h.commander && h.men > 0) h.commander = makeCommander(h.owner, h.id, h.tier);
+      }
+    }
+    const commanderMult = (h, trait, base) => {
+      const c = h?.commander;
+      if (!c || c.trait !== trait) return 1;
+      return base > 0 ? 1 + base + PIP_GAIN * c.pips : 1 - (base + PIP_GAIN * c.pips);
+    };
     function enterSiege(key2) {
       const n = nodes2.get(key2);
       if (!n || n.owner <= 0) {
@@ -32375,10 +32434,28 @@
       };
       paused = true;
       o.flyToDir(n.dir, 30);
-      say(`SIEGE OF ${keepName(key2)} \xB7 your ${h.men} against ${n.garrison} behind the walls`);
+      if (!h.commander) h.commander = makeCommander(h.owner, h.id, h.tier);
+      const cap = h.commander;
+      say(`SIEGE OF ${keepName(key2)} \xB7 your ${h.men} against ${n.garrison} behind the walls \xB7 ${cap.name} the ${COMMANDER_TRAITS[cap.trait].label} leads${cap.pips ? ` (${cap.pips} pips)` : ""}`);
       paint();
     }
     function leaveSiege(msg) {
+      const s0 = siegeBattle;
+      if (s0) {
+        const h0 = hosts.find((x) => x.id === s0.hostId);
+        const n0 = nodes2.get(s0.key);
+        const c0 = h0?.commander;
+        if (c0) {
+          if (n0 && n0.owner === 0) {
+            const before = c0.pips;
+            c0.pips = Math.min(MAX_PIPS, c0.pips + 1);
+            if (c0.pips > before) say(`${c0.name} takes the credit for ${keepName(s0.key)} \xB7 ${c0.pips} pips`);
+          } else if (Math.random() < 0.3 && h0) {
+            say(`${c0.name} was lost at ${keepName(s0.key)} \xB7 a new captain must be found`);
+            h0.commander = void 0;
+          }
+        }
+      }
       siegeBattle = null;
       paused = false;
       if (msg) say(msg);
@@ -32509,13 +32586,14 @@
       s.beat = 0;
       s.swings++;
       if (s.phase === "work") {
-        s.segs[s.seg] = Math.max(0, s.segs[s.seg] - WORK_RATE);
+        s.segs[s.seg] = Math.max(0, s.segs[s.seg] - WORK_RATE * commanderMult(h, "sapper", 0.25));
         const working = Math.min(Math.max(1, Math.round(s.party * 0.04) + 1), Math.max(1, Math.round(n.garrison * 0.02)));
         const fellW = Math.min(working, s.party);
         s.party = Math.max(0, s.party - fellW);
         h.men = Math.max(0, h.men - fellW);
         s.losses += fellW;
-        s.partyMorale = Math.max(0, Math.min(1, s.partyMorale - 5e-3));
+        const steadyHand = commanderMult(h, "steady", 0.2);
+        s.partyMorale = Math.max(0, Math.min(1, s.partyMorale - 5e-3 * steadyHand));
         if (s.segs[s.seg] <= 0) {
           s.breached = true;
           s.phase = "deploy";
@@ -32553,7 +32631,11 @@
       const gs = Math.max(1, n.garrison) * wallNow;
       const p = power(h) * (men / Math.max(1, s.men0));
       const ratio = p / gs;
-      const dmgGar = Math.min(Math.round(Math.max(0, n.garrison) * 0.9) + 1, Math.round(men * 0.11 * Math.min(2.2, ratio)));
+      const wallbreakers = commanderMult(h, "wallbreaker", 0.18);
+      const dmgGar = Math.min(
+        Math.round(Math.max(0, n.garrison) * 0.9) + 1,
+        Math.round(men * 0.11 * Math.min(2.2, ratio) * wallbreakers)
+      );
       const dmgMen = Math.min(Math.round(men * 0.22) + 1, Math.round(n.garrison * 0.075 * wallNow / Math.max(0.35, ratio)));
       const lost = Math.min(dmgMen, s.party);
       n.garrison = Math.max(0, n.garrison - dmgGar);
@@ -32601,8 +32683,8 @@
           a.lastBeat += dt;
           if (a.lastBeat < BEAT) continue;
           a.lastBeat = 0;
-          const pa = power(a);
-          const pb = power(b);
+          const pa = power(a) * commanderMult(a, "butcher", 0.12);
+          const pb = power(b) * commanderMult(b, "butcher", 0.12);
           const total2 = pa + pb || 1;
           const swing = Math.min(0.25, 0.12 * (Math.max(pa, pb) / total2) * 2);
           const dmgA = Math.round(b.men * swing);
@@ -34233,6 +34315,7 @@
       timeIt("economy", () => tickEconomy(dt));
       warmSupply();
       tickCarts(dt);
+      ensureCommanders();
       timeIt("hosts", () => tickHosts(dt));
       timeIt("claims", () => resolveClaims());
       timeIt("combat", () => tickCombat(dt));
@@ -34553,6 +34636,13 @@
         wall: () => siegeBattle ? { seg: siegeBattle.seg, segs: [...siegeBattle.segs], breached: siegeBattle.breached, phase: siegeBattle.phase } : null,
         invest: (k) => investOrder(k),
         musterAt: (k) => muster(k),
+        commanders: () => hosts.filter((h) => h.commander && h.men > 0).map((h) => ({ id: h.id, owner: h.owner, men: h.men, ...h.commander })),
+        setPips: (id, pips) => {
+          const h = hosts.find((x) => x.id === id);
+          if (!h?.commander) return false;
+          h.commander.pips = Math.max(0, Math.min(MAX_PIPS, pips));
+          return true;
+        },
         standby: (k) => {
           standbyOrder(k);
           return ownHostAt(k)?.standby ?? false;
