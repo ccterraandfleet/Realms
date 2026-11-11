@@ -498,6 +498,82 @@ function rivet(x, y, z, r, parent, mat) {
   return m;
 }
 
+/* ---------------------------------------------------------------- the fist
+ * A hand around a vertical grip, built once and used by BOTH hands.
+ *
+ * The previous version was wrong in a way no amount of detail could fix: the fingers ran
+ * DOWN the grip as four vertical hooks standing side by side. Real fingers wrap AROUND a
+ * hilt and are STACKED along it, so all you could ever see was a rake wearing a glove.
+ * Here the grip axis is local Y at the origin, the hand sits on the +X side, the camera
+ * side is +Z, and each finger follows a circle of radius (R + 11mm) around the grip: out
+ * of the knuckle at +X, around the AWAY side (-Z), tips curling back at -X. Pass side:-1
+ * for a left hand, or rotate the group to aim the grip wherever it is needed. */
+function buildFist(opts) {
+  const side = opts.side || 1;
+  const R = opts.R !== undefined ? opts.R : 0.021;
+  const gloveM = opts.glove || glove;
+  const plateM = opts.plate || steelDark;
+  const g = new THREE.Group();
+  const rr = R + 0.0108;
+  g.userData.tips = [];
+  g.userData.bases = [];
+
+  /* the back of the hand: knuckles and metacarpals, an ellipsoid on the +X side */
+  const back = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 11), gloveM);
+  back.scale.set(0.74, 1.02, 0.54);
+  back.position.set(side * 0.069, -0.002, 0.020);
+  g.add(back);
+  /* heel of the palm, which is what the fingertips press into */
+  const heel = new THREE.Mesh(new THREE.SphereGeometry(0.033, 12, 10), gloveM);
+  heel.scale.set(0.92, 1.0, 0.74);
+  heel.position.set(side * 0.046, -0.060, 0.014);
+  g.add(heel);
+
+  /* four fingers, stacked pinky to index along the grip, each wrapping around it */
+  const ys = [-0.064, -0.040, -0.016, 0.008];
+  const rads = [0.0085, 0.0091, 0.0095, 0.0091];
+  const angs = [0.95, -0.46, -1.72, -2.62];
+  for (let i = 0; i < 4; i++) {
+    const y = ys[i], r0 = rads[i];
+    const pts = angs.map(a => [side * Math.cos(a) * rr, y, Math.sin(a) * rr]);
+    for (let k = 0; k < 3; k++) {
+      seg(pts[k], pts[k + 1], r0 * (1 - k * 0.07), gloveM, g);
+    }
+    /* the knuckle, plated, at the base of each finger */
+    const kn = new THREE.Mesh(new THREE.SphereGeometry(r0 * 1.14, 8, 6), plateM);
+    kn.position.set(...pts[0]);
+    kn.scale.set(1, 1.15, 0.9);
+    g.add(kn);
+    rivet(pts[0][0] + side * 0.004, pts[0][1], pts[0][2] + 0.002, 0.003, g, plateM);
+    /* the fingertip, so the wrap closes instead of ending in a cut cylinder */
+    const ft = new THREE.Mesh(new THREE.SphereGeometry(r0 * 0.9, 7, 6), gloveM);
+    ft.position.set(...pts[3]);
+    g.add(ft);
+    g.userData.tips.push(pts[3]);
+    g.userData.bases.push(pts[0]);
+  }
+
+  /* thumb: off the radial side of the palm, over the top of the index finger */
+  seg([side * 0.064, 0.046, 0.026], [side * 0.032, 0.020, 0.040], 0.0132, gloveM, g);
+  seg([side * 0.032, 0.020, 0.040], [side * 0.000, 0.000, 0.030], 0.0118, gloveM, g);
+  const thumbTip = new THREE.Mesh(new THREE.SphereGeometry(0.0108, 8, 6), gloveM);
+  thumbTip.position.set(side * -0.002, -0.002, 0.028);
+  g.add(thumbTip);
+  g.userData.tips.push([side * -0.002, -0.002, 0.028]);
+
+  /* a leather strap over the back of the hand, and the seam down the middle */
+  const st = new THREE.Mesh(new THREE.BoxGeometry(0.050, 0.014, 0.010), leather);
+  st.position.set(side * 0.066, 0.010, 0.044);
+  st.rotation.z = side * 0.22;
+  g.add(st);
+  for (let i = 0; i < 4; i++) {
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.003, 0.003), gripMat);
+    seam.position.set(side * (0.046 + i * 0.010), -0.030, 0.043);
+    g.add(seam);
+  }
+  return g;
+}
+
 /* A metal with nothing to reflect renders black, which is how the first sword ended up
  * invisible while technically in frame. A 32x64 gradient probe is enough to give every
  * blade a horizon and a sky. */
@@ -580,91 +656,44 @@ pommel.position.y = -0.176; pommel.scale.set(1, 0.78, 1);
 sword.add(pommel);
 rivet(0, -0.2, 0, 0.008, sword, brass);
 
-/* THE RIGHT HAND: sleeve, mail at the wrist, a strapped bracer with buckles, a plated
- * back of hand, four fingers wrapping the grip in two joints each, and a thumb over
- * the index. Authored with seg() so the joints actually meet. */
-seg([0.035, -0.42, 0.14], [0.012, -0.185, 0.045], 0.049, linen, sword);
-seg([0.012, -0.185, 0.045], [0.004, -0.135, 0.022], 0.052, mail, sword);
-/* rows of mail: visible rings, because a smooth capsule under a metal material reads as
- * a plastic tube, and mail is the one armour a player looks at constantly */
+
+/* THE RIGHT HAND: forearm with mail at the wrist, a strapped bracer, and the fist on the
+ * grip. The fist is placed so its grip axis (local Y) is the hilt's axis. */
+const swordFist = buildFist({ side: 1, R: 0.021 });
+swordFist.position.set(0, -0.055, 0);
+sword.add(swordFist);
+
+const wrist = [0.076, -0.122, 0.030];
+seg([0.118, -0.38, 0.118], wrist, 0.047, linen, sword);
+seg(wrist, [0.068, -0.070, 0.022], 0.050, mail, sword);
+/* rows of mail, because a smooth capsule in a metal material reads as a plastic tube */
 for (let i = 0; i < 4; i++) {
   const t = i / 3;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0545 - t * 0.002, 0.0036, 4, 14), mail);
-  ring.rotation.x = Math.PI / 2 + 0.36;
-  ring.position.set(0.011 - t * 0.007, -0.176 + t * 0.036, 0.043 - t * 0.017);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0515 - t * 0.002, 0.0034, 4, 14), mail);
+  ring.rotation.x = Math.PI / 2 + 0.55;
+  ring.position.set(0.075 - t * 0.004, -0.120 + t * 0.016, 0.030 - t * 0.003);
   sword.add(ring);
 }
-/* cloth folds in the sleeve so it is not a smooth cone */
+/* cloth folds up the sleeve */
 for (let i = 0; i < 4; i++) {
-  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.046 + i * 0.006, 0.0075, 4, 10), linen);
-  fold.rotation.x = Math.PI / 2 + 0.52;
+  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.046 + i * 0.007, 0.0072, 4, 10), linen);
+  fold.rotation.x = Math.PI / 2 + 0.62;
   fold.rotation.z = i * 0.7;
-  fold.position.set(0.03 - i * 0.006, -0.30 - i * 0.045, 0.10 + i * 0.017);
+  fold.position.set(0.100 - i * 0.006, -0.190 - i * 0.046, 0.074 + i * 0.014);
   sword.add(fold);
 }
-/* glove cuff with stitching, so wrist and hand read as two separate objects */
-const gloveCuff = new THREE.Mesh(new THREE.CylinderGeometry(0.049, 0.052, 0.03, 12), glove);
-gloveCuff.position.set(0.005, -0.128, 0.024);
-gloveCuff.rotation.set(0.42, 0, -0.1);
-sword.add(gloveCuff);
-for (let i = 0; i < 7; i++) {
-  const a = (i / 7) * Math.PI * 2;
-  const st = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.009, 0.004), leather);
-  st.position.set(0.005 + Math.cos(a) * 0.049, -0.128, 0.024 + Math.sin(a) * 0.049);
-  st.lookAt(0.005, -0.128, 0.024);
-  sword.add(st);
-}
-const bracer = seg([0.014, -0.215, 0.055], [0.002, -0.132, 0.026], 0.057, leather, sword);
+/* bracer over the forearm with three straps and brass buckles */
+seg([0.088, -0.210, 0.046], wrist, 0.054, leather, sword);
 for (let i = 0; i < 3; i++) {
-  const st = new THREE.Mesh(new THREE.TorusGeometry(0.058, 0.0055, 4, 12), leather);
-  st.rotation.x = Math.PI / 2 + 0.36;
-  st.position.set(0.008 - i * 0.004, -0.14 - i * 0.026, 0.028 + i * 0.01);
-  sword.add(st);
-  const bk = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.011, 0.008), buckle);
-  bk.position.set(0.048 - i * 0.004, -0.14 - i * 0.026, 0.028 + i * 0.01);
+  const t = i / 2;
+  const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0555, 0.0052, 4, 12), leather);
+  strap.rotation.x = Math.PI / 2 + 0.55;
+  strap.position.set(0.082 - t * 0.005, -0.136 - t * 0.028, 0.036 + t * 0.004);
+  sword.add(strap);
+  const bk = new THREE.Mesh(new THREE.BoxGeometry(0.013, 0.010, 0.007), buckle);
+  bk.position.set(0.082 + 0.050 - t * 0.005, -0.136 - t * 0.028, 0.036 + t * 0.004);
   sword.add(bk);
 }
-/* the back of the hand, plated over the glove */
-const backPlate = new THREE.Mesh(new THREE.SphereGeometry(0.043, 12, 9), leather);
-backPlate.scale.set(1.18, 0.92, 0.52);
-backPlate.position.set(0, -0.062, 0.040);
-sword.add(backPlate);
-/* the knuckle guard: a thin steel bar across the back of the hand, not a dome */
-for (let i = 0; i < 5; i++) {
-  const st = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.0035, 0.0035), gripMat);
-  st.position.set(-0.04 + i * 0.02, -0.0745, 0.0625);
-  st.rotation.z = 0.25;
-  sword.add(st);
-}
-const knuckleBar = new THREE.Mesh(new THREE.BoxGeometry(0.106, 0.014, 0.022), steelDark);
-knuckleBar.position.set(0, -0.048, 0.043);
-sword.add(knuckleBar);
-for (const sx of [-0.028, 0.0, 0.028]) {
-  rivet(sx, -0.0412, 0.044, 0.004, sword);
-  rivet(sx, -0.0505, 0.044, 0.004, sword);
-}
-/* four fingers: each curls over the front of the grip and hooks back behind it */
-/* FINGERS HAD TO BE SEPARATED: pitch 0.0205 with radius 0.0105 made every pair overlap,
- * so four fingers fused into one lump. Pitch 0.0275 with radius 0.0095 leaves a visible
- * gap between them, and three joints instead of two gives the curl a real shape. */
-for (let i = 0; i < 4; i++) {
-  const x = (i - 1.5) * 0.0275;
-  const t = Math.abs(i - 1.5) / 1.5;
-  const r0 = 0.0096 - t * 0.0009;
-  seg([x, -0.056, 0.050], [x, -0.083, 0.058], r0, glove, sword);
-  seg([x, -0.083, 0.058], [x, -0.101, 0.036], r0 * 0.96, glove, sword);
-  seg([x, -0.101, 0.036], [x, -0.097, 0.004], r0 * 0.88, glove, sword);
-  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(r0 * 1.12, 7, 6), steelDark);
-  knuckle.position.set(x, -0.0565, 0.049);
-  knuckle.scale.set(1, 0.86, 0.9);
-  sword.add(knuckle);
-  rivet(x, -0.0485, 0.052, 0.0035, sword);
-}
-/* thumb lays across the index finger, its own two joints, held clear of the fist */
-seg([0.049, -0.062, 0.030], [0.021, -0.083, 0.055], 0.0125, glove, sword);
-seg([0.021, -0.083, 0.055], [-0.004, -0.093, 0.044], 0.0113, glove, sword);
-/* the viewmodel measured 40.6% of the frame with only 15.4% left for the ground, so it
- * is scaled back and pushed down and out: hands should frame the fight, not hide it */
 sword.scale.setScalar(0.95);
 sword.position.set(0.315, -0.335, -0.565);
 sword.rotation.set(-0.16, 0.16, 0.22);
@@ -681,7 +710,7 @@ for (let i = 0; i < 7; i++) {
   const t = (i - 3) / 3;
   const ang = t * 0.42;
   const plank = new THREE.Mesh(new THREE.BoxGeometry(SH_W / 7 * 0.97, SH_H, 0.016), wood);
-  plank.position.set(Math.sin(ang) * SH_R, 0, (1 - Math.cos(ang)) * SH_R - 0.02);
+  plank.position.set(Math.sin(ang) * SH_R, 0, 0.020 - (1 - Math.cos(ang)) * SH_R);
   plank.rotation.y = -ang;
   shield.add(plank);
 }
@@ -717,7 +746,7 @@ const face = new THREE.Mesh(faceGeo, new THREE.MeshStandardMaterial({
   map: crownPaint(), roughness: 0.86, metalness: 0, side: THREE.FrontSide,
 }));
 face.rotation.y = Math.PI;
-face.position.z = -SH_R + 0.03;
+face.position.z = -0.042;
 face.scale.set(1, 1, 1);
 shield.add(face);
 /* iron edge boards and their rivets: the rim is what says shield, not the paint */
@@ -738,7 +767,7 @@ for (let i = 0; i < 6; i++) {
 }
 const boss = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel);
 boss.rotation.x = Math.PI / 2;
-boss.position.z = -0.012;
+boss.position.z = -0.055;
 boss.scale.z = 1.15;
 shield.add(boss);
 for (let i = 0; i < 4; i++) {
@@ -746,48 +775,39 @@ for (let i = 0; i < 4; i++) {
   rivet(Math.cos(a) * 0.072, Math.sin(a) * 0.072, -0.006, 0.006, shield, steelDark);
 }
 /* leather enarmes behind, and the left fist gripping the middle one */
-for (const y of [0.1, -0.1]) {
-  const strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.012), leather);
-  strap.position.set(0, y, 0.035);
-  shield.add(strap);
+/* ENARMES: two horizontal leather bars on the INNER face (+Z), because you hold a shield
+ * by its back, and the first-person view should show your own arm behind it. */
+for (const y of [0.085, -0.075]) {
+  const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 8), leather);
+  bar.rotation.z = Math.PI / 2;
+  bar.position.set(0, y, 0.052);
+  shield.add(bar);
+  for (const sx of [-0.085, 0.085]) rivet(sx, y, 0.052, 0.006, shield, steelDark);
 }
+
+/* THE LEFT HAND gripping the upper enarme. The bar runs along X, so the fist (whose grip
+ * axis is local Y) is turned a quarter turn and its hand mass ends up below the bar. */
 const shieldHand = new THREE.Group();
-seg([0.02, -0.30, -0.28], [0.0, -0.17, -0.06], 0.05, linen, shieldHand);
-seg([0.0, -0.17, -0.06], [-0.005, -0.12, -0.02], 0.054, mail, shieldHand);
+const shieldFist = buildFist({ side: 1, R: 0.011 });
+shieldFist.rotation.z = -Math.PI / 2;
+shieldFist.position.set(0.005, 0.085, 0.052);
+shieldHand.add(shieldFist);
+seg([0.030, 0.055, 0.080], [0.005, 0.030, 0.075], 0.047, mail, shieldHand);
+seg([0.070, -0.32, 0.20], [0.030, 0.055, 0.080], 0.046, linen, shieldHand);
 for (let i = 0; i < 3; i++) {
-  const t = i / 2;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0555 - t * 0.002, 0.0036, 4, 14), mail);
-  ring.rotation.x = Math.PI / 2 - 0.55;
-  ring.position.set(-0.002 - t * 0.003, -0.156 + t * 0.03, -0.05 + t * 0.016);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.049 - i * 0.002, 0.0034, 4, 14), mail);
+  ring.rotation.x = Math.PI / 2 + 0.7;
+  ring.rotation.z = -0.5;
+  ring.position.set(0.033 + i * 0.002, 0.048 - i * 0.008, 0.079 - i * 0.002);
   shieldHand.add(ring);
 }
 for (let i = 0; i < 3; i++) {
-  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.048 + i * 0.007, 0.0075, 4, 10), linen);
-  fold.rotation.x = Math.PI / 2 - 0.5;
-  fold.rotation.z = i * 0.9;
-  fold.position.set(0.02 - i * 0.005, -0.22 - i * 0.04, -0.16 - i * 0.02);
+  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.047 + i * 0.007, 0.0072, 4, 10), linen);
+  fold.rotation.x = Math.PI / 2 + 0.7;
+  fold.rotation.z = -0.5 + i * 0.8;
+  fold.position.set(0.048 + i * 0.010, -0.02 - i * 0.075, 0.105 + i * 0.018);
   shieldHand.add(fold);
 }
-const lbracer = seg([0.01, -0.22, -0.10], [-0.004, -0.145, -0.035], 0.058, leather, shieldHand);
-for (let i = 0; i < 2; i++) {
-  const st = new THREE.Mesh(new THREE.TorusGeometry(0.059, 0.0055, 4, 12), leather);
-  st.rotation.x = Math.PI / 2 - 0.5;
-  st.position.set(0.006 - i * 0.004, -0.155 - i * 0.03, -0.045 + i * 0.012);
-  shieldHand.add(st);
-}
-const lfist = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), glove);
-lfist.scale.set(1, 0.9, 0.72);
-lfist.position.set(-0.004, -0.105, -0.048);
-shieldHand.add(lfist);
-for (let i = 0; i < 4; i++) {
-  const x = (i - 1.5) * 0.0265;
-  seg([x, -0.086, -0.024], [x, -0.110, -0.040], 0.0094, glove, shieldHand);
-  seg([x, -0.110, -0.040], [x, -0.116, -0.062], 0.0088, glove, shieldHand);
-  seg([x, -0.116, -0.062], [x, -0.106, -0.080], 0.0080, glove, shieldHand);
-  rivet(x, -0.080, -0.022, 0.0034, shieldHand);
-}
-seg([0.038, -0.092, -0.034], [0.010, -0.112, -0.040], 0.0116, glove, shieldHand);
-seg([0.010, -0.112, -0.040], [-0.012, -0.114, -0.058], 0.0104, glove, shieldHand);
 shield.add(shieldHand);
 shield.scale.setScalar(0.84);
 shield.position.set(-0.345, -0.385, -0.615);
@@ -960,7 +980,10 @@ function say(text, ms = 1200) {
 
 /* ------------------------------------------------------------------ viewmodel poses */
 const P = {
-  rest: { pos: [0.26, -0.32, -0.56], rot: [-0.16, 0.16, 0.22] },
+  /* the fist sits at sword-local y -0.055, so a rest at -0.235 puts the whole hand inside
+   * the frame: at -0.32 the hand's centre landed exactly on the bottom edge and all you
+   * ever saw of it was a cut-off sliver, which is what read as "messed up" */
+  rest: { pos: [0.285, -0.235, -0.545], rot: [-0.16, 0.16, 0.22] },
   leftW: { pos: [0.10, -0.14, -0.50], rot: [-0.15, -0.45, 0.95] },
   rightW: { pos: [0.44, -0.12, -0.50], rot: [-0.15, 0.70, -0.30] },
   topW: { pos: [0.22, 0.10, -0.50], rot: [-1.05, 0.14, 0.10] },
@@ -1186,12 +1209,14 @@ if (INSPECT) {
   if (!/[?&]part=shield\b/.test(location.search)) {
     shield.visible = false; sword.visible = true;
     sword.scale.setScalar(1.0);
-    sword.position.set(0.0, -0.16, -0.95);
-    sword.rotation.set(back ? -0.12 : 0.06, back ? 2.9 : 0.62, 0.10);
+    /* put the FIST at the centre of the frame: the fist sits at sword-local y -0.055 */
+    sword.position.set(0.0, 0.055, -0.26);
+    sword.rotation.set(back ? -0.10 : 0.10, back ? 2.95 : 0.42, 0.08);
   } else {
     sword.visible = false; shield.visible = true;
-    shield.position.set(0.0, -0.02, -0.95);
-    shield.rotation.set(0.04, back ? 3.05 : -0.28, -0.06);
+    /* the left fist is at shield-local (0.005, 0.085, 0.052) */
+    shield.position.set(-0.005, -0.085, -0.30);
+    shield.rotation.set(0.04, back ? 3.05 : -0.30, -0.06);
   }
 }
 if (!LOWQ) {
@@ -1366,7 +1391,7 @@ window.__perf = () => ({ fps: window.__fps || 0, lowq: LOWQ });
 
 requestAnimationFrame(frame);
 window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
-window.__vm = { sword, shield, blade, tip, camera, THREE };
+window.__vm = { sword, shield, blade, tip, camera, THREE, swordFist, shieldFist };
 window.__ground = ground;
 </script>
 </body>
