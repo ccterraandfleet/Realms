@@ -33051,6 +33051,7 @@
       }
     }
     const SAVE_KEY = `realms.save.v1.${o.SEED}.${buildMode}`;
+    let syncRev = 0;
     const SAVE_VERSION = 1;
     const AUTOSAVE_EVERY = 12;
     let saveClock = 0;
@@ -34575,6 +34576,24 @@
       tradeCount: () => tradeRoutes.size,
       admin: () => ADMIN,
       tryRestore,
+      /* ONE SHARED WORLD: the client of record is the server. These four are the entire surface sync.ts
+       * needs - hand out the world, take a world in, read the clock, agree on a rev. */
+      saveBlob: () => serialize(),
+      loadBlob: (b) => {
+        try {
+          return restore(b);
+        } catch {
+          return false;
+        }
+      },
+      worldTick: () => worldTime,
+      syncNote: (text) => {
+        lastSaveNote = text;
+      },
+      syncRev: () => syncRev,
+      setSyncRev: (n) => {
+        syncRev = Number(n) || 0;
+      },
       tickSave,
       saveNow,
       clearSave,
@@ -34831,6 +34850,8 @@
           paused = v;
         },
         capital: () => realms[0].capital,
+        keepsHeld: () => ownedBy(0).map((n) => n.key),
+        // what this realm actually holds, for proof of sync
         neighbours: (k) => (incident.get(k) ?? []).map((ek) => edges.get(ek))
       }
     };
@@ -34977,6 +34998,155 @@
       result.gpuType = gpuType;
     }
     return result;
+  }
+
+  // src/globe/sync.ts
+  var FN = "https://lyra-01a6009e.base44.app/functions/realmsWorldSync";
+  var PUSH_EVERY = 2e4;
+  var PUSH_MIN_TICK = 8;
+  var PULL_EVERY = 15e3;
+  function isOurs(b) {
+    const x = b;
+    return !!x && typeof x.v === "number" && Array.isArray(x.nodes) && Array.isArray(x.realms) && typeof x.t === "number";
+  }
+  function parseState(state) {
+    if (typeof state !== "string") return state;
+    try {
+      return JSON.parse(state);
+    } catch {
+      return null;
+    }
+  }
+  function attachSync(world2, seed) {
+    let lastSentState = "";
+    let busy = false;
+    let lastPushTick = -Infinity;
+    let stopped = false;
+    const note = (s) => {
+      try {
+        world2.syncNote(s);
+      } catch {
+      }
+    };
+    async function post(body) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 9e3);
+      try {
+        const r = await fetch(FN, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ctl.signal
+        });
+        const parsed = await r.json().catch(() => ({}));
+        return { status: r.status, body: parsed };
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    function adopt(rev, state, why) {
+      const blob = parseState(state);
+      if (!isOurs(blob)) return false;
+      let ok = false;
+      try {
+        ok = world2.loadBlob(blob);
+      } catch {
+        ok = false;
+      }
+      if (!ok) return false;
+      world2.setSyncRev(rev);
+      lastSentState = typeof state === "string" ? state : JSON.stringify(state);
+      note(`shared world rev ${rev} ${why}`);
+      return true;
+    }
+    async function push2(force = false) {
+      if (busy || stopped) return;
+      busy = true;
+      try {
+        const blob = world2.saveBlob();
+        const state = JSON.stringify(blob);
+        if (!force && state === lastSentState) return;
+        const r = await post({ action: "push", seed, rev: world2.syncRev(), state, tick: world2.worldTick() });
+        if (!r) {
+          note("shared world unreachable \xB7 this session is saved in the browser only");
+          return;
+        }
+        if (r.status === 409) {
+          const b = r.body ?? {};
+          if (adopt(Number(b.rev ?? 0), b.state, "from another player")) {
+            note(`another player changed the world \xB7 you are now on rev ${b.rev}`);
+          } else {
+            note("another player changed the world and it could not be loaded \xB7 reload to resync");
+          }
+          return;
+        }
+        if (r.status === 200) {
+          world2.setSyncRev(Number(r.body?.rev ?? world2.syncRev()));
+          lastSentState = state;
+          lastPushTick = world2.worldTick();
+          note(`saved to the shared world at rev ${r.body?.rev}`);
+          return;
+        }
+        note(`shared world refused this save: ${r.body?.error ?? r.status}`);
+      } finally {
+        busy = false;
+      }
+    }
+    async function pull() {
+      if (stopped) return;
+      const r = await post({ action: "pull", seed });
+      if (!r || r.status !== 200) return;
+      const b = r.body ?? {};
+      if (b.empty) return;
+      const remoteRev = Number(b.rev ?? 0);
+      if (!isOurs(parseState(b.state))) {
+        world2.setSyncRev(remoteRev);
+        note(`server holds an older world format at rev ${remoteRev} \xB7 this session will replace it`);
+        return;
+      }
+      if (remoteRev > world2.syncRev()) adopt(remoteRev, b.state, "from the server");
+      else world2.setSyncRev(remoteRev);
+    }
+    void (async () => {
+      const r = await post({ action: "pull", seed });
+      if (!r || r.status !== 200) {
+        note("shared world unreachable \xB7 playing on the browser save");
+        return;
+      }
+      const b = r.body ?? {};
+      if (b.empty) {
+        await push2(true);
+        return;
+      }
+      if (isOurs(parseState(b.state))) {
+        if (Number(b.rev ?? 0) > world2.syncRev()) adopt(Number(b.rev), b.state, "from the server");
+        else world2.setSyncRev(Number(b.rev ?? 0));
+        return;
+      }
+      world2.setSyncRev(Number(b.rev ?? 0));
+      await push2(true);
+    })();
+    setInterval(() => {
+      if (world2.worldTick() - lastPushTick >= PUSH_MIN_TICK) void push2();
+    }, PUSH_EVERY);
+    setInterval(() => {
+      void pull();
+    }, PULL_EVERY);
+    window.addEventListener("pagehide", () => {
+      void push2(true);
+    });
+    window.addEventListener("beforeunload", () => {
+      void push2(true);
+    });
+    return {
+      stop: () => {
+        stopped = true;
+      },
+      pushNow: () => push2(true),
+      pullNow: () => pull()
+    };
   }
 
   // src/globe/globe.ts
@@ -37514,6 +37684,8 @@ alt ${Math.round(cam.alt)}  build ${BUILD.slice(11)}`;
         }
       });
       window.__world = world;
+      const sync = attachSync(world, SEED);
+      window.__worldSync = sync;
       if (hud) hud.textContent = `generating planet ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`;
       console.log(`[realms] world built in ${Math.round(performance.now() - t0)} ms \xB7 build ${BUILD}`);
       if (world) {
