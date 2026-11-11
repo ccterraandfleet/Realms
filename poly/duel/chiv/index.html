@@ -90,6 +90,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
+import { initActors, makeActor, lineOf } from './soldieractor.js';
 import { STYLES, styleRule } from './chiv.styles.js';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
@@ -142,14 +143,26 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 /* ?q=low bypasses the whole look pipeline and falls back to a plain forward render,
  * which is the escape hatch for weak GPUs and the control arm for measurements */
-const LOWQ = /[?&]q=low\b/.test(location.search);
+const LOWQ = (() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get('q') === 'low') return true;
+  if (q.get('q') === 'high') return false;
+  /* A Chromebook reports 2-4 cores and a 1x panel, and the whole post chain costs
+   * more there than the scene does. Detect it instead of hoping the player knows to
+   * append ?q=low: force=low can still be overridden with ?q=high. */
+  const cores = navigator.hardwareConcurrency || 4;
+  const mem = navigator.deviceMemory || 4;
+  return /CrOS/.test(navigator.userAgent) || cores <= 4 || mem <= 4;
+})();
+window.__quality = LOWQ ? 'low' : 'high';
 const INSPECT = /[?&]inspect=1\b/.test(location.search);
 /* isolation switch: proves the scanned maps are reaching the shader, not silently dropped */
 const TEXOFF = /[?&]tex=off\b/.test(location.search);
 renderer.toneMapping = LOWQ ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
 renderer.toneMappingExposure = 1.1;
-renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
-renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+/* ONE capped call. It used to be set twice in a row, and on a Chromebook a 1x cap is
+ * worth more frames than any post-processing trick. */
+renderer.setPixelRatio(LOWQ ? Math.min(1, devicePixelRatio || 1) : Math.min(devicePixelRatio || 1, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -191,7 +204,10 @@ const sun = new THREE.DirectionalLight(0xfff2e0, 2.35);
  * so the shadows on the ground and the visible sun cannot disagree */
 sun.position.set(12.6, 31.5, -29.5);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+/* a 2048 shadow map is 4M depth samples a frame; on a Chromebook that is most of the
+ * GPU budget for a shadow nobody looks at. 1024 in low quality, and only the man you
+ * are fighting casts at all. */
+sun.shadow.mapSize.set(LOWQ ? 1024 : 2048, LOWQ ? 1024 : 2048);
 sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
 sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 95;
@@ -1003,64 +1019,26 @@ window.__lab = { model: LAB.model, style: LAB.style };
 const ROUND_MSG = $('#msg');
 const loader = new GLTFLoader();
 let ready = false;
-loader.load(MODEL_FILE[LAB.model], async (gltf) => {
-  const src = gltf.scene;
-  scene.add(src);
-  /* THE SCALE HAS TO BE DECIDED PER ASSET. A skinned mesh's bounding box is not
-   * its pose: measured off the box the realistic Soldier came out 5x too large,
-   * and off the skeleton the stylized knight came out 2x too tall. autoFit tries
-   * the skeleton, checks the limb proportions, and falls back to the art box. */
-  const fit = autoFit(src, 1.86);
-  scene.remove(src);
-  window.__fit = { model: LAB.model, ...fit };
-  /* NO EXTRA ROTATION. Whether a rig faces +Z or -Z is already measured from its
-   * own toes (rig.forward) and mirrored inside rigpose, so rotating the mesh too
-   * flips it twice and every swing comes out of his back. */
-  src.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false; } });
-  foeModel = src;
-  foeRoot.add(src);
-  foeMixer = new THREE.AnimationMixer(src);
-  knightClips = gltf.animations;
-  foeActions = clipMap(gltf.animations);
-  for (const key in foeActions) {
-    const c = foeActions[key];
-    if (c) foeActions[key] = foeMixer.clipAction(c);
-  }
+/* THE PURPOSE-BUILT SOLDIER IS THE MODEL NOW. The three GLB rigs were the measuring
+ * stick that told us what to build; leaving them in the game meant paying ~35 draw
+ * calls per man (body + forge kit merged by bone and material) for a body that reads
+ * worse than the 12-draw soldier. The soldier is also 6.5k triangles against the
+ * knight's 7k-plus-kit, and its animation is generated from a phase number instead of
+ * driving 76 clips, which is the other half of what a Chromebook cannot afford. */
+let foeActor = null;
+(async () => {
+  await initActors(texLoader);
+  foeActor = makeActor({ tint: REALM_RED, kind: 'sword', helm: 'kettle', shield: 'kite', shadows: true });
+  foeModel = foeActor.root;
+  foeRoot.add(foeActor.root);
+  knightClips = [];                 /* no clips: locomotion is generated, not sampled */
   ready = true;
-  if (foeActions.idle) { foeActions.idle.play(); foeActions.idle.setEffectiveWeight(1); }
-  /* THE SWING IS NOT A CLIP ANY MORE. The clips keep the feet, the guard, the hit
-   * reactions and the death; the sword arm is driven by the rules through rigpose,
-   * because his rig only carries ONE horizontal melee clip and Chivalry's data
-   * needs a left cut and a right cut that chamber on opposite sides. */
-  foeRig = bindRig(foeModel);
-  window.__swingCalls = 0;
-  window.__forceSwing = (state, u, alt) => {
-    const fake = { attack: { name: 'Slash', dir: alt ? 'Right' : 'Left', type:'slash' }, state, stateT: u, stateDur: 1, guard: false };
-    foeRig.root.updateWorldMatrix(true, true);
-    const before = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
-    const ret = applySwing(foeRig, fake, { faceSign: 1 });
-    foeRig.root.updateWorldMatrix(true, true);
-    const after = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
-    return { moved: +before.distanceTo(after).toFixed(3), ret: !!ret,
-             hand: [+after.x.toFixed(3), +after.y.toFixed(3), +after.z.toFixed(3)],
-             target: ret && ret.hand ? [+ret.hand.x.toFixed(3), +ret.hand.y.toFixed(3), +ret.hand.z.toFixed(3)] : null };
-  };
-  window.__foeHand = () => {
-    if (!foeRig || !foeRig.ok) return null;
-    const wp = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
-    const lp = foeModel.worldToLocal(wp.clone());
-    return { x:+lp.x.toFixed(3), y:+lp.y.toFixed(3), z:+lp.z.toFixed(3) };
-  };
-  window.__foeRig = foeRig ? { kind: foeRig.kind, ok: foeRig.ok, reach: +foeRig.reach.toFixed(3), forward: foeRig.forward } : null;
-  await initForge();
-  const foeDress = dressBody(foeModel, 1);
-  window.__armour = foeDress ? { placed: foeDress.placed, draws: foeDress.draws,
-    pieces: foeDress.pieces, unit: +foeDress.unit.toFixed(3) } : null;
+  window.__foeActor = foeActor;      /* test hook: measure the arm, not the screenshot */
   buildTheField();
-}, undefined, (e) => {
-  ROUND_MSG.textContent = 'COULD NOT LOAD THE OPPONENT';
+})().catch((e) => {
+  ROUND_MSG.textContent = 'COULD NOT BUILD THE SOLDIER';
   ROUND_MSG.style.opacity = 1;
-  console.error('glb', e);
+  console.error('soldier', e);
 });
 
 /* ===========================================================================
@@ -1093,49 +1071,23 @@ function tintByRole(model, tint) {
 }
 
 function makeSoldier(f, side, tint) {
-  const root = new THREE.Group();
-  const model = skeletonClone(foeModel);
-  /* a clone inherits Corvane's plate, so strip it back to the bare body first and
-   * dress each man in his own realm's colours instead */
-  const inherited = [];
-  model.traverse((n) => { if (n.isMesh && n.userData.isKit) inherited.push(n); });
-  for (const n of inherited) { if (n.parent) n.parent.remove(n); }
-  tintByRole(model, tint);
-  dressBody(model, side);
-  root.add(model);
-  scene.add(root);
-  const mixer = new THREE.AnimationMixer(model);
-  const clips = clipMap(knightClips);
-  const acts = {};
-  for (const k in clips) if (clips[k]) acts[k] = mixer.clipAction(clips[k]);
-  if (acts.idle) acts.idle.play();
-  return { f, side, root, mixer, acts, cur: 'idle', swingKey: null };
+  /* Each man is built from his own skeleton rather than cloned from a GLB. A clone
+   * inherited the previous owner's forged plate and had to be stripped first, which is
+   * a whole class of bug that simply does not exist on this path. */
+  const actor = makeActor({
+    tint,
+    kind: 'sword',
+    helm: side < 0 ? 'nasal' : 'kettle',
+    shield: 'kite',
+    shadows: false,                 /* only the man you actually fight casts a shadow */
+  });
+  scene.add(actor.root);
+  return { f, side, root: actor.root, actor, cur: 'idle' };
 }
 
-function soldierPose(sd) {
-  const f = sd.f;
-  const want =
-    f.state === 'dead' ? 'death' :
-    f.guard ? 'block' :
-    f.state === 'stagger' ? 'hit' :
-    (f.state === 'release' || f.state === 'windup' || f.state === 'holding') ?
-      (vmLine(f.attack) === 'T' && vmKind(f.attack) === 'thrust' ? 'stab'
-        : vmLine(f.attack) === 'T' ? 'chop'
-        : vmLine(f.attack) === 'R' ? 'sliceD' : 'sliceH') :
-    'idle';
-  if (want === sd.cur) return;
-  const next = sd.acts[want];
-  const prev = sd.acts[sd.cur];
-  sd.cur = want;
-  if (!next) return;
-  next.reset();
-  if (want === 'death' || want === 'hit' || want === 'sliceH' || want === 'sliceD' || want === 'chop' || want === 'stab') {
-    next.setLoop(THREE.LoopOnce, 1);
-    next.clampWhenFinished = true;
-  }
-  next.fadeIn(0.08).play();
-  if (prev && prev !== next) prev.fadeOut(0.08);
-}
+/* superseded: the actor poses itself from the fighter's own phase clock, so a swing
+ * cannot drift out of step with the hitbox it resolves against */
+function soldierPose() {}
 
 function buildTheField() {
   if (fieldBuilt || !foeModel || !knightClips) return;
@@ -1187,8 +1139,8 @@ function stepTheField(dt) {
     const live = pair.duel;
     for (const sd of [pair.sa, pair.sb]) {
       if (sd.f.alive) { if (sd.side < 0) blue++; else red++; }
-      sd.mixer.update(dt);
-      soldierPose(sd);
+      sd.actor.update(dt, sd.f, 0);
+      sd.cur = sd.f.state;
     }
     /* a small weight shift on the front foot so a pair reads as fighting rather than
      * posing, driven by their own duel clock */
@@ -2450,6 +2402,7 @@ function render(dt) {
   /* the opponent stands at the duel's distance, always facing you */
   const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
   /* (circling is computed above, before the camera needs it) */
+if (foeActor) foeActor.update(dt, foe, 0);
 if (foeMixer) foeMixer.update(dt);
 /* THE OVERRIDE RUNS AFTER THE MIXER, so the clips own the body and rigpose owns the
  * sword arm and the torso twist. Applied for the whole swing, not just the release,
