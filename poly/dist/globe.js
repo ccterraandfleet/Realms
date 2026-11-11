@@ -30663,6 +30663,7 @@
   var TRUNK_SPEED = 26;
   var LANE_SPEED = 15;
   var BEAT = 1;
+  var INTERCEPT_HOPS = 3;
   var INVEST_DRAIN = 55e-4;
   var SIEGE_DRAIN = 0.02;
   var SIEGE_RECOVER = 0.02;
@@ -31334,6 +31335,14 @@
         c.gold ? `${c.gold} gold` : ""
       ].filter(Boolean).join(" \xB7 ");
       if (mine) {
+        const standing = ownHostAt(key2);
+        if (standing) {
+          verbs.push({
+            verb: "standby",
+            label: standing.standby ? "Stand down" : "Stand by",
+            hint: standing.standby ? `${standing.men} men are covering this ground \xB7 they will move to cut off anything near` : "hold here and move to intercept anything that comes close"
+          });
+        }
         verbs.push({
           verb: "muster",
           label: "Muster",
@@ -31445,6 +31454,10 @@
       }
       if (verb === "invest") {
         investOrder(key2);
+        return;
+      }
+      if (verb === "standby") {
+        standbyOrder(key2);
         return;
       }
       if (verb === "muster") {
@@ -32210,7 +32223,7 @@
     function tickAssaults(dt) {
       for (const h of hosts) {
         if (h.routed || h.men <= 0 || h.to !== null) continue;
-        if (h.investing) continue;
+        if (h.investing || h.standby) continue;
         const key2 = h.path[h.path.length - 1];
         const n = nodes2.get(key2);
         if (!n || n.owner < 0 || n.owner === h.owner) continue;
@@ -32284,6 +32297,44 @@
       }
       h.investing = key2;
       say(`investing ${label(n)} \xB7 their nerve will drain, but a relief column catches you in the open`);
+    }
+    function standbyOrder(key2) {
+      const h = ownHostAt(key2);
+      const n = nodes2.get(key2);
+      if (!h) {
+        say("no column here to hold the ground");
+        return;
+      }
+      h.standby = !h.standby;
+      say(h.standby ? `${h.men} men stand by at ${label(n)} \xB7 they will move to cut off anything that comes close` : `${h.men} men stand down at ${label(n)}`);
+    }
+    let interceptAcc = 0;
+    function tickIntercept(dt) {
+      interceptAcc += dt;
+      if (interceptAcc < 0.5) return;
+      interceptAcc = 0;
+      for (const h of hosts) {
+        if (!h.standby || h.routed || h.men <= 0 || h.to !== null) continue;
+        const at = h.path[h.path.length - 1];
+        if (!nodes2.get(at)) continue;
+        if ((h.interceptAt ?? 0) > worldTime) continue;
+        let best = null;
+        let bestHops = 99;
+        for (const e of hosts) {
+          if (e === h || e.owner === h.owner || e.routed || e.men <= 0 || e.to === null) continue;
+          const hops = pathBetween(at, e.to).length - 1;
+          if (hops >= 1 && hops <= INTERCEPT_HOPS && hops < bestHops) {
+            bestHops = hops;
+            best = e;
+          }
+        }
+        if (!best || !best.to) continue;
+        if (orderMarch(h, best.to)) {
+          h.standby = true;
+          h.interceptAt = worldTime + 8;
+          say(`${h.men} men move to cut off ${best.men} coming up the road`);
+        }
+      }
     }
     function enterSiege(key2) {
       const n = nodes2.get(key2);
@@ -34146,6 +34197,7 @@
       combat: [],
       assault: [],
       siege: [],
+      intercept: [],
       ai: [],
       total: []
     };
@@ -34186,6 +34238,7 @@
       timeIt("combat", () => tickCombat(dt));
       timeIt("assault", () => tickAssaults(dt));
       timeIt("siege", () => tickSiege(dt));
+      timeIt("intercept", () => tickIntercept(dt));
       timeIt("ai", () => tickAI(dt));
       panelUpdateAt += dt;
       if (panelUpdateAt > 0.25) {
@@ -34499,6 +34552,18 @@
         siegeProg: () => siegeFormations()[0]?.prog ?? null,
         wall: () => siegeBattle ? { seg: siegeBattle.seg, segs: [...siegeBattle.segs], breached: siegeBattle.breached, phase: siegeBattle.phase } : null,
         invest: (k) => investOrder(k),
+        musterAt: (k) => muster(k),
+        standby: (k) => {
+          standbyOrder(k);
+          return ownHostAt(k)?.standby ?? false;
+        },
+        raid: (from, to, men = 40) => {
+          const n = nodes2.get(from);
+          if (!n) return false;
+          n.garrison = Math.max(n.garrison, men);
+          return marchFrom(from, to, men);
+        },
+        hostsAt: (k) => hosts.filter((h) => h.to === null && h.path[h.path.length - 1] === k).map((h) => ({ id: h.id, owner: h.owner, men: h.men, standby: !!h.standby, investing: h.investing ?? null })),
         relief: (k, men = 60) => {
           const n = nodes2.get(k);
           if (!n) return false;
