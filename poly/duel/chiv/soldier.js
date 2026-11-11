@@ -270,9 +270,9 @@ export function buildSoldier(rig, mats, spec = {}) {
     P(limb(0.054, 0.048, 0.15).translate(sign * 0.206, 1.140, 0), mats.leather, 'fore.' + s);
     /* pauldron */
     P(loft([
-      { y: 1.452, rx: 0.077, rz: 0.071, x: sign * 0.220 },
-      { y: 1.410, rx: 0.091, rz: 0.081, x: sign * 0.229 },
-      { y: 1.368, rx: 0.085, rz: 0.075, x: sign * 0.236 },
+      { y: 1.452, rx: 0.073, rz: 0.070, x: sign * 0.201 },
+      { y: 1.410, rx: 0.081, rz: 0.079, x: sign * 0.209 },
+      { y: 1.368, rx: 0.077, rz: 0.073, x: sign * 0.214 },
     ], 14), mats.steel, 'arm.' + s);
     /* glove: a block with a thumb, enough at formation distance */
     P(box(0.050, 0.098, 0.090).translate(sign * 0.212, 0.862, 0.004), mats.leather, 'hand.' + s);
@@ -344,8 +344,7 @@ export function buildSoldier(rig, mats, spec = {}) {
   const HAND = { x: 0.211, y: 0.900, z: 0.004 };
   const putInHand = (m) => (geo) => geo.applyMatrix4(m);
   if (kind === 'spear') {
-    const M = new THREE.Matrix4().makeTranslation(HAND.x + 0.050, HAND.y, HAND.z + 0.020)
-      .multiply(new THREE.Matrix4().makeRotationZ(-0.13));
+    const M = new THREE.Matrix4().makeTranslation(HAND.x + 0.040, HAND.y, HAND.z + 0.010);
     const at = putInHand(M);
     parts.push({ geo: at(cyl(0.011, 0.011, 2.05, 8).translate(0, 0.225, 0)), mat: mats.leather, bone: 'hand.R' });
     parts.push({ geo: at(new THREE.ConeGeometry(0.028, 0.20, 6).translate(0, 1.35, 0)), mat: mats.steel, bone: 'hand.R' });
@@ -380,11 +379,11 @@ export function buildSoldier(rig, mats, spec = {}) {
     s.quadraticCurveTo(-0.14, -0.34, -0.185, -0.10);
     s.closePath();
     const g = new THREE.ExtrudeGeometry(s, { depth: 0.022, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 1, curveSegments: 5 });
-    parts.push({ geo: g.translate(-0.30, 1.10, 0.02), mat: mats.shieldWood, bone: 'fore.L' });
-    parts.push({ geo: sph(0.032, 10, 8).translate(-0.30, 1.14, 0.035), mat: mats.steel, bone: 'fore.L' });
+    parts.push({ geo: g.translate(-0.315, 1.10, 0.150), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.032, 10, 8).translate(-0.315, 1.14, 0.180), mat: mats.steel, bone: 'fore.L' });
   } else {
-    parts.push({ geo: cyl(0.26, 0.26, 0.022, 22).rotateX(Math.PI / 2).translate(-0.30, 1.10, 0.02), mat: mats.shieldWood, bone: 'fore.L' });
-    parts.push({ geo: sph(0.040, 10, 8).translate(-0.30, 1.10, 0.040), mat: mats.steel, bone: 'fore.L' });
+    parts.push({ geo: cyl(0.26, 0.26, 0.022, 22).rotateX(Math.PI / 2).translate(-0.315, 1.10, 0.161), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.040, 10, 8).translate(-0.315, 1.10, 0.186), mat: mats.steel, bone: 'fore.L' });
   }
 
   return parts;
