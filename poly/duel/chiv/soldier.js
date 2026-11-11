@@ -130,6 +130,21 @@ const limb = (rTop, rBot, len) => loft([
   { y: -len, rx: rBot, rz: rBot * 0.92 },
 ], 12, true, true);
 
+/* A LIMB THAT RUNS PAST BOTH OF ITS OWN JOINTS.
+ * The gap problem was structural, not a weighting problem: thigh and shin were
+ * built end-to-end (thigh ends at 0.525, shin begins at 0.525), so the instant the
+ * knee bends the two flat caps swing apart and open a wedge. Every segment now
+ * reaches ext metres BEYOND its bone at each end, so the segment below rotates
+ * through the one above instead of away from it. Same radii at the seam, so the
+ * overlap is invisible until a joint bends, and then it is what fills the hole. */
+const limbO = (rTop, rBot, len, extTop, extBot) => loft([
+  { y: extTop, rx: rTop * 1.01, rz: rTop * 0.93 },
+  { y: 0, rx: rTop, rz: rTop * 0.92 },
+  { y: -len * 0.5, rx: (rTop + rBot) / 2, rz: (rTop + rBot) * 0.46 },
+  { y: -len, rx: rBot, rz: rBot * 0.92 },
+  { y: -len - extBot, rx: rBot * 0.98, rz: rBot * 0.90 },
+], 12, true, true);
+
 const sph = (r, w = 12, h = 10) => new THREE.SphereGeometry(r, w, h);
 const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 const cyl = (rt, rb, h, s = 14) => new THREE.CylinderGeometry(rt, rb, h, s);
@@ -179,7 +194,7 @@ export function buildSoldier(rig, mats, spec = {}) {
   ], 20), mats[has('mail') ? 'mail' : 'wool'], 'chest');
 
   /* ---------------- neck and head */
-  P(limb(0.052, 0.058, 0.09).translate(0, 1.55, 0.004), mats.skin, 'neck');
+  P(limbO(0.052, 0.058, 0.09, 0.045, 0.050).translate(0, 1.55, 0.004), mats.skin, 'neck');
   P(loft([
     { y: 1.545, rx: 0.056, rz: 0.064 },
     { y: 1.585, rx: 0.070, rz: 0.089 },
@@ -249,10 +264,14 @@ export function buildSoldier(rig, mats, spec = {}) {
   /* ---------------- arms: mail sleeve, bracer, glove */
   for (const s of ['L', 'R']) {
     const sign = s === 'L' ? -1 : 1;
-    P(limb(0.062, 0.050, 0.28).translate(sign * 0.196, 1.432, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
+    P(limbO(0.062, 0.050, 0.28, 0.065, 0.062).translate(sign * 0.196, 1.432, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
     /* deltoid mass: without it an arm is a pipe and the shoulder has no shape */
     P(sph(0.076, 12, 10).translate(sign * 0.192, 1.408, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
-    P(limb(0.050, 0.040, 0.25).translate(sign * 0.206, 1.150, 0), mats.wool, 'fore.' + s);
+    P(limbO(0.050, 0.040, 0.25, 0.062, 0.052).translate(sign * 0.206, 1.150, 0), mats.wool, 'fore.' + s);
+    /* elbow and wrist masses, owned by the CHILD bone so they turn with it and
+     * always cover the joint face */
+    P(sph(0.052, 10, 8).translate(sign * 0.206, 1.150, 0), mats.wool, 'fore.' + s);
+    P(sph(0.043, 10, 8).translate(sign * 0.211, 0.900, 0), mats.leather, 'hand.' + s);
     P(sph(0.048, 10, 8).translate(sign * 0.204, 1.098, 0), mats.wool, 'fore.' + s);
     P(limb(0.054, 0.048, 0.15).translate(sign * 0.206, 1.140, 0), mats.leather, 'fore.' + s);
     /* pauldron */
@@ -275,10 +294,12 @@ export function buildSoldier(rig, mats, spec = {}) {
   /* ---------------- legs: wool trousers, boots, knee cops */
   for (const s of ['L', 'R']) {
     const sign = s === 'L' ? -1 : 1;
-    P(limb(0.094, 0.072, 0.44).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
-    P(limb(0.072, 0.052, 0.44).translate(sign * 0.098, 0.525, 0), mats.woolDark, 'shin.' + s);
+    P(limbO(0.094, 0.072, 0.44, 0.072, 0.078).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
+    P(sph(0.097, 12, 10).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
+    P(limbO(0.072, 0.052, 0.44, 0.078, 0.062).translate(sign * 0.098, 0.525, 0), mats.woolDark, 'shin.' + s);
     P(sph(0.070, 12, 10).translate(sign * 0.096, 0.520, 0.010), mats.steel, 'shin.' + s);
     P(sph(0.062, 10, 8).translate(sign * 0.097, 0.395, -0.012), mats.woolDark, 'shin.' + s);
+    P(sph(0.056, 10, 8).translate(sign * 0.098, 0.095, 0), mats.woolDark, 'foot.' + s);
     /* boot */
     P(loft([
       { y: 0.140, rx: 0.050, rz: 0.068, x: sign * 0.098 },
@@ -318,7 +339,8 @@ export function buildSoldier(rig, mats, spec = {}) {
   P(box(0.070, 0.090, 0.046).translate(0.115, 0.955, 0.086), mats.leather, 'hips');
 
   /* ---------------- weapons */
-  if (kind === 'spear') {
+  if (kind === 'none') { /* bare body, for joint inspection */ }
+  else if (kind === 'spear') {
     const shaft = cyl(0.011, 0.011, 2.05, 8).translate(0, 0.62, 0);
     parts.push({ geo: shaft, mat: mats.leather, bone: 'hand.R' });
     const head = new THREE.ConeGeometry(0.028, 0.20, 6).translate(0, 1.72, 0);
@@ -414,7 +436,7 @@ export function assemble(rig, parts, opts = {}) {
     const si = new Uint16Array(count * 4);
     const sw = new Float32Array(count * 4);
     /* rigid weights from the owning bone, then smooth across the joint planes */
-    const jointBlend = opts.jointBlend ?? 0.055;
+    const jointBlend = opts.jointBlend ?? 0.085;
     const parentOf = new Map(bones.map((b) => [b.name, b.parent && boneIndex.has(b.parent.name) ? b.parent.name : null]));
     for (const o of owner) {
       const bi = boneIndex.get(o.bone) ?? 0;
@@ -447,14 +469,27 @@ export function assemble(rig, parts, opts = {}) {
     skinned.push(mesh);
   }
 
-  const skeleton = new THREE.Skeleton(bones);
-  for (const m of skinned) { m.bind(skeleton); }
-
+  /* ================= ORDER MATTERS MORE THAN ANYTHING ELSE HERE =================
+   * THREE.Skeleton computes its boneInverses ONCE, at construction, by reading each
+   * bone's matrixWorld at that instant. If the bone hierarchy has not been attached
+   * and its world matrices have never been updated, every bone reads an IDENTITY
+   * matrix, every inverse comes out identity, and at render time the skinned vertex
+   * gets its bone's REST TRANSLATION ADDED A SECOND TIME. The symptom is not an
+   * error: it is a body assembled from fragments, each part flung upward by its own
+   * bone height, so the torso floats above the legs and the feet float below them,
+   * with empty bands in between. That is what "gaps between every joint" actually
+   * was, and no amount of joint overlap could ever have fixed it.
+   *
+   * So: attach the bones, UPDATE THE WORLD MATRICES, and only then build the
+   * skeleton and bind. One bind, no DetachedBindMode, no second pass.
+   * ========================================================================== */
   const root = new THREE.Group();
   root.add(byName.get('root'));
   group.add(root);
-  root.updateWorldMatrix(true, true);
-  for (const m of skinned) m.bindMode = THREE.DetachedBindMode, m.bind(skeleton, m.matrixWorld);
+  group.updateMatrixWorld(true);            /* <- bones now hold their real rest matrices */
+
+  const skeleton = new THREE.Skeleton(bones);   /* inverses computed from those matrices */
+  for (const m of skinned) { m.bind(skeleton); }
 
   return { root: group, skeleton, meshes: skinned, rig };
 }

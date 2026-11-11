@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
+<body><script type="module">
+import * as THREE from 'three';
+import { Atlas } from './forge.js';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials } from './soldier.js';
+
+const Q = new URLSearchParams(location.search);
+const POSE = Q.get('pose') || 'extreme';
+const W = 900, H = 1000;
+const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.NoToneMapping;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+
+const rig = buildSkeleton();
+const mats = soldierMaterials(atlas.m, 0x2f6f9e);
+/* no weapon, no shield: the test must see the BODY and nothing else */
+const parts = buildSoldier(rig, mats, { kind: 'none', helm: 'nasal', shield: 'none' });
+const built = assemble(rig, parts);
+scene.add(built.root);
+built.root.traverse((o) => { if (o.isMesh) o.material = new THREE.MeshBasicMaterial({ color: 0xffffff }); });
+
+const B = rig.byName;
+const set = (n, x, y, z) => { const b = B.get(n); if (b) b.rotation.set(x, y, z); };
+if (POSE === 'extreme') {
+  set('thigh.R', 1.05, 0, 0.10); set('shin.R', 1.75, 0, 0); set('foot.R', 0.55, 0, 0);
+  set('thigh.L', -0.55, 0, -0.10); set('shin.L', 0.45, 0, 0); set('foot.L', -0.30, 0, 0);
+  set('arm.R', -1.45, 0, -0.25); set('fore.R', -1.60, 0, 0);
+  set('arm.L', 0.10, 0, 1.05); set('fore.L', -1.30, 0, 0);
+  set('neck', 0.28, 0, 0); set('head', 0.22, 0.55, 0.10); set('chest', 0.10, 0.22, 0);
+} else if (POSE === 'knee') {
+  set('thigh.R', 1.10, 0, 0); set('shin.R', 1.80, 0, 0);
+} else if (POSE === 'elbow') {
+  set('arm.L', 0.05, 0, 1.20); set('fore.L', -1.70, 0, 0);
+} else if (POSE === 'stand') {
+  /* nothing: bind pose */
+}
+rig.root.updateMatrixWorld(true);
+for (const m of built.meshes) if (m.skeleton) m.skeleton.update();
+
+const VIEW_H = 2.15, ASPECT = W / H;
+const cam = new THREE.OrthographicCamera(-VIEW_H * ASPECT / 2, VIEW_H * ASPECT / 2, 1.12, 1.12 - VIEW_H, 0.1, 20);
+cam.position.set(Q.get('side') === '1' ? 6 : 0, 0.95, Q.get('side') === '1' ? 0 : 6);
+cam.lookAt(0, 0.95, 0);
+cam.updateProjectionMatrix();
+renderer.render(scene, cam);
+window.__j = { pose: POSE, parts: parts.length, tris: built.meshes.reduce((a, m) => a + m.geometry.attributes.position.count / 3, 0) | 0 };
+</script></body></html>
