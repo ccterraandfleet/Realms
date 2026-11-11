@@ -995,7 +995,10 @@ loader.load('./knight.glb', (gltf) => {
  * =========================================================================== */
 const SQUAD = [];
 const REALM_BLUE = 0x2f6ea6, REALM_RED = 0x9a3040;
-const FIELD_ANCHORS = [[-5.4, -2.6], [5.8, -3.8], [-2.6, -7.6]];
+/* THE MEN HAVE TO BE IN FRONT OF YOU. At the old anchors (x -5.4 at z -2.6) the pair
+ * sat about 64 degrees off axis, well outside the view, so the yard was populated and
+ * invisible at the same time. These sit inside the front arc at fighting distance. */
+const FIELD_ANCHORS = [[-3.4, -6.0], [3.6, -6.6], [0.6, -10.5]];
 let fieldBuilt = false;
 
 function tintByRole(model, tint) {
@@ -1112,6 +1115,13 @@ function stepTheField(dt) {
     ' &nbsp;&middot;&nbsp; ' + red + ' standing  <b style="color:#e794a0">' + realmFoe + '</b>';
 }
 
+/* projects each man into the view, so "are they actually visible" is measured */
+window.__fieldScreen = () => SQUAD.flatMap((q, i) => [q.sa, q.sb].map((sd) => {
+  const v = sd.root.position.clone(); v.y = 1.0;
+  v.project(camera);
+  return { pair: i, side: sd.side, ndc: [+v.x.toFixed(2), +v.y.toFixed(2)],
+           onScreen: Math.abs(v.x) < 1 && Math.abs(v.y) < 1 && v.z < 1 };
+}));
 window.__squad = () => SQUAD.map((q, i) => ({
   pair: i, a: Math.round(q.duel.a.hp), b: Math.round(q.duel.b.hp),
   aState: q.duel.a.state, bState: q.duel.b.state,
