@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-11 11:32</div>
+  <div id="build">BUILD 2026-11-11 11:49</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -947,7 +947,7 @@ loader.load('./knight.glb', (gltf) => {
   console.error('glb', e);
 });
 
-console.log('REALMS FP BUILD 2026-11-11 11:32');
+console.log('REALMS FP BUILD 2026-11-11 11:49');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -963,7 +963,7 @@ function audioInit() {
   try {
     AC = new Ctx();
     master = AC.createGain();
-    master.gain.value = 0.55;
+    master.gain.value = 0.34;   // was 0.55 and it was genuinely painful
     /* a tap on the real output so "is it actually making sound" can be MEASURED
      * instead of assumed */
     vinylAnalyser = AC.createAnalyser();
@@ -979,11 +979,27 @@ function audioInit() {
 const audioReady = () => AC && AC.state !== 'closed';
 /* distance loudness, so a blade far off is faint and one at your face is not */
 function distGain(dist) { return Math.max(0.12, Math.min(1, 1.35 / (1 + Math.max(0, dist - 1.2) * 0.7))); }
+const SFXC = { whoosh:0, grunt:0, clang:0, thud:0, step:0 };
+/* A HARD RATE LIMIT, because no individual sound should be able to hurt. Even with the
+ * replay bug fixed, a burst of simultaneous events could stack six clangs on one frame.
+ * Per-sound minimum gaps plus a global cap of 3 voices per 100ms. */
+const sfxLast = {};
+function sfxAllow(name, minGap) {
+  const now = AC ? AC.currentTime : 0;
+  if (now < (sfxLast[name] ?? -1e9) + minGap) return false;
+  if (now - (sfxLast.__win ?? -1e9) > 0.1) { sfxLast.__win = now; sfxLast.__n = 0; }
+  if ((sfxLast.__n = (sfxLast.__n || 0) + 1) > 3) return false;
+  sfxLast[name] = now;
+  return true;
+}
+window.__sfxCount = SFXC;
 function noiseSrc() { const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true; return s; }
 
 /* a blade travelling: band-passed noise sweeping down, the classic whoosh */
 function sfxWhoosh(gain = 0.5, dur = 0.34, pitch = 1) {
   if (!audioReady()) return;
+  SFXC.whoosh++;
+  if (!sfxAllow('whoosh', 0.10)) return;
   const t = AC.currentTime;
   const src = noiseSrc();
   const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.1;
@@ -996,20 +1012,25 @@ function sfxWhoosh(gain = 0.5, dur = 0.34, pitch = 1) {
   src.connect(bp).connect(g).connect(master);
   src.start(t); src.stop(t + dur + 0.02);
 }
-/* the chamber: a short breath grunt, low and clipped */
+/* THE CHAMBER IS A BREATH, NOT A BUZZ. This used to be a sawtooth at 150 down to 96Hz,
+ * which is a literal buzzer waveform - the "BRRRRRR" was mostly this sound being replayed
+ * by the event bug, but the timbre was unpleasant even once. Now: filtered noise shaped
+ * like an exhale, no oscillator at all, quieter and shorter. */
 function sfxGrunt(gain = 0.3) {
   if (!audioReady()) return;
+  SFXC.grunt++;
+  if (!sfxAllow('grunt', 0.16)) return;
   const t = AC.currentTime;
-  const o = AC.createOscillator(); o.type = 'sawtooth';
-  o.frequency.setValueAtTime(150, t);
-  o.frequency.exponentialRampToValueAtTime(96, t + 0.16);
-  const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 620; f.Q.value = 2;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+  bp.frequency.setValueAtTime(820, t);
+  bp.frequency.exponentialRampToValueAtTime(430, t + 0.13);
   const g = AC.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
-  o.connect(f).connect(g).connect(master);
-  o.start(t); o.stop(t + 0.2);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain * 0.55), t + 0.025);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+  src.connect(bp).connect(g).connect(master);
+  src.start(t); src.stop(t + 0.16);
 }
 /* steel on steel. An FM ring measured DEAD SILENT (peak 0.0000 through a tap on the real
  * output) so it is gone: this is a straight inharmonic stack, the partials set at bell-like
@@ -1017,6 +1038,8 @@ function sfxGrunt(gain = 0.3) {
  * transient at the front for the impact. Boring and reliable beats clever and silent. */
 function sfxClang(gain = 0.4, bright = 1) {
   if (!audioReady()) return;
+  SFXC.clang++;
+  if (!sfxAllow('clang', 0.06)) return;
   const t = AC.currentTime;
   const base = 430 * bright;
   const partials = [[1, 1.0, 0.55], [2.76, 0.62, 0.34], [5.40, 0.34, 0.22], [8.93, 0.18, 0.14]];
@@ -1041,6 +1064,8 @@ function sfxClang(gain = 0.4, bright = 1) {
 /* a body taking the blow: low thump with a short tear of noise over it */
 function sfxThud(gain = 0.5) {
   if (!audioReady()) return;
+  SFXC.thud++;
+  if (!sfxAllow('thud', 0.10)) return;
   const t = AC.currentTime;
   const o = AC.createOscillator(); o.type = 'sine';
   o.frequency.setValueAtTime(120, t);
@@ -1058,6 +1083,8 @@ function sfxThud(gain = 0.5) {
 }
 function sfxStep(gain = 0.16) {
   if (!audioReady()) return;
+  SFXC.step++;
+  if (!sfxAllow('step', 0.13)) return;
   const t = AC.currentTime;
   const src = noiseSrc();
   const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 0.8;
@@ -1118,6 +1145,35 @@ let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
 /* measures the blade's own path through a swing, so "is the arc real" is a number */
+/* WHERE THE BLADE ACTUALLY GOES, in camera space, per angle pose. The old swing probe
+ * walked vmSwing.t, which stopped meaning anything the moment the blade began following
+ * the rules' phase, so it was measuring nothing. This reads the POSE geometry directly:
+ * chamber (W), midpoint, strike (S) and follow-through, then reports how far the tip
+ * travels on each axis, which is the only honest way to answer "does this swing right". */
+window.__arcProbe = () => {
+  const tip = new THREE.Vector3();
+  const at = (pose) => {
+    sword.position.fromArray(pose.pos);
+    sword.rotation.fromArray(pose.rot);
+    sword.updateWorldMatrix(true, false);
+    tip.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+    camera.updateWorldMatrix(true, false);
+    return camera.worldToLocal(tip.clone());
+  };
+  const cases = [['light','L'],['light','R'],['light','T'],['thrust','T']];
+  const out = [];
+  for (const [kind, zone] of cases) {
+    const arc = swingArc(zone, kind);
+    const w = at(arc.W), m = at(arc.mid), s2 = at(arc.S), th = at(arc.through);
+    const d = (a, b) => ({ dx:+(b.x-a.x).toFixed(2), dy:+(b.y-a.y).toFixed(2), dz:+(b.z-a.z).toFixed(2) });
+    out.push({ at: zone + (kind === 'thrust' ? '/thrust' : ''),
+      chamber: [+w.x.toFixed(2), +w.y.toFixed(2), +w.z.toFixed(2)],
+      contact: [+s2.x.toFixed(2), +s2.y.toFixed(2), +s2.z.toFixed(2)],
+      end:     [+th.x.toFixed(2), +th.y.toFixed(2), +th.z.toFixed(2)],
+      cut:     d(w, th) });
+  }
+  return out;
+};
 window.__swingProbe = (kind = 'light', zone = 'R') => {
   const keep = { ...vmSwing, pos: [...pose.pos], rot: [...pose.rot] };
   vmSwing.id = 'probe'; vmSwing.on = true; vmSwing.kind = kind;
@@ -1313,6 +1369,21 @@ function say(text, ms = 1200) {
 }
 
 /* ------------------------------------------------------------------ viewmodel poses */
+/* AUTHOR POSES BY TIP AND HAND, NOT BY THREE EULER GUESSES. Angular triples are
+ * impossible to reason about and the measured result proved it: my "left" cut swept to the
+ * RIGHT (dx +1.55), both cuts fell a metre so they read as diagonals, the overhead went
+ * BACKWARD toward the player (dz +1.26) and the thrust drove forward only 0.43m. Declaring
+ * where the hand and the point are makes the geometry checkable, and the sword's rotation
+ * falls out of the direction between them. */
+function poseFromTip(hand, tip, roll = 0) {
+  const h = new THREE.Vector3(...hand), t = new THREE.Vector3(...tip);
+  const dir = t.clone().sub(h).normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  if (roll) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), roll));
+  const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+  return { pos: hand, rot: [e.x, e.y, e.z] };
+}
+const T = (hand, tip, roll) => poseFromTip(hand, tip, roll);
 const P = {
   /* the fist sits at sword-local y -0.055, so a rest at -0.235 puts the whole hand inside
    * the frame: at -0.32 the hand's centre landed exactly on the bottom edge and all you
@@ -1320,14 +1391,28 @@ const P = {
   rest: { pos: [0.285, -0.235, -0.545], rot: [-0.16, 0.16, 0.22] },
   /* drawn back far enough that the weapon is unmistakably cocked, struck through far
    * enough that the tip covers real ground: a cut that only travels 30cm is a tap */
-  leftW: { pos: [-0.16, -0.02, -0.44], rot: [-0.05, -0.95, 1.15] },
-  rightW: { pos: [0.56, -0.02, -0.44], rot: [-0.05, 0.95, -0.35] },
-  topW: { pos: [0.26, 0.44, -0.40], rot: [-1.55, 0.10, 0.05] },
-  thrustW: { pos: [0.28, -0.18, -0.22], rot: [-0.02, 0.14, 0.10] },
-  leftS: { pos: [0.62, -0.36, -0.60], rot: [-0.40, 0.85, -1.10] },
-  rightS: { pos: [-0.30, -0.36, -0.60], rot: [-0.40, -0.85, 1.15] },
-  topS: { pos: [0.10, -0.60, -0.66], rot: [0.34, 0.05, 0.22] },
-  thrustS: { pos: [0.10, -0.20, -1.04], rot: [0.01, 0.03, 0.03] },
+  /* LEFT CUT CHAMBERS ON THE RIGHT AND TRAVELS RIGHT TO LEFT, which is the whole point of
+   * a directional attack and how Chivalry does it: the blade has to cross the body. */
+  leftW: T([0.40, 0.05, -0.40], [1.02, 0.72, -0.35]),
+  leftM: T([0.24, -0.04, -0.50], [0.34, 0.52, -0.92]),
+  leftS: T([0.10, -0.05, -0.58], [-0.62, 0.28, -1.02]),
+  leftT: T([-0.20, -0.18, -0.55], [-1.02, 0.12, -0.42]),
+  /* RIGHT CUT IS THE MIRROR IMAGE */
+  rightW: T([-0.32, 0.05, -0.40], [-0.94, 0.72, -0.35]),
+  rightM: T([-0.02, -0.04, -0.50], [-0.12, 0.52, -0.92]),
+  rightS: T([0.10, -0.05, -0.58], [0.82, 0.28, -1.02]),
+  rightT: T([0.34, -0.18, -0.55], [1.04, 0.12, -0.42]),
+  /* OVERHEAD CHAMBERS STRAIGHT UP AND BEHIND, THEN COMES DOWN THROUGH THE CENTRE */
+  topW: T([0.28, 0.30, -0.42], [0.30, 1.18, -0.10]),
+  topM: T([0.18, 0.10, -0.55], [0.20, 0.34, -0.95]),
+  topS: T([0.16, 0.05, -0.55], [0.12, -0.52, -1.30]),
+  topT: T([0.14, -0.10, -0.50], [0.10, -0.85, -0.95]),
+  /* THRUST PULLS BACK AT THE CHEST AND DRIVES STRAIGHT FORWARD ALONG THE CROSSHAIR.
+   * A thrust that arcs sideways is not a thrust. */
+  thrustW: T([0.28, -0.10, -0.06], [0.30, 0.50, -0.78]),
+  thrustM: T([0.24, -0.02, -0.24], [0.24, 0.14, -1.16]),
+  thrustS: T([0.16, 0.10, -0.50], [0.14, 0.30, -1.43]),
+  thrustT: T([0.18, 0.08, -0.48], [0.16, 0.26, -1.40]),
   blockSword: { pos: [0.32, -0.24, -0.52], rot: [-0.50, 0.08, 1.05] },
 };
 /* THE SWING TIMELINE. An attack used to be two static poses with an 80ms hop between
@@ -1375,8 +1460,12 @@ const lerpPose = (a, b, t) => ({
 });
 /* the four marks of a cut: drawn back, crossing the line, past the line, recovered */
 function swingArc(line, kind) {
-  const W = line === 'L' ? P.leftW : line === 'R' ? P.rightW : kind === 'thrust' ? P.thrustW : P.topW;
-  const S = line === 'L' ? P.leftS : line === 'R' ? P.rightS : kind === 'thrust' ? P.thrustS : P.topS;
+  const key = kind === 'thrust' ? 'thrust' : line === 'L' ? 'left' : line === 'R' ? 'right' : 'top';
+  const W = P[key + 'W'], S = P[key + 'S'], TH = P[key + 'T'];
+  const midAuthored = P[key + 'M'];
+  if (midAuthored) {
+    return { W, mid: midAuthored, S, through: TH };
+  }
   const mid = {
     pos: [(W.pos[0] + S.pos[0]) * 0.5, (W.pos[1] + S.pos[1]) * 0.5 + 0.04, (W.pos[2] + S.pos[2]) * 0.5 - 0.04],
     rot: [(W.rot[0] + S.rot[0]) * 0.5, (W.rot[1] + S.rot[1]) * 0.5, (W.rot[2] + S.rot[2]) * 0.5],

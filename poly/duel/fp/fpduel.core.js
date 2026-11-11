@@ -357,6 +357,14 @@ export class Duel {
 
   emit(type, data = {}) { this.events.push({ t: this.clock, type, ...data }); }
 
+  /* TAKE THE EVENTS AND EMPTY THE TRAY. THIS WAS THE BRRRRRR. When a duel ended,
+   * step() did `if (this.over) return this.events` and never cleared the buffer, so
+   * every single frame after a death handed the page THE SAME final batch again:
+   * measured 155 grunts and 310 thuds per second, which is a sound effect being
+   * replayed forever, and it also re-fired the HUD, the hit stop and the camera punch.
+   * Events are drained on the way out of every exit, so each one is delivered once. */
+  drain() { const out = this.events; this.events = []; return out; }
+
   /* ONE RESOLUTION POINT. The strike is judged on the first frame of its active
    * window and never again, so a hit is a single deterministic event instead of
    * something that can double fire while two hitboxes overlap. */
@@ -469,7 +477,7 @@ export class Duel {
   }
 
   step(dt, inA, inB) {
-    if (this.over) return this.events;
+    if (this.over) return this.drain();
     this.events = [];
     this.clock += dt;
     const P = [this.a, this.b];
@@ -581,7 +589,7 @@ export class Duel {
         if (this.dist <= p.reach) this.resolveStrike(p.f, p.o);
         else { p.f.whiffs++; this.emit('outofrange', { who: p.f.id }); }
       }
-      if (this.over) return this.events;
+      if (this.over) return this.drain();
     }
 
     if (this.clock >= this.maxTime && !this.over) {
@@ -590,7 +598,7 @@ export class Duel {
         : (this.a.healthRatio > this.b.healthRatio ? this.a : this.b);
       this.emit('timeout', { winner: this.winner?.id ?? null });
     }
-    return this.events;
+    return this.drain();
   }
 }
 
