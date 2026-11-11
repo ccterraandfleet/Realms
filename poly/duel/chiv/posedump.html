@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script></head>
+<body><script type="module">
+import * as THREE from 'three';
+import { Atlas } from './forge.js';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
+const Q = new URLSearchParams(location.search);
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+const rig = buildSkeleton();
+const mats = soldierMaterials(atlas.m, 0x2f6f9e);
+for (const [k, m] of Object.entries(mats)) m.name = k;
+const parts = buildSoldier(rig, mats, { kind: Q.get('kind') || 'sword', helm: Q.get('helm') || 'nasal', shield: Q.get('shield') || 'kite' });
+const built = assemble(rig, parts);
+const scene = new THREE.Scene(); scene.add(built.root);
+
+window.__posed = [];
+for (const [mode, t] of [['march',0.10],['march',0.30],['march',0.50],['march',0.70],
+                          ['walk',0.20],['walk',0.60],['charge',0.15],['charge',0.45],['idle',0]]) {
+  animate(rig, t, mode);
+  rig.root.updateMatrixWorld(true);
+  for (const m of built.meshes) { if (m.skeleton) m.skeleton.update(); m.updateMatrixWorld(true); }
+  const dump = built.meshes.map((m) => {
+    const pos = m.geometry.attributes.position;
+    const arr = new Float32Array(pos.count * 3);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      m.applyBoneTransform(i, v);
+      v.applyMatrix4(m.matrixWorld);
+      arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+    }
+    const idx = m.geometry.index ? Array.from(m.geometry.index.array) : Array.from({length: pos.count}, (_, i) => i);
+    return { mat: m.material.name || '?', pos: Array.from(arr), idx };
+  });
+  window.__posed.push({ mode, t, meshes: dump });
+}
+window.__ready = true;
+</script></body></html>

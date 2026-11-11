@@ -379,11 +379,11 @@ export function buildSoldier(rig, mats, spec = {}) {
     s.quadraticCurveTo(-0.14, -0.34, -0.185, -0.10);
     s.closePath();
     const g = new THREE.ExtrudeGeometry(s, { depth: 0.022, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 1, curveSegments: 5 });
-    parts.push({ geo: g.translate(-0.315, 1.10, 0.150), mat: mats.shieldWood, bone: 'fore.L' });
-    parts.push({ geo: sph(0.032, 10, 8).translate(-0.315, 1.14, 0.180), mat: mats.steel, bone: 'fore.L' });
+    parts.push({ geo: g.translate(-0.160, 0.86, 0.335), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.032, 10, 8).translate(-0.160, 0.90, 0.365), mat: mats.steel, bone: 'fore.L' });
   } else {
-    parts.push({ geo: cyl(0.26, 0.26, 0.022, 22).rotateX(Math.PI / 2).translate(-0.315, 1.10, 0.161), mat: mats.shieldWood, bone: 'fore.L' });
-    parts.push({ geo: sph(0.040, 10, 8).translate(-0.315, 1.10, 0.186), mat: mats.steel, bone: 'fore.L' });
+    parts.push({ geo: cyl(0.26, 0.26, 0.022, 22).rotateX(Math.PI / 2).translate(-0.160, 1.00, 0.335), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.040, 10, 8).translate(-0.160, 1.00, 0.360), mat: mats.steel, bone: 'fore.L' });
   }
 
   return parts;
@@ -524,7 +524,7 @@ export function animate(rig, t, mode = 'march', extra = {}) {
     set('head', -0.01, Math.sin(t * 0.7) * 0.06, 0);
     set('arm.L', 0.06, 0, 0.10);
     set('arm.R', 0.04, 0, -0.08);
-    set('fore.L', -0.22, 0, 0);
+    set('fore.L', -0.16, 0, 0);
     set('fore.R', -0.16, 0, 0);
     for (const s2n of ['L', 'R']) {
       set('thigh.' + s2n, 0.01, 0, (s2n === 'L' ? -1 : 1) * 0.03);
@@ -543,8 +543,8 @@ export function animate(rig, t, mode = 'march', extra = {}) {
     set('foot.L', -0.12 - sL * 0.18, 0, 0);
     set('foot.R', -0.12 - sR * 0.18, 0, 0);
     /* arms counter-swing, spear arm held high and steadier */
-    set('arm.L', sR * 0.42 * amp + 0.10, 0, 0.14);
-    set('fore.L', -0.55 - Math.max(0, sR) * 0.30, 0, 0);
+    set('arm.L', sR * 0.11 * amp + 0.05, 0, 0.14);
+    set('fore.L', -0.26 - Math.max(0, sR) * 0.10, 0, 0);
     const spearArm = extra.spearArm !== false;
     set('arm.R', spearArm ? 0.30 + sL * 0.10 : sL * 0.44 * amp + 0.08, 0, spearArm ? -0.16 : -0.10);
     set('fore.R', spearArm ? -0.95 : -0.40, 0, 0);
