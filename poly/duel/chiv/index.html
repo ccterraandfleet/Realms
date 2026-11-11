@@ -1,0 +1,2376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>
+/* GITHUB PAGES CACHES THIS PAGE FOR 10 MINUTES (cache-control max-age=600). That is how a
+ * deploy that IS live looks unchanged. So the page refuses to run from a cached copy: if
+ * the URL carries no nonce, it reloads itself once with one, which forces a fresh fetch. */
+(function () {
+  var h = location.hash || '';
+  if (h.indexOf('nonce=') >= 0) return;
+  var u = new URL(location.href);
+  if (u.searchParams.get('n')) return;
+  u.searchParams.set('n', String(Date.now()));
+  location.replace(u.toString() + (h ? '' : ''));
+})();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>REALMS — first person duel</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0d1116;color:#e6edf3;
+    font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;cursor:crosshair}
+  canvas{display:block}
+  #hud{position:fixed;inset:0;pointer-events:none}
+  .bar{position:fixed;height:9px;background:#000a;border:1px solid #2b3641;box-shadow:0 0 0 1px #0006}
+  .bar>i{display:block;height:100%;transition:width .08s linear}
+  #hpMe{left:26px;top:26px;width:260px}
+  #hpMe>i{background:linear-gradient(90deg,#8fd6a8,#4f9a72)}
+  #stMe{left:26px;top:40px;width:200px}
+  #stMe>i{background:linear-gradient(90deg,#e8d48a,#b79a45)}
+  #hpFoe{right:26px;top:26px;width:260px}
+  #hpFoe>i{background:linear-gradient(90deg,#e8a08a,#a5523c)}
+  .lbl{position:fixed;top:8px;font-size:10px;letter-spacing:.16em;color:#8fa0b0}
+  #lblMe{left:26px}#lblFoe{right:26px;text-align:right}
+  #zones{position:fixed;left:26px;top:60px;display:flex;gap:6px}
+  #zones b{font-weight:400;font-size:10px;letter-spacing:.1em;padding:2px 7px;border:1px solid #2b3641;
+    color:#6f8093;background:#0008}
+  #zones b.on{color:#0d1116;background:#9fd6ff;border-color:#9fd6ff}
+  #tel{position:fixed;left:50%;top:34%;transform:translate(-50%,0);font-size:34px;letter-spacing:.05em;
+    opacity:0;transition:opacity .06s;text-shadow:0 2px 12px #000}
+  #msg{position:fixed;left:50%;top:22%;transform:translate(-50%,0);font-size:15px;letter-spacing:.22em;
+    color:#cfe0ee;opacity:0;transition:opacity .2s;text-shadow:0 2px 10px #000}
+  #hint{position:fixed;left:50%;bottom:22px;transform:translate(-50%,0);font-size:11px;color:#7d8d9d;letter-spacing:.1em}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none}
+  #vig{position:fixed;inset:0;box-shadow:inset 0 0 140px 40px #7d1f1f;opacity:0;pointer-events:none}
+  #intro{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 40%,#1a232c,#080a0d 75%);cursor:pointer;text-align:center;padding:24px}
+  #intro h1{font-size:20px;letter-spacing:.4em;margin:0 0 6px;color:#cfe4f5}
+  #intro p{margin:4px 0;color:#8ba0b4;font-size:12px;letter-spacing:.06em}
+  #intro .k{color:#cfe4f5}
+  #dots{position:fixed;left:50%;top:12px;transform:translate(-50%,0);display:flex;gap:8px}
+  #dots i{width:8px;height:8px;border:1px solid #4a5a6a;display:block}
+  #dots i.win{background:#9fd6ff;border-color:#9fd6ff}
+  #dots i.loss{background:#a5523c;border-color:#a5523c}
+</style>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+</head>
+<body>
+<div id="hud">
+  <span class="lbl" id="lblMe">YOU</span><span class="lbl" id="lblFoe">OPPONENT</span>
+  <div class="bar" id="hpMe"><i style="width:100%"></i></div>
+  <div class="bar" id="stMe"><i style="width:100%"></i></div>
+  <div class="bar" id="hpFoe"><i style="width:100%"></i></div>
+  <div id="zones"><b data-z="L">LEFT</b><b data-z="T">TOP</b><b data-z="R">RIGHT</b></div>
+  <div id="tel"></div>
+  <div id="msg"></div>
+  <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
+  <div id="drag">ACCEL</div>
+  <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
+  <div id="build">BUILD 2026-11-11 11:49</div>
+  <style>
+    #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
+      letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
+    #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
+  </style>
+  <div id="hint"><b>LMB</b> attack by mouse direction: up overhead &middot; left/right cuts &middot; down thrust &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>R</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge &nbsp;|&nbsp; turn <b>with</b> a cut to accel it, <b>against</b> it to drag</div>
+</div>
+<div id="flash"></div><div id="vig"></div>
+<div id="intro">
+  <h1>REALMS</h1>
+  <p>first person duel &middot; click to take the sword</p>
+  <p class="k">LMB attack &middot; move the mouse UP for an overhead, LEFT or RIGHT for a cut, DOWN for a thrust</p>
+  <p class="k">RMB guard (it follows your mouse) &middot; MMB heavy &middot; Q feint &middot; Shift dodge &middot; W S close and open &middot; A D circle</p>
+  <p class="k">F = feint &nbsp; Shift = dodge &nbsp; Up / Down = close or open the distance</p>
+  <p>a parry is a guard that lands in the last tenth of a second &middot; press 1&ndash;7 for a different opponent</p>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { clone as skeletonClone } from './lib/SkeletonUtils.js';
+import { RGBELoader } from './lib/RGBELoader.js';
+import { EffectComposer } from './lib/EffectComposer.js';
+import { RenderPass } from './lib/RenderPass.js';
+import { ShaderPass } from './lib/ShaderPass.js';
+import { UnrealBloomPass } from './lib/UnrealBloomPass.js';
+import { SMAAPass } from './lib/SMAAPass.js';
+import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js';
+import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js';
+
+/* ===========================================================================
+ * THE COMPAT BOUNDARY.
+ * The visual half of this page was written against the old core's vocabulary: an
+ * attack had a "kind" of light/heavy/thrust and a guard "zone" of L/R/T. The new
+ * core speaks Chivalry's: a named ability with a Direction read from their data.
+ * These helpers translate at the seam so the arena, the rig, the blade trail and
+ * the whole sound kit keep working while the RULES underneath are the real ones.
+ * =========================================================================== */
+const ATT = {
+  light: phases('Longsword', 'Slash'),
+  heavy: phases('Longsword', 'SlashHeavy'),
+  thrust: phases('Longsword', 'Stab'),
+  jab: phases('Longsword', 'Jab'),
+  kick: phases('Longsword', 'KickLow'),
+};
+CFG.ATTACKS = ATT;
+/* what a swing LOOKS like: which of the four authored arcs to play */
+function vmKind(att) {
+  if (!att) return 'light';
+  const n = att.name || '';
+  if (n === 'Stab' || n === 'StabHeavy' || n === 'Throw') return 'thrust';
+  if (n === 'KickLow' || n === 'Shove') return 'kick';
+  if (n === 'Jab' || n === 'Headbutt') return 'jab';
+  if (n === 'Special' || n.endsWith('Heavy')) return 'heavy';
+  return 'light';
+}
+/* which side it arrives on. Chivalry's Direction field decides it, not the key. */
+function vmLine(att) {
+  if (!att) return 'T';
+  if (vmKind(att) === 'thrust') return 'T';
+  return att.dir === 'Right' ? 'R' : att.dir === 'Left' ? 'L' : 'T';
+}
+
+const $ = (s) => document.querySelector(s);
+
+/* ------------------------------------------------------------------ renderer */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+/* ?q=low bypasses the whole look pipeline and falls back to a plain forward render,
+ * which is the escape hatch for weak GPUs and the control arm for measurements */
+const LOWQ = /[?&]q=low\b/.test(location.search);
+const INSPECT = /[?&]inspect=1\b/.test(location.search);
+/* isolation switch: proves the scanned maps are reaching the shader, not silently dropped */
+const TEXOFF = /[?&]tex=off\b/.test(location.search);
+renderer.toneMapping = LOWQ ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const SKY_TOP = 0x4a86c8, SKY_HOR = 0xdfe9e6;
+scene.background = new THREE.Color(SKY_HOR);
+scene.fog = new THREE.Fog(0xc9d8d8, 62, 275);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 500);
+
+/* sky dome: gradient placeholder, replaced by a real CC0 HDRI the moment it loads */
+let skyDome = null;
+{
+  const m = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color(SKY_TOP) }, hor: { value: new THREE.Color(SKY_HOR) } },
+    vertexShader: 'varying float vy; void main(){ vy = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'varying float vy; uniform vec3 top; uniform vec3 hor; void main(){ float t = clamp(vy * 1.4 + 0.10, 0.0, 1.0); gl_FragColor = vec4(mix(hor, top, t), 1.0); }',
+  });
+  skyDome = new THREE.Mesh(new THREE.SphereGeometry(260, 24, 16), m);
+  scene.add(skyDome);
+}
+
+/* light: warm key from the west, cold fill, thin blue rim to separate silhouettes */
+/* the HDRI carries the sky fill now, so the fake hemisphere drops to a whisper;
+ * at full strength it double counts the sky and flattens every form */
+/* a blue sky over blue-shadowed ground washes every warm albedo to grey-cyan, so the
+ * fill is warm and weak and a bounce term stands in for light coming back off the grass */
+const fillLight = new THREE.HemisphereLight(0xcfcabb, 0x6b6042, 0.30);
+scene.add(fillLight);
+const bounce = new THREE.DirectionalLight(0xd8b98a, 0.35);
+bounce.position.set(-14, 6, 26);
+const sun = new THREE.DirectionalLight(0xfff2e0, 2.35);
+/* measured off the HDRI's own bright spot: azimuth toward -Z, 44.5 deg elevation,
+ * so the shadows on the ground and the visible sun cannot disagree */
+sun.position.set(12.6, 31.5, -29.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
+sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 95;
+sun.shadow.bias = -0.0008;
+sun.shadow.radius = 2.5;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+scene.add(bounce);
+const rim = new THREE.DirectionalLight(0x9fc4ff, 0.6);
+rim.position.set(-20, 12, -24);
+scene.add(rim);
+
+/* ---------------------------------------------------------------- the ground
+ * Faceted terrain, not a plane. This project's whole look is flat-shaded facets
+ * carrying the colour, and a smooth ground makes every rock and tree standing on it
+ * read as pasted on. Two hash octaves of height plus a ridge to the north, and the
+ * arena floor is flattened exactly to zero so no duel is ever fought on a slope. */
+const FIELD = 132, SEGS = 84;
+function hash2(x, y) { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+}
+function heightAt(x, z) {
+  const r = Math.hypot(x, z);
+  let h = (vnoise(x * 0.045, z * 0.045) - 0.5) * 5.0
+        + (vnoise(x * 0.13, z * 0.13) - 0.5) * 1.4
+        + (vnoise(x * 0.34, z * 0.34) - 0.5) * 0.42;
+  h += Math.max(0, 1 - Math.abs((z + 64) / 30)) * (vnoise(x * 0.055, 3.3) * 8 + 3.4);
+  const flat = Math.min(1, Math.max(0, (r - 9.5) / 9.5));
+  return h * flat;
+}
+const PAL = {
+  grass: [0x84a244, 0x77983f, 0x93ae4c, 0x6b8c39],
+  dry: [0xa8ab4e, 0x9a9e47],
+  earth: [0x7a6742, 0x8a7450],
+  worn: [0x7e9a44, 0x71903c, 0x6d8a3a, 0x7f6c48],
+  stone: [0x7d786e, 0x6e6a60, 0x87806f],
+};
+const PALETTE_CHROMA = 1.45;
+function groundMesh() {
+  const pos = [], col = [], uvs = [], c = new THREE.Color();
+  const UV_SCALE = 4.0;   /* one texture tile every 4 world units: coarse enough that
+                             the grain survives mip filtering at grazing angles */
+  const step = FIELD / SEGS;
+  const at = (i, j) => { const x = -FIELD / 2 + i * step, z = -FIELD / 2 + j * step; return [x, heightAt(x, z), z]; };
+  for (let j = 0; j < SEGS; j++) {
+    for (let i = 0; i < SEGS; i++) {
+      const a = at(i, j), b = at(i + 1, j), d = at(i + 1, j + 1), e = at(i, j + 1);
+      for (const tri of [[a, b, d], [a, d, e]]) {
+        const [p0, p1, p2] = tri;
+        const slope = Math.abs(p1[1] - p0[1]) + Math.abs(p2[1] - p0[1]) + Math.abs(p2[1] - p1[1]);
+        const r = Math.hypot((p0[0] + p1[0] + p2[0]) / 3, (p0[2] + p1[2] + p2[2]) / 3);
+        const n = hash2(Math.round(p0[0] * 3.1), Math.round(p0[2] * 2.7));
+        let fam = PAL.grass;
+        if (slope > 1.35) fam = PAL.stone;
+        else if (r > 40 && n > 0.58) fam = PAL.dry;
+        else if (r < 13) fam = PAL.worn;
+        c.setHex(fam[Math.floor(n * fam.length) % fam.length]).multiplyScalar(0.9 + n * 0.18);
+        /* CHROMA RESTORE: sky fill and a neutral detail map dilute albedo, so the palette
+         * is pushed before it is written. Measured, not guessed: see PALETTE_CHROMA. */
+        /* BOTH calls must name sRGB: getHSL() defaults to the LINEAR working space while
+         * setHSL() defaults to sRGB, so mixing them shifted hue and flattened colour. */
+        { const hsl = { h: 0, s: 0, l: 0 };
+          c.getHSL(hsl, THREE.SRGBColorSpace);
+          c.setHSL(hsl.h, Math.min(1, hsl.s * PALETTE_CHROMA), hsl.l, THREE.SRGBColorSpace); }
+        /* WINDING, THE FOURTH TIME IN THIS PROJECT. Emitted in the order that looks
+         * counter-clockwise on paper, the face normal pointed DOWN into the earth, so the
+         * sun contributed nothing to the ground and the blue sky lit it alone: that is
+         * why the terrain read blue-grey no matter how the lights were tuned. Swap two
+         * corners and the normals come out +Y. Measured: hue 128 -> 93, sat 9 -> 17. */
+        for (const q of [tri[0], tri[2], tri[1]]) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); uvs.push(q[0] / UV_SCALE, q[2] / UV_SCALE); }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  g.computeVertexNormals();
+  return new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, flatShading: true }));
+}
+const ground = groundMesh();
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* SCANNED SURFACES. Photogrammetry (Poly Haven CC0) is what makes a surface read as
+ * material rather than paint: a normal map carries micro relief the geometry does not
+ * have, and a roughness map decides which patches catch the sun. The colour scan is
+ * reduced to a NEUTRAL detail map on purpose (luminance only, mean lifted to 0.85) so it
+ * modulates this project's palette instead of replacing it with photographic green. */
+const texLoader = new THREE.TextureLoader();
+function scanned(base, repeat, aniso) {
+  const set = {};
+  for (const kind of ['detail', 'nor', 'rough']) {
+    const t = texLoader.load('./tex/' + base + '_' + kind + '.jpg');
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = Math.min(aniso, renderer.capabilities.getMaxAnisotropy());
+    if (kind !== 'detail') t.colorSpace = THREE.NoColorSpace;
+    set[kind] = t;
+  }
+  return set;
+}
+function applyScannedSurfaces() {
+  if (LOWQ || TEXOFF) return;
+  const gtex = scanned('grass', 1, 8);
+  ground.material.map = gtex.detail;
+  ground.material.normalMap = gtex.nor;
+  ground.material.normalScale.set(0.75, 0.75);
+  ground.material.roughnessMap = gtex.rough;
+  ground.material.roughness = 1.0;
+  ground.material.needsUpdate = true;
+  const stex = scanned('stone', 1, 4);
+  for (const m of [stoneMat, stoneDark]) {
+    m.map = stex.detail;
+    m.normalMap = stex.nor;
+    m.normalScale.set(0.6, 0.6);
+    m.roughnessMap = stex.rough;
+    m.needsUpdate = true;
+  }
+}
+/* called once the stone materials exist further down the file */
+setTimeout(applyScannedSurfaces, 0);
+
+/* ---------------------------------------------------------------- the field dressing */
+const swayers = [];   /* banners and flames, stepped every frame */
+const stoneMat = new THREE.MeshStandardMaterial({ color: 0x8b8f92, roughness: 0.92, flatShading: true });
+const stoneDark = new THREE.MeshStandardMaterial({ color: 0x6f7478, roughness: 0.94, flatShading: true });
+const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 1 });
+const ironMat = new THREE.MeshStandardMaterial({ color: 0x3b4046, metalness: 0.6, roughness: 0.55 });
+
+/* conifers: three stacked cones on a trunk, the reference look for this project */
+function conifer(x, z, s, tint) {
+  const g = new THREE.Group();
+  const h = heightAt(x, z);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.11 * s, 0.17 * s, 1.5 * s, 5), woodMat);
+  trunk.position.y = 0.75 * s;
+  g.add(trunk);
+  const leafMat = new THREE.MeshStandardMaterial({ color: tint, roughness: 1, flatShading: true });
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Mesh(new THREE.ConeGeometry((1.25 - i * 0.3) * s, (1.7 - i * 0.32) * s, 6), leafMat);
+    c.position.y = (1.5 + i * 0.85) * s;
+    c.castShadow = true;
+    g.add(c);
+  }
+  g.position.set(x, h, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(g);
+  return g;
+}
+const TREE_TINTS = [0x35592f, 0x2f5230, 0x3d6335, 0x2b4a2c, 0x40663a];
+for (let i = 0; i < 150; i++) {
+  const a = Math.random() * Math.PI * 2;
+  const r = 15 + Math.pow(Math.random(), 0.65) * 52;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (z < -22 && Math.abs(x) < 9) continue;                 /* keep the sightline to the keep clear */
+  if (vnoise(x * 0.07, z * 0.07) < 0.34 && r < 40) continue; /* clearings */
+  conifer(x, z, 0.8 + Math.random() * 0.85, TREE_TINTS[i % TREE_TINTS.length]);
+}
+
+/* the outer treeline: the horizon needs a wall of trees or the top of the frame is
+ * empty sky and the whole scene reads as a field with nothing behind it */
+for (let i = 0; i < 130; i++) {
+  const a = Math.random() * Math.PI * 2;
+  const r = 21 + Math.pow(Math.random(), 0.5) * 22;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (z < -30 && Math.abs(x) < 12) continue;        /* leave the keep in view */
+  conifer(x, z, 1.25 + Math.random() * 1.15, TREE_TINTS[(i + 2) % TREE_TINTS.length]);
+}
+
+/* grass tufts: instanced so 1,400 of them cost one draw call */
+{
+  const n = 1400;
+  const geo = new THREE.ConeGeometry(0.15, 0.46, 3);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x7e9449, roughness: 1, flatShading: true });
+  const inst = new THREE.InstancedMesh(geo, mat, n);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  const col = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, r = 5 + Math.pow(Math.random(), 0.6) * 58;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    v.set(x, heightAt(x, z) + 0.2, z);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI);
+    sc.setScalar(0.7 + Math.random() * 0.9);
+    m.compose(v, q, sc);
+    inst.setMatrixAt(i, m);
+    col.setHex(i % 3 === 0 ? 0x94ab48 : 0x7f9a3c).multiplyScalar(0.88 + Math.random() * 0.28);
+    inst.setColorAt(i, col);
+  }
+  inst.castShadow = false;
+  scene.add(inst);
+}
+
+/* boulders */
+for (let i = 0; i < 46; i++) {
+  const a = Math.random() * Math.PI * 2, r = 12 + Math.random() * 46;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const s = 0.35 + Math.random() * 1.1;
+  const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), Math.random() > 0.5 ? stoneMat : stoneDark);
+  rock.position.set(x, heightAt(x, z) + s * 0.45, z);
+  rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random());
+  rock.castShadow = true; rock.receiveShadow = true;
+  scene.add(rock);
+}
+
+/* the ring: a ruined curtain wall with four gaps, so the fight has a place */
+const ARENA_R = 10.5;
+for (let i = 0; i < 16; i++) {
+  const a = (i / 16) * Math.PI * 2;
+  if (i % 4 === 0) continue;                       /* gaps at the compass points */
+  const h = 1.05 + (i % 3 === 0 ? 0.55 : 0) + Math.random() * 0.25;
+  const seg = new THREE.Mesh(new THREE.BoxGeometry(3.4, h, 0.62), i % 2 ? stoneMat : stoneDark);
+  seg.position.set(Math.cos(a) * ARENA_R, h / 2, Math.sin(a) * ARENA_R);
+  seg.rotation.y = -a;
+  seg.castShadow = true; seg.receiveShadow = true;
+  scene.add(seg);
+  /* capstones, because a bare box top reads as a fence */
+  for (let k = -1; k <= 1; k++) {
+    if (Math.random() < 0.25) continue;
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.7), stoneMat);
+    cap.position.set(Math.cos(a) * ARENA_R + Math.cos(a + Math.PI / 2) * k * 1.05, h + 0.11, Math.sin(a) * ARENA_R + Math.sin(a + Math.PI / 2) * k * 1.05);
+    cap.rotation.y = -a;
+    cap.castShadow = true;
+    scene.add(cap);
+  }
+}
+
+/* braziers at the four gaps: post, bowl, animated flame, embers, and a real light */
+const flames = [];
+function brazier(x, z) {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 1.35, 6), woodMat);
+  post.position.y = 0.68;
+  g.add(post);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.15, 0.24, 8), ironMat);
+  bowl.position.y = 1.42;
+  g.add(bowl);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.52, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffb457, transparent: true, opacity: 0.92 }));
+  flame.position.y = 1.78;
+  g.add(flame);
+  const core = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 5),
+    new THREE.MeshBasicMaterial({ color: 0xfff2c4 }));
+  core.position.y = 1.7;
+  g.add(core);
+  const pl = new THREE.PointLight(0xffa552, 3.2, 11, 2);
+  pl.position.y = 1.85;
+  g.add(pl);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  flames.push({ flame, core, pl, phase: Math.random() * 6.28 });
+}
+for (let i = 0; i < 4; i++) {
+  const a = (i / 4) * Math.PI * 2;
+  brazier(Math.cos(a) * (ARENA_R - 0.9), Math.sin(a) * (ARENA_R - 0.9));
+}
+
+/* banners: your colours on your side, theirs opposite */
+function banner(x, z, colour) {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 3.1, 6), woodMat);
+  pole.position.y = 1.55;
+  g.add(pole);
+  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.35, 6, 4),
+    new THREE.MeshStandardMaterial({ color: colour, roughness: 0.95, side: THREE.DoubleSide }));
+  cloth.position.set(0.46, 2.32, 0);
+  g.add(cloth);
+  g.position.set(x, heightAt(x, z), z);
+  scene.add(g);
+  swayers.push({ cloth, phase: Math.random() * 6.28 });
+}
+banner(-4.6, -7.4, 0x2f6fb8);
+banner(4.6, -7.4, 0xb03a2e);
+
+/* the keep on the ridge: something to fight in front of, and a reason to look up */
+{
+  const keep = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(6.4, 8.6, 6.4), stoneDark);
+  body.position.y = 4.3;
+  keep.add(body);
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.4, 10.4, 8), stoneMat);
+    t.position.set(sx * 3.3, 5.2, sz * 3.3);
+    keep.add(t);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(1.7, 2.5, 8),
+      new THREE.MeshStandardMaterial({ color: 0x2f6fb8, roughness: 0.85, flatShading: true }));
+    roof.position.set(sx * 3.3, 11.6, sz * 3.3);
+    keep.add(roof);
+  }
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(4.9, 3.6, 8),
+    new THREE.MeshStandardMaterial({ color: 0x2f6fb8, roughness: 0.85, flatShading: true }));
+  roof.position.y = 10.4;
+  keep.add(roof);
+  keep.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } });
+  keep.position.set(0, heightAt(0, -58) - 0.4, -58);
+  scene.add(keep);
+}
+
+/* flying dust in the air, which is the cheapest way to make a still frame live */
+{
+  const n = 220, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 40;
+    pos[i * 3 + 1] = Math.random() * 9 + 0.3;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 40;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const dust = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf3ead8, size: 0.035, transparent: true, opacity: 0.5, depthWrite: false }));
+  dust.name = 'dust';
+  scene.add(dust);
+}
+
+function stepWorld(t) {
+  for (const f of flames) {
+    const k = 1 + Math.sin(t * 9 + f.phase) * 0.12 + Math.sin(t * 21 + f.phase) * 0.06;
+    f.flame.scale.set(k, 1 / k * (0.9 + Math.sin(t * 13 + f.phase) * 0.1), k);
+    f.core.scale.setScalar(0.9 + Math.sin(t * 17 + f.phase) * 0.12);
+    f.pl.intensity = 3.0 + Math.sin(t * 11 + f.phase) * 0.7;
+  }
+  for (const s of swayers) {
+    s.cloth.rotation.y = Math.sin(t * 1.6 + s.phase) * 0.16;
+    s.cloth.position.x = 0.46 + Math.sin(t * 1.9 + s.phase) * 0.02;
+  }
+  const dust = scene.getObjectByName('dust');
+  if (dust) dust.rotation.y = t * 0.012;
+}
+/* ---------------------------------------------------------------- what you hold
+ * The viewmodel is on screen 100% of the time, so it carries the read: steel with a
+ * diamond section that catches the key light, a wrapped grip and leather bands, a
+ * gloved fist with fingers, and a plank shield with an iron rim, an iron boss and
+ * your own crown painted on it. All primitives: no asset cost, no pop-in. */
+const steel = new THREE.MeshStandardMaterial({ color: 0xdbe4ee, metalness: 0.95, roughness: 0.22 });
+const steelDark = new THREE.MeshStandardMaterial({ color: 0x8d99a6, metalness: 0.85, roughness: 0.42 });
+const gripMat = new THREE.MeshStandardMaterial({ color: 0x4a3423, roughness: 0.92 });
+const leather = new THREE.MeshStandardMaterial({ color: 0x5d4630, roughness: 0.95 });
+const brass = new THREE.MeshStandardMaterial({ color: 0xb08d4a, metalness: 0.78, roughness: 0.33 });
+const glove = new THREE.MeshStandardMaterial({ color: 0x6b5136, roughness: 0.9 });
+const linen = new THREE.MeshStandardMaterial({ color: 0x6a6154, roughness: 1 });
+const mail = new THREE.MeshStandardMaterial({ color: 0x9aa3ac, metalness: 0.75, roughness: 0.55 });
+const edgeMat = new THREE.MeshStandardMaterial({ color: 0xf2f6fa, metalness: 0.95, roughness: 0.1 });
+const wood = new THREE.MeshStandardMaterial({ color: 0x6d5334, roughness: 0.88 });
+const buckle = new THREE.MeshStandardMaterial({ color: 0xa8894a, metalness: 0.8, roughness: 0.35 });
+
+/* a limb segment between two points: every finger, strap and haft is placed this way so
+ * joints line up instead of being nudged by eye */
+function seg(a, b, r, mat, parent) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  const d = new THREE.Vector3().subVectors(B, A), len = d.length();
+  const g = new THREE.CapsuleGeometry(r, Math.max(0.002, len - r * 2), 2, 7);
+  const m = new THREE.Mesh(g, mat);
+  m.position.copy(A).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+  parent.add(m);
+  return m;
+}
+function ringAt(a, b, t, R, tube, mat, parent) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  const d = new THREE.Vector3().subVectors(B, A);
+  const m = new THREE.Mesh(new THREE.TorusGeometry(R, tube, 4, 14), mat);
+  m.position.copy(A).addScaledVector(d, t);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), d.clone().normalize());
+  parent.add(m);
+  return m;
+}
+function rivet(x, y, z, r, parent, mat) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 6, 5), mat || steelDark);
+  m.position.set(x, y, z);
+  parent.add(m);
+  return m;
+}
+
+/* ---------------------------------------------------------------- the fist
+ * A hand around a vertical grip, built once and used by BOTH hands.
+ *
+ * The previous version was wrong in a way no amount of detail could fix: the fingers ran
+ * DOWN the grip as four vertical hooks standing side by side. Real fingers wrap AROUND a
+ * hilt and are STACKED along it, so all you could ever see was a rake wearing a glove.
+ * Here the grip axis is local Y at the origin, the hand sits on the +X side, the camera
+ * side is +Z, and each finger follows a circle of radius (R + 11mm) around the grip: out
+ * of the knuckle at +X, around the AWAY side (-Z), tips curling back at -X. Pass side:-1
+ * for a left hand, or rotate the group to aim the grip wherever it is needed. */
+function buildFist(opts) {
+  const side = opts.side || 1;
+  const R = opts.R !== undefined ? opts.R : 0.021;
+  const gloveM = opts.glove || glove;
+  const plateM = opts.plate || steelDark;
+  const g = new THREE.Group();
+  const rr = R + 0.0108;
+  g.userData.tips = [];
+  g.userData.bases = [];
+
+  /* the back of the hand: knuckles and metacarpals, an ellipsoid on the +X side */
+  const back = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 11), gloveM);
+  back.scale.set(0.74, 1.02, 0.54);
+  back.position.set(side * 0.069, -0.002, 0.020);
+  g.add(back);
+  /* heel of the palm, which is what the fingertips press into */
+  const heel = new THREE.Mesh(new THREE.SphereGeometry(0.033, 12, 10), gloveM);
+  heel.scale.set(0.92, 1.0, 0.74);
+  heel.position.set(side * 0.046, -0.060, 0.014);
+  g.add(heel);
+
+  /* four fingers, stacked pinky to index along the grip, each wrapping around it */
+  const ys = [-0.064, -0.040, -0.016, 0.008];
+  const rads = [0.0094, 0.0100, 0.0105, 0.0100];
+  const angs = [0.95, -0.46, -1.72, -2.62];
+  for (let i = 0; i < 4; i++) {
+    const y = ys[i], r0 = rads[i];
+    const pts = angs.map(a => [side * Math.cos(a) * rr, y, Math.sin(a) * rr]);
+    for (let k = 0; k < 3; k++) {
+      seg(pts[k], pts[k + 1], r0 * (1 - k * 0.07), gloveM, g);
+    }
+    /* the knuckle, plated, at the base of each finger */
+    const kn = new THREE.Mesh(new THREE.SphereGeometry(r0 * 1.14, 8, 6), plateM);
+    kn.position.set(...pts[0]);
+    kn.scale.set(1, 1.15, 0.9);
+    g.add(kn);
+    rivet(pts[0][0] + side * 0.004, pts[0][1], pts[0][2] + 0.002, 0.003, g, plateM);
+    /* the fingertip, so the wrap closes instead of ending in a cut cylinder */
+    const ft = new THREE.Mesh(new THREE.SphereGeometry(r0 * 0.9, 7, 6), gloveM);
+    ft.position.set(...pts[3]);
+    g.add(ft);
+    g.userData.tips.push(pts[3]);
+    g.userData.bases.push(pts[0]);
+  }
+
+  /* thumb: off the radial side of the palm, over the top of the index finger */
+  seg([side * 0.064, 0.046, 0.026], [side * 0.032, 0.020, 0.040], 0.0132, gloveM, g);
+  seg([side * 0.032, 0.020, 0.040], [side * 0.000, 0.000, 0.030], 0.0118, gloveM, g);
+  const thumbTip = new THREE.Mesh(new THREE.SphereGeometry(0.0108, 8, 6), gloveM);
+  thumbTip.position.set(side * -0.002, -0.002, 0.028);
+  g.add(thumbTip);
+  g.userData.tips.push([side * -0.002, -0.002, 0.028]);
+
+  /* a leather strap over the back of the hand, and the seam down the middle */
+  const st = new THREE.Mesh(new THREE.BoxGeometry(0.050, 0.014, 0.010), leather);
+  st.position.set(side * 0.066, 0.010, 0.044);
+  st.rotation.z = side * 0.22;
+  g.add(st);
+  for (let i = 0; i < 4; i++) {
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.003, 0.003), gripMat);
+    seam.position.set(side * (0.046 + i * 0.010), -0.030, 0.043);
+    g.add(seam);
+  }
+  return g;
+}
+
+/* A metal with nothing to reflect renders black, which is how the first sword ended up
+ * invisible while technically in frame. A 32x64 gradient probe is enough to give every
+ * blade a horizon and a sky. */
+/* REAL SKY, REAL LIGHT. A gradient in the reflection slot is not lighting: steel,
+ * cloth and stone only read as real when the light arriving has structure. This loads a
+ * CC0 HDRI (Poly Haven kloofendal clear sky) and drives the scene's image based
+ * lighting AND the visible background from it. Shadows are then matched to the sky's
+ * own bright spot by measuring the rendered frame, so light and sky cannot disagree. */
+try {
+  new RGBELoader().load('./env/sky_1k.hdr', (hdr) => {
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    scene.environment = pmrem.fromEquirectangular(hdr).texture;
+    scene.background = hdr;
+    if (skyDome) skyDome.visible = false;
+    pmrem.dispose();
+    window.__skyReady = true;
+  }, undefined, () => { window.__skyReady = false; });
+} catch (e) { /* the gradient dome stays if the sky file is missing */ }
+
+const vmLight = new THREE.PointLight(0xfff2df, 1.6, 2.2, 2);
+vmLight.position.set(0.14, 0.1, 0.18);
+
+const hand = new THREE.Group();
+camera.add(hand);
+hand.add(vmLight);
+scene.add(camera);
+
+
+/* THE SWORD: a hex-sectioned blade with real bevels, a bright sharpened edge, a fuller,
+ * a curved cross-guard with faceted knobs, cord-wrapped grip and a peened pommel. */
+const sword = new THREE.Group();
+const BL = 0.9;
+const bladeGeo = new THREE.CylinderGeometry(0.016, 0.033, BL, 6, 1);
+bladeGeo.translate(0, BL / 2, 0);
+bladeGeo.rotateY(Math.PI / 6);
+const blade = new THREE.Mesh(bladeGeo, steel);
+blade.scale.z = 0.30;
+sword.add(blade);
+/* the two cutting edges read as light: a thin bright capsule down each side */
+for (const sx of [-1, 1]) {
+  seg([sx * 0.0075, 0.03, 0], [sx * 0.0135, BL - 0.03, 0], 0.0032, edgeMat, sword);
+}
+const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.008, BL * 0.74, 0.0035), steelDark);
+fuller.position.set(0, BL * 0.44, 0.0125);
+sword.add(fuller);
+const tip = new THREE.Mesh(new THREE.ConeGeometry(0.0155, 0.105, 6), steel);
+tip.rotation.y = Math.PI / 6; tip.scale.z = 0.30; tip.position.set(0, BL + 0.045, 0);
+sword.add(tip);
+/* ricasso and a curved cross-guard */
+const ricasso = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.014), steelDark);
+ricasso.position.y = 0.016;
+sword.add(ricasso);
+for (let i = -3; i <= 3; i++) {
+  const t = i / 3;
+  const g = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.019, 0.026), brass);
+  g.position.set(t * 0.108, 0.004 - Math.abs(t) * 0.012, 0);
+  g.rotation.z = -t * 0.34;
+  sword.add(g);
+}
+for (const sx of [-1, 1]) {
+  const knob = new THREE.Mesh(new THREE.IcosahedronGeometry(0.019, 0), brass);
+  knob.position.set(sx * 0.126, -0.013, 0);
+  sword.add(knob);
+}
+/* cord-wrapped grip: rings, not bands, so the wrap reads under a raking light */
+const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.0182, 0.0202, 0.155, 10), gripMat);
+grip.position.y = -0.085;
+sword.add(grip);
+for (let i = 0; i < 8; i++) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0196, 0.0034, 4, 10), leather);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = -0.022 - i * 0.0192;
+  ring.rotation.z = (i % 2 ? 1 : -1) * 0.07;
+  sword.add(ring);
+}
+const pommel = new THREE.Mesh(new THREE.IcosahedronGeometry(0.028, 0), brass);
+pommel.position.y = -0.176; pommel.scale.set(1, 0.78, 1);
+sword.add(pommel);
+rivet(0, -0.2, 0, 0.008, sword, brass);
+
+
+/* THE RIGHT HAND: forearm with mail at the wrist, a strapped bracer, and the fist on the
+ * grip. The fist is placed so its grip axis (local Y) is the hilt's axis. */
+const swordFist = buildFist({ side: 1, R: 0.021 });
+swordFist.scale.setScalar(1.15);   /* a hand has to dwarf the hilt, not match it */
+swordFist.position.set(0, -0.055, 0);
+sword.add(swordFist);
+
+const wrist = [0.076, -0.122, 0.030];
+seg([0.118, -0.38, 0.118], wrist, 0.047, linen, sword);
+seg(wrist, [0.068, -0.070, 0.022], 0.050, mail, sword);
+/* rows of mail, because a smooth capsule in a metal material reads as a plastic tube */
+for (let i = 0; i < 4; i++) {
+  const t = i / 3;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0515 - t * 0.002, 0.0034, 4, 14), mail);
+  ring.rotation.x = Math.PI / 2 + 0.55;
+  ring.position.set(0.075 - t * 0.004, -0.120 + t * 0.016, 0.030 - t * 0.003);
+  sword.add(ring);
+}
+/* cloth folds up the sleeve */
+for (let i = 0; i < 4; i++) {
+  const fold = new THREE.Mesh(new THREE.TorusGeometry(0.046 + i * 0.007, 0.0072, 4, 10), linen);
+  fold.rotation.x = Math.PI / 2 + 0.62;
+  fold.rotation.z = i * 0.7;
+  fold.position.set(0.100 - i * 0.006, -0.190 - i * 0.046, 0.074 + i * 0.014);
+  sword.add(fold);
+}
+/* bracer over the forearm with three straps and brass buckles */
+seg([0.088, -0.210, 0.046], wrist, 0.054, leather, sword);
+for (let i = 0; i < 3; i++) {
+  const t = i / 2;
+  const strap = new THREE.Mesh(new THREE.TorusGeometry(0.0555, 0.0052, 4, 12), leather);
+  strap.rotation.x = Math.PI / 2 + 0.55;
+  strap.position.set(0.082 - t * 0.005, -0.136 - t * 0.028, 0.036 + t * 0.004);
+  sword.add(strap);
+  const bk = new THREE.Mesh(new THREE.BoxGeometry(0.013, 0.010, 0.007), buckle);
+  bk.position.set(0.082 + 0.050 - t * 0.005, -0.136 - t * 0.028, 0.036 + t * 0.004);
+  sword.add(bk);
+}
+sword.scale.setScalar(0.95);
+sword.position.set(0.315, -0.335, -0.565);
+sword.rotation.set(-0.16, 0.16, 0.22);
+hand.add(sword);
+
+
+/* THE SHIELD: seven planks laid on an arc so it is curved, real iron edge boards with
+ * sixteen rivets, an iron boss with its own rivets, leather enarmes behind, and a
+ * painted crown that is chipped back to bare wood. Curvature is what stopped it
+ * reading as a flat blue slab. */
+const shield = new THREE.Group();
+const SH_W = 0.34, SH_H = 0.42, SH_R = 0.5;
+for (let i = 0; i < 7; i++) {
+  const t = (i - 3) / 3;
+  const ang = t * 0.42;
+  const plank = new THREE.Mesh(new THREE.BoxGeometry(SH_W / 7 * 0.97, SH_H, 0.016), wood);
+  plank.position.set(Math.sin(ang) * SH_R, 0, 0.020 - (1 - Math.cos(ang)) * SH_R);
+  plank.rotation.y = -ang;
+  shield.add(plank);
+}
+/* the painted face, chipped with a canvas so wood shows through the wear */
+function crownPaint() {
+  const cv = document.createElement('canvas'); cv.width = 208; cv.height = 256;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = '#245a7d'; cx.fillRect(0, 0, 208, 256);
+  cx.fillStyle = 'rgba(255,255,255,0.06)';
+  for (let i = 0; i < 40; i++) cx.fillRect(0, i * 7, 208, 2);
+  cx.fillStyle = '#eef2f4';
+  cx.beginPath();
+  cx.moveTo(54, 150); cx.lineTo(54, 96); cx.lineTo(78, 122); cx.lineTo(104, 84);
+  cx.lineTo(130, 122); cx.lineTo(154, 96); cx.lineTo(154, 150); cx.closePath(); cx.fill();
+  cx.fillRect(54, 158, 100, 16);
+  /* chips: erase so the plank texture beneath is what you see */
+  cx.globalCompositeOperation = 'destination-out';
+  for (let i = 0; i < 320; i++) {
+    const x = Math.random() * 208, y = Math.random() * 256, r = 1 + Math.random() * 6;
+    cx.beginPath(); cx.arc(x, y, r, 0, Math.PI * 2); cx.fill();
+  }
+  for (let i = 0; i < 9; i++) {
+    const x = Math.random() * 208, y = Math.random() * 256;
+    cx.beginPath(); cx.arc(x, y, 8 + Math.random() * 14, 0, Math.PI * 2); cx.fill();
+  }
+  cx.globalCompositeOperation = 'source-over';
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const faceGeo = new THREE.CylinderGeometry(SH_R + 0.03, SH_R + 0.03, SH_H, 14, 1, true, -0.42, 0.84);
+const face = new THREE.Mesh(faceGeo, new THREE.MeshStandardMaterial({
+  map: crownPaint(), roughness: 0.86, metalness: 0, side: THREE.FrontSide,
+}));
+face.rotation.y = Math.PI;
+face.position.z = -0.042;
+face.scale.set(1, 1, 1);
+shield.add(face);
+/* iron edge boards and their rivets: the rim is what says shield, not the paint */
+for (const [w, h, x, y, rz] of [[SH_W * 1.02, 0.03, 0, SH_H / 2, 0], [SH_W * 1.02, 0.03, 0, -SH_H / 2, 0],
+                                 [0.03, SH_H, -SH_W / 2, 0, 0], [0.03, SH_H, SH_W / 2, 0, 0]]) {
+  const r = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.024), steelDark);
+  r.position.set(x, y, -0.004);
+  shield.add(r);
+}
+for (let i = 0; i < 16; i++) {
+  const side = i < 8 ? -1 : 1;
+  const k = i % 8;
+  rivet((k - 3.5) * 0.042, side * (SH_H / 2 - 0.012), 0.01, 0.0055, shield, steel);
+}
+for (let i = 0; i < 6; i++) {
+  rivet(-SH_W / 2 + 0.014, -SH_H / 2 + 0.06 + i * 0.058, 0.008, 0.005, shield, steel);
+  rivet(SH_W / 2 - 0.014, -SH_H / 2 + 0.06 + i * 0.058, 0.008, 0.005, shield, steel);
+}
+const boss = new THREE.Mesh(new THREE.SphereGeometry(0.058, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel);
+boss.rotation.x = Math.PI / 2;
+boss.position.z = -0.055;
+boss.scale.z = 1.15;
+shield.add(boss);
+for (let i = 0; i < 4; i++) {
+  const a = i * Math.PI / 2 + Math.PI / 4;
+  rivet(Math.cos(a) * 0.072, Math.sin(a) * 0.072, -0.006, 0.006, shield, steelDark);
+}
+/* leather enarmes behind, and the left fist gripping the middle one */
+/* ENARMES: two horizontal leather bars on the INNER face (+Z), because you hold a shield
+ * by its back, and the first-person view should show your own arm behind it. */
+/* a VERTICAL grip bar, so the hand holding it is upright with the fingers stacked up the
+ * bar. A horizontal enarme needed the fist turned a quarter turn, which is what made the
+ * hand read sideways. */
+const GRIP_X = 0.018, GRIP_Y = 0.010, GRIP_Z = 0.054;
+const gripBar = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.22, 10), leather);
+gripBar.position.set(GRIP_X, GRIP_Y, GRIP_Z);
+shield.add(gripBar);
+for (const dy of [0.108, -0.108]) {
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.017, 0.012, 10), steelDark);
+  cap.position.set(GRIP_X, GRIP_Y + dy, GRIP_Z);
+  shield.add(cap);
+  rivet(GRIP_X, GRIP_Y + dy, GRIP_Z + 0.012, 0.006, shield, steelDark);
+}
+/* a forearm strap below the hand, which is what actually carries a shield's weight */
+const armStrap = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.16, 8), leather);
+armStrap.rotation.z = Math.PI / 2;
+armStrap.position.set(0, -0.115, GRIP_Z - 0.004);
+shield.add(armStrap);
+for (const sx of [-0.070, 0.070]) rivet(sx, -0.115, GRIP_Z - 0.004, 0.006, shield, steelDark);
+
+/* THE LEFT HAND gripping the upper enarme. The bar runs along X, so the fist (whose grip
+ * axis is local Y) is turned a quarter turn and its hand mass ends up below the bar. */
+const shieldHand = new THREE.Group();
+/* LEFT HAND on the vertical grip: no rotation at all now, so the knuckles face the player
+ * and the four fingers stack up the bar the way they do on a real shield hand. */
+const shieldFist = buildFist({ side: -1, R: 0.0125 });
+shieldFist.position.set(GRIP_X, GRIP_Y, GRIP_Z);
+shieldFist.scale.setScalar(1.15);
+shieldHand.add(shieldFist);
+/* wrist out of the bottom of the grip, then the forearm and sleeve */
+const cuffA = [GRIP_X - 0.004, GRIP_Y - 0.075, GRIP_Z + 0.010];
+const cuffB = [GRIP_X + 0.004, GRIP_Y - 0.030, GRIP_Z + 0.006];
+seg(cuffA, cuffB, 0.050, mail, shieldHand);
+const armA = [0.085, -0.36, 0.20];
+const armB = cuffA;
+seg(armA, armB, 0.048, linen, shieldHand);
+seg([GRIP_X - 0.006, GRIP_Y - 0.135, GRIP_Z + 0.016], cuffA, 0.053, leather, shieldHand);
+for (let i = 0; i < 3; i++) ringAt(cuffB, cuffA, 0.25 + i * 0.25, 0.0505, 0.0034, mail, shieldHand);
+for (let i = 0; i < 3; i++) ringAt(armB, armA, 0.18 + i * 0.26, 0.048 + i * 0.006, 0.0072, linen, shieldHand);
+for (let i = 0; i < 2; i++) ringAt(cuffA, [GRIP_X - 0.006, GRIP_Y - 0.135, GRIP_Z + 0.016], 0.3 + i * 0.4, 0.0545, 0.0052, leather, shieldHand);
+shield.add(shieldHand);
+shield.scale.setScalar(0.84);
+shield.position.set(-0.345, -0.385, -0.615);
+shield.rotation.set(0.1, 0.42, -0.1);
+hand.add(shield);
+
+/* ---------------------------------------------------------------- sparks and dust
+ * Cheap, pooled, and only ever spawned by a rule that actually fired, so the effect
+ * is evidence of an event rather than decoration. */
+const sparkGeo = new THREE.SphereGeometry(0.013, 4, 3);
+const sparkMatBright = new THREE.MeshBasicMaterial({ color: 0xffe6a8 });
+const dustMat = new THREE.MeshBasicMaterial({ color: 0xcbbfa6, transparent: true, opacity: 0.55 });
+const bits = [];
+function burst(kind, at) {
+  const n = kind === 'parry' ? 18 : 10;
+  const mat = kind === 'parry' ? sparkMatBright : dustMat;
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(sparkGeo, mat);
+    m.position.copy(at);
+    m.position.x += (Math.random() - 0.5) * 0.2;
+    m.position.y += (Math.random() - 0.5) * 0.3;
+    scene.add(m);
+    bits.push({
+      m,
+      v: new THREE.Vector3((Math.random() - 0.5) * (kind === 'parry' ? 4.2 : 2.2),
+        Math.random() * (kind === 'parry' ? 3.4 : 1.2) + 0.4,
+        (Math.random() - 0.5) * (kind === 'parry' ? 4.2 : 2.2)),
+      life: kind === 'parry' ? 0.55 : 0.8,
+      max: kind === 'parry' ? 0.55 : 0.8,
+      g: kind === 'parry' ? 9 : 2,
+    });
+  }
+}
+function stepBits(dt) {
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const b = bits[i];
+    b.v.y -= b.g * dt;
+    b.m.position.addScaledVector(b.v, dt);
+    b.life -= dt;
+    const k = Math.max(0.01, b.life / b.max);
+    b.m.scale.setScalar(k * 1.5);
+    if (b.life <= 0) { scene.remove(b.m); bits.splice(i, 1); }
+  }
+}
+/* the opponent's rig, mixer and clip table live here; the loader below fills them */
+let foeModel = null, foeMixer = null, foeActions = {}, knightClips = null;
+const foeRoot = new THREE.Group();
+scene.add(foeRoot);
+
+function clipMap(clips) {
+  const find = (...pats) => {
+    for (const p of pats) {
+      const c = clips.find((cl) => p.test(cl.name));
+      if (c) return c;
+    }
+    return null;
+  };
+  return {
+    idle: find(/^Idle$/i, /Idle/i),
+    chop: find(/1H_Melee_Attack_Chop/i, /Attack_Chop/i),
+    sliceH: find(/1H_Melee_Attack_Slice_Horizontal/i, /Slice_Horizontal/i),
+    sliceD: find(/1H_Melee_Attack_Slice_Diagonal/i, /Slice_Diagonal/i),
+    stab: find(/1H_Melee_Attack_Stab/i, /Stab/i),
+    block: find(/^Blocking$/i, /Block$/i),
+    blockHit: find(/Block_Hit/i),
+    hit: find(/Hit_A/i),
+    death: find(/Death_A$/i, /Death_A/i),
+    dodgeL: find(/Dodge_Left/i), dodgeR: find(/Dodge_Right/i),
+    kick: find(/Kick/i),
+  };
+}
+
+const ROUND_MSG = $('#msg');
+const loader = new GLTFLoader();
+let ready = false;
+loader.load('./knight.glb', (gltf) => {
+  const src = gltf.scene;
+  const box = new THREE.Box3().setFromObject(src);
+  const h = box.max.y - box.min.y;
+  const k = 1.86 / h;
+  src.scale.setScalar(k);
+  src.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false; } });
+  foeModel = src;
+  foeRoot.add(src);
+  foeMixer = new THREE.AnimationMixer(src);
+  knightClips = gltf.animations;
+  foeActions = clipMap(gltf.animations);
+  for (const key in foeActions) {
+    const c = foeActions[key];
+    if (c) foeActions[key] = foeMixer.clipAction(c);
+  }
+  ready = true;
+  if (foeActions.idle) { foeActions.idle.play(); foeActions.idle.setEffectiveWeight(1); }
+  buildTheField();
+}, undefined, (e) => {
+  ROUND_MSG.textContent = 'COULD NOT LOAD THE OPPONENT';
+  ROUND_MSG.style.opacity = 1;
+  console.error('glb', e);
+});
+
+/* ===========================================================================
+ * THE FIELD: "like Chivalry but with our kingdom stuff"
+ * ===========================================================================
+ * The duel stops being a stage. You are standing in YOUR yard with your own men
+ * already fighting theirs around you, and every one of those men is a real Fighter
+ * on the SAME data-driven core you fight under: the same 350ms chamber, the same
+ * live release, the same ability table, the same block and riposte. Nothing here is
+ * scenery pretending to fight, because a background that lies about the rules makes
+ * the rules you do feel read as decoration.
+ * =========================================================================== */
+const SQUAD = [];
+const REALM_BLUE = 0x2f6ea6, REALM_RED = 0x9a3040;
+const FIELD_ANCHORS = [[-5.4, -2.6], [5.8, -3.8], [-2.6, -7.6]];
+let fieldBuilt = false;
+
+function tintByRole(model, tint) {
+  const c = new THREE.Color(tint);
+  model.traverse((n) => {
+    if (n.isMesh && n.material) {
+      n.material = n.material.clone();
+      if (n.material.color) n.material.color.lerp(c, 0.34);
+      n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false;
+    }
+  });
+}
+
+function makeSoldier(f, side, tint) {
+  const root = new THREE.Group();
+  const model = skeletonClone(foeModel);
+  tintByRole(model, tint);
+  root.add(model);
+  scene.add(root);
+  const mixer = new THREE.AnimationMixer(model);
+  const clips = clipMap(knightClips);
+  const acts = {};
+  for (const k in clips) if (clips[k]) acts[k] = mixer.clipAction(clips[k]);
+  if (acts.idle) acts.idle.play();
+  return { f, side, root, mixer, acts, cur: 'idle', swingKey: null };
+}
+
+function soldierPose(sd) {
+  const f = sd.f;
+  const want =
+    f.state === 'dead' ? 'death' :
+    f.guard ? 'block' :
+    f.state === 'stagger' ? 'hit' :
+    (f.state === 'release' || f.state === 'windup' || f.state === 'holding') ?
+      (vmLine(f.attack) === 'T' && vmKind(f.attack) === 'thrust' ? 'stab'
+        : vmLine(f.attack) === 'T' ? 'chop'
+        : vmLine(f.attack) === 'R' ? 'sliceD' : 'sliceH') :
+    'idle';
+  if (want === sd.cur) return;
+  const next = sd.acts[want];
+  const prev = sd.acts[sd.cur];
+  sd.cur = want;
+  if (!next) return;
+  next.reset();
+  if (want === 'death' || want === 'hit' || want === 'sliceH' || want === 'sliceD' || want === 'chop' || want === 'stab') {
+    next.setLoop(THREE.LoopOnce, 1);
+    next.clampWhenFinished = true;
+  }
+  next.fadeIn(0.08).play();
+  if (prev && prev !== next) prev.fadeOut(0.08);
+}
+
+function buildTheField() {
+  if (fieldBuilt || !foeModel || !knightClips) return;
+  fieldBuilt = true;
+  FIELD_ANCHORS.forEach(([ax, az], i) => {
+    const gap = 1.7;
+    const a = new Fighter('ally' + i, -1, 'Longsword');
+    const b = new Fighter('foe' + i, 1, 'Longsword');
+    const duel = new Duel(a, b, { dist: gap });
+    const sa = makeSoldier(a, -1, REALM_BLUE);
+    const sb = makeSoldier(b, 1, REALM_RED);
+    sa.root.position.set(ax - gap / 2, 0, az);
+    sb.root.position.set(ax + gap / 2, 0, az);
+    sa.root.rotation.y = Math.PI / 2;
+    sb.root.rotation.y = -Math.PI / 2;
+    const ba = makeChivBrain('Longsword', 'manatarms', 101 + i * 7);
+    const bb = makeChivBrain('Longsword', 'knight', 211 + i * 11);
+    SQUAD.push({ duel, a, b, sa, sb, ba, bb, resetAt: 0, gap });
+  });
+}
+
+function stepTheField(dt) {
+  if (!fieldBuilt) return;
+  let blue = 0, red = 0;
+  for (const pair of SQUAD) {
+    const { duel, a, b } = pair;
+    if (duel.over) {
+      /* A FINISHED DUEL'S CLOCK STOPS, because step() bails on the first line when the
+       * fight is over. So a respawn timer based on duel.clock never advanced and the
+       * whole yard stayed dead: measured all three pairs OVER forever at t=15/30/45s.
+       * Counting down in frames is the only clock that keeps running. */
+      pair.respawnIn = (pair.respawnIn ?? 4) - dt;
+      if (pair.respawnIn <= 0) {
+        pair.respawnIn = 4;
+        a.hp = b.hp = 100; a.stam = b.stam = 100; a.alive = b.alive = true;
+        a.state = b.state = 'idle'; a.attack = b.attack = null; a.guard = b.guard = false;
+        a.guardLock = b.guardLock = 0; a.riposteUntil = b.riposteUntil = -99;
+        a.counterUntil = b.counterUntil = -99;
+        const fresh = new Duel(a, b, { dist: pair.gap });
+        pair.duel = fresh;
+      }
+    } else {
+      pair.respawnIn = 4;
+      const ia = chivThink(pair.ba, a, b, duel.dist, duel.clock, dt);
+      const ib = chivThink(pair.bb, b, a, duel.dist, duel.clock, dt);
+      ia.move = 0; ib.move = 0;
+      duel.step(dt, ia, ib);
+    }
+    const live = pair.duel;
+    for (const sd of [pair.sa, pair.sb]) {
+      if (sd.f.alive) { if (sd.side < 0) blue++; else red++; }
+      sd.mixer.update(dt);
+      soldierPose(sd);
+    }
+    /* a small weight shift on the front foot so a pair reads as fighting rather than
+     * posing, driven by their own duel clock */
+    const sway = Math.sin((live.clock || 0) * 1.7 + pair.gap) * 0.05;
+    pair.sa.root.rotation.z = sway;
+    pair.sb.root.rotation.z = -sway;
+  }
+  if (kHudEl) kHudEl.innerHTML =
+    '<b style="color:#8fc6f0">' + realmYou + '</b>  ' + blue + ' standing' +
+    ' &nbsp;&middot;&nbsp; ' + red + ' standing  <b style="color:#e794a0">' + realmFoe + '</b>';
+}
+
+window.__squad = () => SQUAD.map((q, i) => ({
+  pair: i, a: Math.round(q.duel.a.hp), b: Math.round(q.duel.b.hp),
+  aState: q.duel.a.state, bState: q.duel.b.state,
+  aActs: q.sa.cur, bActs: q.sb.cur, over: q.duel.over,
+}));
+const kHudEl = (() => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:40;' +
+    'font:600 11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;' +
+    'color:#dfe8ef;background:#00000099;border:1px solid #2b3641;padding:5px 16px;text-align:center;pointer-events:none';
+  document.body.appendChild(d);
+  return d;
+})();
+
+console.log('REALMS FP BUILD 2026-11-11 11:49');
+
+/* ============================== SOUND ==============================
+ * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
+ * sounded when this phase begins" about the windup, because sound is how you answer a
+ * blade you are not looking at. Everything here is synthesised with WebAudio, no assets:
+ * a chamber grunt on hold, a whoosh on release, a metallic clang on block or parry, a
+ * wet thud on a hit, and footsteps tied to the walk cycle. */
+let AC = null, master = null, noiseBuf = null, vinylAnalyser = null;
+function audioInit() {
+  if (AC) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    AC = new Ctx();
+    master = AC.createGain();
+    master.gain.value = 0.34;   // was 0.55 and it was genuinely painful
+    /* a tap on the real output so "is it actually making sound" can be MEASURED
+     * instead of assumed */
+    vinylAnalyser = AC.createAnalyser();
+    vinylAnalyser.fftSize = 2048;
+    master.connect(vinylAnalyser);
+    vinylAnalyser.connect(AC.destination);
+    const n = Math.floor(AC.sampleRate * 1.0);
+    noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+}
+const audioReady = () => AC && AC.state !== 'closed';
+/* distance loudness, so a blade far off is faint and one at your face is not */
+function distGain(dist) { return Math.max(0.12, Math.min(1, 1.35 / (1 + Math.max(0, dist - 1.2) * 0.7))); }
+const SFXC = { whoosh:0, grunt:0, clang:0, thud:0, step:0 };
+/* A HARD RATE LIMIT, because no individual sound should be able to hurt. Even with the
+ * replay bug fixed, a burst of simultaneous events could stack six clangs on one frame.
+ * Per-sound minimum gaps plus a global cap of 3 voices per 100ms. */
+const sfxLast = {};
+function sfxAllow(name, minGap) {
+  const now = AC ? AC.currentTime : 0;
+  if (now < (sfxLast[name] ?? -1e9) + minGap) return false;
+  if (now - (sfxLast.__win ?? -1e9) > 0.1) { sfxLast.__win = now; sfxLast.__n = 0; }
+  if ((sfxLast.__n = (sfxLast.__n || 0) + 1) > 3) return false;
+  sfxLast[name] = now;
+  return true;
+}
+window.__sfxCount = SFXC;
+function noiseSrc() { const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true; return s; }
+
+/* a blade travelling: band-passed noise sweeping down, the classic whoosh */
+function sfxWhoosh(gain = 0.5, dur = 0.34, pitch = 1) {
+  if (!audioReady()) return;
+  SFXC.whoosh++;
+  if (!sfxAllow('whoosh', 0.10)) return;
+  const t = AC.currentTime;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.1;
+  bp.frequency.setValueAtTime(2400 * pitch, t);
+  bp.frequency.exponentialRampToValueAtTime(420 * pitch, t + dur);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + dur * 0.22);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(bp).connect(g).connect(master);
+  src.start(t); src.stop(t + dur + 0.02);
+}
+/* THE CHAMBER IS A BREATH, NOT A BUZZ. This used to be a sawtooth at 150 down to 96Hz,
+ * which is a literal buzzer waveform - the "BRRRRRR" was mostly this sound being replayed
+ * by the event bug, but the timbre was unpleasant even once. Now: filtered noise shaped
+ * like an exhale, no oscillator at all, quieter and shorter. */
+function sfxGrunt(gain = 0.3) {
+  if (!audioReady()) return;
+  SFXC.grunt++;
+  if (!sfxAllow('grunt', 0.16)) return;
+  const t = AC.currentTime;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.9;
+  bp.frequency.setValueAtTime(820, t);
+  bp.frequency.exponentialRampToValueAtTime(430, t + 0.13);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain * 0.55), t + 0.025);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+  src.connect(bp).connect(g).connect(master);
+  src.start(t); src.stop(t + 0.16);
+}
+/* steel on steel. An FM ring measured DEAD SILENT (peak 0.0000 through a tap on the real
+ * output) so it is gone: this is a straight inharmonic stack, the partials set at bell-like
+ * ratios rather than whole multiples, each decaying at its own rate, plus a bright noise
+ * transient at the front for the impact. Boring and reliable beats clever and silent. */
+function sfxClang(gain = 0.4, bright = 1) {
+  if (!audioReady()) return;
+  SFXC.clang++;
+  if (!sfxAllow('clang', 0.06)) return;
+  const t = AC.currentTime;
+  const base = 430 * bright;
+  const partials = [[1, 1.0, 0.55], [2.76, 0.62, 0.34], [5.40, 0.34, 0.22], [8.93, 0.18, 0.14]];
+  for (const [ratio, amp, decay] of partials) {
+    const o = AC.createOscillator();
+    o.type = ratio > 4 ? 'triangle' : 'sine';
+    o.frequency.value = base * ratio;
+    const g = AC.createGain();
+    g.gain.setValueAtTime(Math.max(0.0002, gain * amp), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    o.connect(g).connect(master);
+    o.start(t); o.stop(t + decay + 0.02);
+  }
+  const src = noiseSrc();
+  const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2200;
+  const ng = AC.createGain();
+  ng.gain.setValueAtTime(Math.max(0.0002, gain * 0.7), t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+  src.connect(hp).connect(ng).connect(master);
+  src.start(t); src.stop(t + 0.1);
+}
+/* a body taking the blow: low thump with a short tear of noise over it */
+function sfxThud(gain = 0.5) {
+  if (!audioReady()) return;
+  SFXC.thud++;
+  if (!sfxAllow('thud', 0.10)) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(120, t);
+  o.frequency.exponentialRampToValueAtTime(46, t + 0.22);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  o.connect(g).connect(master); o.start(t); o.stop(t + 0.3);
+  const src = noiseSrc();
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+  const ng = AC.createGain();
+  ng.gain.setValueAtTime(gain * 0.5, t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+  src.connect(lp).connect(ng).connect(master); src.start(t); src.stop(t + 0.14);
+}
+function sfxStep(gain = 0.16) {
+  if (!audioReady()) return;
+  SFXC.step++;
+  if (!sfxAllow('step', 0.13)) return;
+  const t = AC.currentTime;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 0.8;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+  src.connect(bp).connect(g).connect(master); src.start(t); src.stop(t + 0.12);
+}
+
+/* ------------------------------------------------------------------ duel state */
+let duel = null, brain = null, styleKey = 'manatarms', round = 0, score = [0, 0], over = false;
+/* the roster is now TEMPERAMENTS of opponent, not spell-style gimmicks */
+const ROSTER = Object.keys(TEMPERAMENTS);
+let realmYou = 'C.C. Terra & Fleet', realmFoe = 'House Corvane';
+const keys = Object.create(null);
+let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = false, pendingDodge = null;
+/* FOR HONOR / CHIVALRY CONTROLS. No letter keys for combat: every attack comes off a
+ * click, and the CLICK DIRECTION comes from how the mouse was just moved. Up = overhead,
+ * left and right = the two side cuts, down = thrust. The guard follows the mouse the same
+ * way, so the hand that aims the cut also aims the block. */
+let rmbDown = false, lastZone = 'T', orbit = 0;
+/* THIS IS A PLACE, NOT A DUEL STAGE. The old build faked movement by moving a single
+ * number (the gap) so there was nothing to walk around in. Now the player and the
+ * opponent are both real bodies with positions in the world, the camera rides the
+ * player, and the duelling rules read the ACTUAL distance between the two bodies. */
+const playerPos = new THREE.Vector3(0, 0, 4.2);
+const playerVel = new THREE.Vector3();
+const foeVel = new THREE.Vector3();
+let foeCircle = 1, foeCircleT = 0, physGap = 4.2;
+/* the wall ring is at radius ARENA_R (10.5); a body stops just inside it */
+const WALK_R = ARENA_R - 0.8;
+const WALK = 4.3, SPRINT = 7.1;
+const mouseHist = [];          /* {t, dx, dy} so a click knows which way the mouse was going */
+function mouseDir() {
+  const now = performance.now();
+  let dx = 0, dy = 0, n = 0;
+  for (const s of mouseHist) {
+    if (now - s.t > 260) break;
+    dx += s.dx; dy += s.dy; n++;
+  }
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 14) return null;
+  if (Math.abs(dy) >= Math.abs(dx)) return dy < 0 ? 'up' : 'down';
+  return dx < 0 ? 'left' : 'right';
+}
+const ZONE_OF = { up: 'T', left: 'L', right: 'R', down: 'T' };
+/* one click, one attack; the mouse tells us which one */
+function attackFromClick(kind) {
+  /* CHIVALRY'S OWN MAPPING, from their Direction / AltDirection fields:
+   *   Slash    Direction Left, AltDirection Right   -> a slash, and alt flips the side
+   *   Overhead Direction Down
+   *   Stab     no direction at all
+   * So the mouse movement picks the LINE and the button picks the WEIGHT. */
+  const heavy = kind === 'heavy';
+  const dir = mouseDir();
+  const slash = heavy ? 'SlashHeavy' : 'Slash';
+  if (dir === 'down')  { lastZone = 'T'; return { name: heavy ? 'StabHeavy' : 'Stab', alt: false, kind: 'thrust', zone: 'T' }; }
+  if (dir === 'up')    { lastZone = 'T'; return { name: heavy ? 'OverheadHeavy' : 'Overhead', alt: false, kind, zone: 'T' }; }
+  if (dir === 'left')  { lastZone = 'L'; return { name: slash, alt: false, kind, zone: 'L' }; }
+  if (dir === 'right') { lastZone = 'R'; return { name: slash, alt: true,  kind, zone: 'R' }; }
+  /* no movement: hold the last line, which is the same grace the game gives you */
+  if (lastZone === 'L') return { name: slash, alt: false, kind, zone: 'L' };
+  if (lastZone === 'R') return { name: slash, alt: true,  kind, zone: 'R' };
+  return { name: heavy ? 'OverheadHeavy' : 'Overhead', alt: false, kind, zone: 'T' };
+}
+/* the camera starts pointed slightly DOWN: a first-person duel should be mostly arena,
+ * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
+let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
+/* motion weight state: the weapon is attached to a body, not to the lens */
+let lookYawVel = 0, lookPitchVel = 0;
+let liveMe = null;
+let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase = 0, walkAmp = 0, lastStepIdx = 0;
+let lastMeHp = 100, lastFoeHp = 100;
+const prevLook = { x: 0, y: -0.13 };
+const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+/* measures the blade's own path through a swing, so "is the arc real" is a number */
+/* WHERE THE BLADE ACTUALLY GOES, in camera space, per angle pose. The old swing probe
+ * walked vmSwing.t, which stopped meaning anything the moment the blade began following
+ * the rules' phase, so it was measuring nothing. This reads the POSE geometry directly:
+ * chamber (W), midpoint, strike (S) and follow-through, then reports how far the tip
+ * travels on each axis, which is the only honest way to answer "does this swing right". */
+window.__arcProbe = () => {
+  const tip = new THREE.Vector3();
+  const at = (pose) => {
+    sword.position.fromArray(pose.pos);
+    sword.rotation.fromArray(pose.rot);
+    sword.updateWorldMatrix(true, false);
+    tip.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+    camera.updateWorldMatrix(true, false);
+    return camera.worldToLocal(tip.clone());
+  };
+  const cases = [['light','L'],['light','R'],['light','T'],['thrust','T']];
+  const out = [];
+  for (const [kind, zone] of cases) {
+    const arc = swingArc(zone, kind);
+    const w = at(arc.W), m = at(arc.mid), s2 = at(arc.S), th = at(arc.through);
+    const d = (a, b) => ({ dx:+(b.x-a.x).toFixed(2), dy:+(b.y-a.y).toFixed(2), dz:+(b.z-a.z).toFixed(2) });
+    out.push({ at: zone + (kind === 'thrust' ? '/thrust' : ''),
+      chamber: [+w.x.toFixed(2), +w.y.toFixed(2), +w.z.toFixed(2)],
+      contact: [+s2.x.toFixed(2), +s2.y.toFixed(2), +s2.z.toFixed(2)],
+      end:     [+th.x.toFixed(2), +th.y.toFixed(2), +th.z.toFixed(2)],
+      cut:     d(w, th) });
+  }
+  return out;
+};
+window.__swingProbe = (kind = 'light', zone = 'R') => {
+  const keep = { ...vmSwing, pos: [...pose.pos], rot: [...pose.rot] };
+  vmSwing.id = 'probe'; vmSwing.on = true; vmSwing.kind = kind;
+  vmSwing.line = kind === 'thrust' ? 'T' : zone;
+  vmSwing.windup = CFG.ATTACKS[kind].windup;
+  const total = vmSwing.windup + SWING.strike + SWING.follow + SWING.settle;
+  const step = 1 / 120;
+  const rows = [];
+  const tipW = new THREE.Vector3();
+  for (let t = 0; t <= total; t += step) {
+    vmSwing.t = t;
+    const ph = swingPhase();
+    const p = targetPose({ state: 'windup', attack: { id: 'probe', kind, zone }, guard: null }, 0);
+    sword.position.fromArray(p.p.pos);
+    sword.rotation.fromArray(p.p.rot);
+    sword.updateWorldMatrix(true, false);
+    tipW.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+    rows.push({ ph: ph ? ph.phase : 'none', x: tipW.x, y: tipW.y, z: tipW.z });
+  }
+  /* path length per phase, and the biggest single step (top speed) */
+  const out = {};
+  let last = null;
+  for (const r of rows) {
+    if (last && last.ph === r.ph) {
+      const d = Math.hypot(r.x - last.x, r.y - last.y, r.z - last.z);
+      out[r.ph] = +(((out[r.ph] || 0) + d)).toFixed(3);
+      out[r.ph + '_max'] = +Math.max(out[r.ph + '_max'] || 0, d / step).toFixed(2);
+    }
+    last = r;
+  }
+  const span = (phase) => {
+    const sel = rows.filter((r) => r.ph === phase);
+    if (!sel.length) return null;
+    const a = sel[0], b = sel[sel.length - 1];
+    return +Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z).toFixed(3);
+  };
+  vmSwing.id = keep.id; vmSwing.on = keep.on; vmSwing.t = keep.t;
+  vmSwing.kind = keep.kind; vmSwing.line = keep.line; vmSwing.windup = keep.windup;
+  pose.pos = keep.pos; pose.rot = keep.rot;
+  return { phases: Object.keys(out).filter((k) => !k.endsWith('_max')),
+    path: Object.fromEntries(Object.entries(out).filter(([k]) => !k.endsWith('_max'))),
+    topSpeed: Object.fromEntries(Object.entries(out).filter(([k]) => k.endsWith('_max'))),
+    windupSpan: span('wind'), strikeSpan: span('strike'), followSpan: span('follow') };
+};
+/* drives the ribbon through a whole cut and reports how much of the screen-space arc it
+ * covers, so "is there a visible trail" is measured rather than hoped for */
+window.__trailProbe = (kind = 'light', zone = 'R') => {
+  const keepT = vmSwing.t, keepOn = vmSwing.on, keepId = vmSwing.id, keepLine = vmSwing.line, keepKind = vmSwing.kind;
+  vmSwing.id = 'tp'; vmSwing.on = true; vmSwing.kind = kind;
+  vmSwing.line = kind === 'thrust' ? 'T' : zone;
+  vmSwing.windup = CFG.ATTACKS[kind].windup;
+  const wStart = vmSwing.windup * SWING.lead;
+  let samples = 0, visible = 0;
+  let minX = 9, maxX = -9, minY = 9, maxY = -9;
+  for (let i = 0; i < 40; i++) {
+    vmSwing.t = wStart + (i / 39) * SWING.strike;
+    const p = targetPose({ state: 'active', attack: { id: 'tp', kind, zone }, guard: null }, 0);
+    sword.position.fromArray(p.p.pos);
+    sword.rotation.fromArray(p.p.rot);
+    sword.scale.setScalar(1);
+    updateTrail();
+    samples++;
+    if (trailMesh.visible) {
+      visible++;
+      for (let k = 0; k < TRAIL_N * 2; k++) {
+        const x = trailPosArr[k * 3], y = trailPosArr[k * 3 + 1];
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  const box = trailMesh.visible ? new THREE.Box3().setFromBufferAttribute(trailGeo.attributes.position).getSize(new THREE.Vector3()) : null;
+  vmSwing.t = keepT; vmSwing.on = keepOn; vmSwing.id = keepId; vmSwing.line = keepLine; vmSwing.kind = keepKind;
+  return { visibleFrames: visible, totalFrames: samples,
+    ribbonSize: box ? [+box.x.toFixed(2), +box.y.toFixed(2), +box.z.toFixed(2)] : null,
+    tris: trailGeo.index ? trailGeo.index.count / 3 : 0 };
+};
+window.__foeAnim = () => {
+  const a = foeHold.act;
+  return { state: duel ? duel.b.state : null, clip: foeHold.key,
+    t: a ? +a.time.toFixed(3) : null, dur: a ? +a.getClip().duration.toFixed(2) : null,
+    raised: +foeHold.raised.toFixed(2), paused: a ? a.paused : null,
+    timeScale: a ? +a.timeScale.toFixed(2) : null,
+    windT: duel && duel.b.attack ? +duel.b.attack.t.toFixed(3) : null };
+};
+window.__where = () => ({
+  x: +playerPos.x.toFixed(2), z: +playerPos.z.toFixed(2),
+  speed: +Math.hypot(playerVel.x, playerVel.z).toFixed(2),
+  foe: [+foeRoot.position.x.toFixed(2), +foeRoot.position.z.toFixed(2)],
+  gap: +physGap.toFixed(2), duelDist: duel ? +duel.dist.toFixed(2) : null,
+});
+window.__feel = () => {
+  const n = (v) => (typeof v === 'number' && isFinite(v) ? +v.toFixed(2) : null);
+  return { orbit: n(orbit), dist: duel ? n(duel.dist) : null, guard: rmbDown ? guardZone : null,
+    hitStop: n(hitStop), camPunch: n(camPunch), shieldRock: n(shieldRock), lag: [n(vmLagX), n(vmLagY)] };
+};
+let foePrev = 'idle', lastCalloutId = null;
+/* his attack clips are HELD at the raised frame during the windup, then released fast */
+let foeHold = { key: null, raised: 0, dur: 0, act: null };
+
+function newRound() {
+  /* a Duel is two Fighters plus the clock, never an empty shell */
+  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60 });
+  // a fresh duel starts with both fighters at full health and stamina
+  brain = makeChivBrain('Longsword', styleKey, (Date.now() & 0xffff) ^ round);
+  foePrev = 'idle';
+  over = false;
+  if (foeActions.idle) { foeActions.idle.reset().play(); }
+  updateDots();
+}
+function updateDots() {
+  /* THERE ARE ONLY FIVE DOTS. This used to loop up to the raw score, so once the tally
+   * passed five it wrote className on undefined and threw on EVERY tick - the picture
+   * froze and nothing said why. That is a real "the duel crashed", and it was here the
+   * whole time. Clamp to the dots that exist. */
+  const d = document.querySelectorAll('#dots i');
+  let i = 0;
+  const wins = Math.min(score[0], d.length);
+  const losses = Math.min(score[1], d.length - wins);
+  for (let r = 0; r < wins; r++) { d[i].className = 'win'; i++; }
+  for (let r = 0; r < losses; r++) { d[i].className = 'loss'; i++; }
+  while (i < d.length) { d[i].className = ''; i++; }
+}
+newRound();
+
+/* ------------------------------------------------------------------ input */
+const intro = $('#intro');
+intro.addEventListener('click', () => {
+  audioInit();
+  intro.style.display = 'none';
+  renderer.domElement.requestPointerLock?.();
+});
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement) { intro.style.display = 'flex'; }
+});
+document.addEventListener('mousemove', (e) => {
+  if (!document.pointerLockElement && !window.__forceInput) return;
+  yaw -= e.movementX * 0.0022;
+  pitch = Math.max(-0.9, Math.min(0.9, pitch - e.movementY * 0.0022));
+  /* keep the last quarter second of mouse travel: the click reads its direction from
+   * here, so a cut is aimed by moving the mouse and then pressing, exactly as it is in
+   * Chivalry, rather than by remembering which key stands for which cut */
+  mouseHist.unshift({ t: performance.now(), dx: e.movementX, dy: e.movementY });
+  if (mouseHist.length > 22) mouseHist.length = 22;
+  /* a held guard follows the mouse, so you can move the block to the incoming line */
+  if (rmbDown) {
+    const d = mouseDir();
+    if (d) guardZone = ZONE_OF[d];
+  }
+});
+
+/* ---------------------------------------------------------------- mouse combat */
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('mousedown', (e) => {
+  audioInit();
+  if (!document.pointerLockElement && !window.__forceInput) return;
+  if (e.button === 0) { pendingAttack = attackFromClick('light'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
+  if (e.button === 2) { rmbDown = true; pressGuard = true; guardZone = lastZone; e.preventDefault(); }
+  if (e.button === 1) { pendingAttack = attackFromClick('heavy'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
+}, { passive: false });
+addEventListener('mouseup', (e) => {
+  if (e.button === 2) rmbDown = false;
+});
+/* a click that leaves the window must not leave the guard stuck up */
+addEventListener('blur', () => { rmbDown = false; for (const k in keys) keys[k] = false; });
+addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (keys[k]) return;
+  keys[k] = true;
+  /* WASD is MOVEMENT now, the way it is in every first-person game: W and S close and
+   * open the distance, A and D circle the opponent. Combat never touches the keyboard. */
+  if (k === 'q' || k === 'f') pendingFeint = true;
+  /* THE KICK IS THE GUARD BREAK, and their data says so: KickLow and Shove, 5 damage,
+   * 10 stamina, 0.45 riposte. It is not a thrust, which is what the old build had. */
+  if (k === 'k') pendingAttack = { name: 'KickLow', alt: false, kind: 'kick', zone: 'T' };
+  /* a jab interrupts a swing already in motion */
+  if (k === 'j') pendingAttack = { name: 'Jab', alt: false, kind: 'jab', zone: 'T' };
+  /* Shift holds a sprint, so a dodge lives on Space instead of stealing the run */
+  if (k === ' ') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
+  if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
+  if (k >= '1' && k <= '4') {
+    styleKey = ROSTER[Number(k) - 1] || styleKey;
+    score = [0, 0]; newRound();
+    say('OPPONENT: ' + (TEMPERAMENTS[styleKey]?.label || styleKey));
+  }
+  if ([' ', 'arrowup', 'arrowdown'].includes(k)) e.preventDefault();
+}, { passive: false });
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function say(text, ms = 1200) {
+  ROUND_MSG.textContent = text;
+  ROUND_MSG.style.opacity = 1;
+  clearTimeout(say._t);
+  say._t = setTimeout(() => { ROUND_MSG.style.opacity = 0; }, ms);
+}
+
+/* ------------------------------------------------------------------ viewmodel poses */
+/* AUTHOR POSES BY TIP AND HAND, NOT BY THREE EULER GUESSES. Angular triples are
+ * impossible to reason about and the measured result proved it: my "left" cut swept to the
+ * RIGHT (dx +1.55), both cuts fell a metre so they read as diagonals, the overhead went
+ * BACKWARD toward the player (dz +1.26) and the thrust drove forward only 0.43m. Declaring
+ * where the hand and the point are makes the geometry checkable, and the sword's rotation
+ * falls out of the direction between them. */
+function poseFromTip(hand, tip, roll = 0) {
+  const h = new THREE.Vector3(...hand), t = new THREE.Vector3(...tip);
+  const dir = t.clone().sub(h).normalize();
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  if (roll) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), roll));
+  const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+  return { pos: hand, rot: [e.x, e.y, e.z] };
+}
+const T = (hand, tip, roll) => poseFromTip(hand, tip, roll);
+const P = {
+  /* the fist sits at sword-local y -0.055, so a rest at -0.235 puts the whole hand inside
+   * the frame: at -0.32 the hand's centre landed exactly on the bottom edge and all you
+   * ever saw of it was a cut-off sliver, which is what read as "messed up" */
+  rest: { pos: [0.285, -0.235, -0.545], rot: [-0.16, 0.16, 0.22] },
+  /* drawn back far enough that the weapon is unmistakably cocked, struck through far
+   * enough that the tip covers real ground: a cut that only travels 30cm is a tap */
+  /* LEFT CUT CHAMBERS ON THE RIGHT AND TRAVELS RIGHT TO LEFT, which is the whole point of
+   * a directional attack and how Chivalry does it: the blade has to cross the body. */
+  leftW: T([0.40, 0.05, -0.40], [1.02, 0.72, -0.35]),
+  leftM: T([0.24, -0.04, -0.50], [0.34, 0.52, -0.92]),
+  leftS: T([0.10, -0.05, -0.58], [-0.62, 0.28, -1.02]),
+  leftT: T([-0.20, -0.18, -0.55], [-1.02, 0.12, -0.42]),
+  /* RIGHT CUT IS THE MIRROR IMAGE */
+  rightW: T([-0.32, 0.05, -0.40], [-0.94, 0.72, -0.35]),
+  rightM: T([-0.02, -0.04, -0.50], [-0.12, 0.52, -0.92]),
+  rightS: T([0.10, -0.05, -0.58], [0.82, 0.28, -1.02]),
+  rightT: T([0.34, -0.18, -0.55], [1.04, 0.12, -0.42]),
+  /* OVERHEAD CHAMBERS STRAIGHT UP AND BEHIND, THEN COMES DOWN THROUGH THE CENTRE */
+  topW: T([0.28, 0.30, -0.42], [0.30, 1.18, -0.10]),
+  topM: T([0.18, 0.10, -0.55], [0.20, 0.34, -0.95]),
+  topS: T([0.16, 0.05, -0.55], [0.12, -0.52, -1.30]),
+  topT: T([0.14, -0.10, -0.50], [0.10, -0.85, -0.95]),
+  /* THRUST PULLS BACK AT THE CHEST AND DRIVES STRAIGHT FORWARD ALONG THE CROSSHAIR.
+   * A thrust that arcs sideways is not a thrust. */
+  thrustW: T([0.28, -0.10, -0.06], [0.30, 0.50, -0.78]),
+  thrustM: T([0.24, -0.02, -0.24], [0.24, 0.14, -1.16]),
+  thrustS: T([0.16, 0.10, -0.50], [0.14, 0.30, -1.43]),
+  thrustT: T([0.18, 0.08, -0.48], [0.16, 0.26, -1.40]),
+  blockSword: { pos: [0.32, -0.24, -0.52], rot: [-0.50, 0.08, 1.05] },
+};
+/* THE SWING TIMELINE. An attack used to be two static poses with an 80ms hop between
+ * them, which is why it read as a tap. It is now a real arc: draw back to a visible
+ * start, HOLD there long enough to be read, cut through the target line, follow
+ * through past it, then settle. Contact happens near the start of the cut, so the
+ * blade is still travelling when the hit resolves. */
+const SWING = { strike: 0.15, follow: 0.16, settle: 0.34, lead: 0.88 };
+const vmSwing = { id: null, t: 0, on: false, line: 'T', kind: 'light', windup: 0.34 };
+function updateSwing(me, dt) {
+  liveMe = me;
+  const A = me?.attack;
+  if (A && A.id !== vmSwing.id) {
+    vmSwing.id = A.id;
+    vmSwing.kind = vmKind(A);
+    vmSwing.line = vmLine(A);
+  }
+  vmSwing.on = !!(A && me.phaseInfo && me.phaseInfo());
+  if (A) {
+    const turn = A.turn || 0;
+    vmSwing.trail = turn > 0 ? 1 + 0.45 * turn : 1 + 0.4 * turn;
+    vmSwing.dragMul = A.releaseMul || 1;
+  }
+}
+/* THE BLADE IS DRIVEN BY THE RULES. It used to run on its own clock that happened to be
+ * shorter than the attack: a 150ms visual strike against an 80ms rule window looked fine,
+ * but against Chivalry's real 475ms release the sword would have finished travelling and
+ * gone back to rest while the hitbox was still live. The pose now asks the core where the
+ * attack is, so the arc you see and the arc that resolves are the same arc. */
+function swingPhase() {
+  const me = liveMe;
+  const info = me && me.phaseInfo ? me.phaseInfo() : null;
+  if (!info) return null;
+  /* the viewmodel speaks hold/windup/release/recover; the core says holding/recovery */
+  if (info.phase === 'holding') info.phase = 'hold';
+  else if (info.phase === 'recovery') info.phase = 'recover';
+  if (info.phase === 'hold') return { phase: 'wind', u: info.u * 0.45 };
+  if (info.phase === 'windup') return { phase: 'wind', u: 0.45 + info.u * 0.55 };
+  if (info.phase === 'release') {
+    if (info.u < 0.78) return { phase: 'strike', u: info.u / 0.78 };
+    return { phase: 'follow', u: (info.u - 0.78) / 0.22 };
+  }
+  return { phase: 'settle', u: info.u };
+}
+const lerpPose = (a, b, t) => ({
+  pos: [lerp(a.pos[0], b.pos[0], t), lerp(a.pos[1], b.pos[1], t), lerp(a.pos[2], b.pos[2], t)],
+  rot: [lerp(a.rot[0], b.rot[0], t), lerp(a.rot[1], b.rot[1], t), lerp(a.rot[2], b.rot[2], t)],
+});
+/* the four marks of a cut: drawn back, crossing the line, past the line, recovered */
+function swingArc(line, kind) {
+  const key = kind === 'thrust' ? 'thrust' : line === 'L' ? 'left' : line === 'R' ? 'right' : 'top';
+  const W = P[key + 'W'], S = P[key + 'S'], TH = P[key + 'T'];
+  const midAuthored = P[key + 'M'];
+  if (midAuthored) {
+    return { W, mid: midAuthored, S, through: TH };
+  }
+  const mid = {
+    pos: [(W.pos[0] + S.pos[0]) * 0.5, (W.pos[1] + S.pos[1]) * 0.5 + 0.04, (W.pos[2] + S.pos[2]) * 0.5 - 0.04],
+    rot: [(W.rot[0] + S.rot[0]) * 0.5, (W.rot[1] + S.rot[1]) * 0.5, (W.rot[2] + S.rot[2]) * 0.5],
+  };
+  const through = {
+    pos: [S.pos[0] + (line === 'L' ? -0.16 : line === 'R' ? 0.16 : 0), S.pos[1] - 0.12, S.pos[2] + 0.07],
+    rot: [S.rot[0] + 0.35, S.rot[1] * 1.2, S.rot[2] * 1.2],
+  };
+  return { W, mid, S, through };
+}
+const pose = { pos: [...P.rest.pos], rot: [...P.rest.rot] };
+const shieldPose = { pos: [-0.345, -0.385, -0.615], rot: [0.1, 0.42, -0.10] };
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const easeIn = (t) => t * t;
+
+function targetPose(me, clock) {
+  const st = me.state;
+  const A = me.attack;
+  if (me.guard && st !== 'windup' && st !== 'active') {
+    return { p: P.blockSword, s: { pos: [-0.12, -0.22, -0.48], rot: [0.05, 0.12, -0.04] }, fast: 12 };
+  }
+  /* the swing owns the hand from the moment it starts until it has settled, whatever
+   * the rule state machine is doing underneath it */
+  const ph = swingPhase();
+  if (ph) {
+    const arc = swingArc(vmSwing.line, vmSwing.kind);
+    if (ph.phase === 'wind') {
+      /* quick draw back, then hold: the hold is the part you read and answer */
+      const k = Math.min(1, ph.u / 0.5);
+      const u = k * k * (3 - 2 * k);
+      return { p: lerpPose(P.rest, arc.W, u), s: { pos: [-0.20, -0.27, -0.52], rot: [0.05, 0.16, -0.03] }, fast: 26 };
+    }
+    if (ph.phase === 'strike') {
+      /* accelerate out of the draw, cross the line, carry past it */
+      const u = Math.pow(ph.u, 0.72);
+      const p = u < 0.42 ? lerpPose(arc.W, arc.mid, u / 0.42) : lerpPose(arc.mid, arc.S, (u - 0.42) / 0.58);
+      return { p, s: { pos: [-0.30, -0.26, -0.50], rot: [0.1, 0.22, -0.02] }, fast: 60 };
+    }
+    if (ph.phase === 'follow') {
+      return { p: lerpPose(arc.S, arc.through, easeOut(ph.u)), s: { pos: [-0.34, -0.30, -0.56], rot: [0.12, 0.3, -0.05] }, fast: 26 };
+    }
+    const k = ph.u, sm = k * k * (3 - 2 * k);
+    return { p: lerpPose(arc.through, P.rest, sm), s: { pos: [-0.30, -0.34, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 16 };
+  }
+  if (st === 'stagger' || st === 'exhausted') {
+    return { p: { pos: [0.42, -0.52, -0.58], rot: [0.4, 0.55, 0.75] },
+      s: { pos: [-0.52, -0.50, -0.52], rot: [0.2, 0.5, 0.1] }, fast: 16 };
+  }
+  if (st === 'stagger' || st === 'exhausted') {
+    return { p: { pos: [0.42, -0.52, -0.58], rot: [0.4, 0.55, 0.75] },
+      s: { pos: [-0.52, -0.50, -0.52], rot: [0.2, 0.5, 0.1] }, fast: 16 };
+  }
+  const bobY = Math.sin(clock * 1.6) * 0.008;
+  const bobX = Math.cos(clock * 1.1) * 0.006;
+  return { p: { pos: [P.rest.pos[0] + bobX, P.rest.pos[1] + bobY, P.rest.pos[2]], rot: P.rest.rot },
+    s: { pos: [-0.30 + bobX, -0.34 + bobY, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 6 };
+}
+
+/* ------------------------------------------------------------------ opponent animation */
+function playFoe(clipKey, { timeScale = 1, once = true, fade = 0.09 } = {}) {
+  const a = foeActions[clipKey];
+  if (!a) return;
+  a.reset();
+  a.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
+  a.clampWhenFinished = once;
+  a.timeScale = timeScale;
+  a.fadeIn(fade);
+  a.play();
+  /* quiet every other one-shot so the pose does not fight itself */
+  for (const k in foeActions) {
+    const o = foeActions[k];
+    if (o && o !== a && o.isRunning() && k !== 'idle') o.fadeOut(fade);
+  }
+}
+function foeAttackClip(kind, zone) {
+  if (kind === 'thrust') return foeActions.stab ? 'stab' : 'chop';
+  if (zone === 'L') return foeActions.sliceH ? 'sliceH' : 'chop';
+  if (zone === 'R') return foeActions.sliceH ? 'sliceH' : 'chop';
+  return foeActions.chop ? 'chop' : 'sliceD';
+}
+
+/* ------------------------------------------------------------------ HUD */
+const hpMe = $('#hpMe>i'), stMe = $('#stMe>i'), hpFoe = $('#hpFoe>i');
+const telEl = $('#tel'), flashEl = $('#flash'), vigEl = $('#vig');
+const zoneEls = { L: $('#zones b[data-z=L]'), T: $('#zones b[data-z=T]'), R: $('#zones b[data-z=R]') };
+const TEL_COLOR = { light: '#e9f4ff', heavy: '#ff8f6b', thrust: '#ffd479' };
+
+/* ------------------------------------------------------------------ loop */
+const DT = 1 / 120;
+let acc = 0, last = performance.now();
+
+let loopErrors = [];
+const errBox = typeof document !== 'undefined' ? document.getElementById('errbox') : null;
+function frame(now) {
+  const raw = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += raw;
+  let steps = 0;
+  /* A THROWN FRAME MUST NOT KILL THE GAME. requestAnimationFrame is re-armed at the
+   * bottom of this function, so one exception used to stop it forever: the picture
+   * froze and nothing anywhere said why. Now a bad frame is caught, recorded, and the
+   * loop keeps going. */
+  try {
+    while (acc >= DT && steps < 8) {
+      tick(DT);
+      acc -= DT;
+      steps++;
+    }
+    render(raw);
+  } catch (err) {
+    loopErrors.push(String(err && err.message || err));
+    if (loopErrors.length > 40) loopErrors.shift();
+    window.__loopErrors = loopErrors;
+    if (!window.__firstLoopError) window.__firstLoopError = { msg: String(err && err.message || err), stack: String(err && err.stack || '') };
+    console.error('FRAME ERROR', err);
+    acc = 0;
+    const box = errBox || (typeof document !== 'undefined' ? document.getElementById('errbox') : null);
+    if (box) { box.textContent = 'FRAME ERROR: ' + (err && err.message || err); box.style.display = 'block'; }
+  }
+  __frames++;
+  const nowT = performance.now();
+  if (nowT - __fpsT > 1000) { window.__fps = Math.round((__frames * 1000) / (nowT - __fpsT)); __frames = 0; __fpsT = nowT; }
+  requestAnimationFrame(frame);
+}
+
+function tick(dt) {
+  if (!duel) return;
+  const me = duel.a, foe = duel.b;
+  /* the combat core keeps every one of its rules, but its notion of distance is now
+   * measured between two bodies instead of driven by a movement number */
+  if (duel) duel.dist = Math.max(0.6, Math.min(6, physGap));
+  /* DRAG AND ACCEL. Turning with the arc speeds the cut up; turning against it slows
+   * the blade down and carries it further. The page only reports which way the wrist
+   * is going relative to that particular cut; the core owns the effect. */
+  /* HOW HARD THE WRIST IS WORKING, against the weapon's own turn limit. There is no
+   * accel/drag multiplier any more: Chivalry has none, it has TurnLimitStrength, and a
+   * drag is simply what happens when you keep turning at the limit while the blade is
+   * live. This readout reports the ratio, it does not change the rules. */
+  let swingTurn = 0;
+  if (me.attack && (me.state === 'windup' || me.state === 'release')) {
+    swingTurn = Math.max(-1, Math.min(1, lookYawVel / Math.max(1, me.attack.turn)));
+  }
+  const ia = {
+    move: 0,
+    guard: !!rmbDown,
+    attack: pendingAttack ? pendingAttack.name : null,
+    alt: pendingAttack ? !!pendingAttack.alt : false,
+    feint: pendingFeint,
+    dodge: pendingDodge,
+  };
+  const ib = chivThink(brain, foe, me, duel.dist, duel.clock, dt);
+  ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
+  const events = duel.step(dt, ia, ib) || [];
+  pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
+
+  for (const e of events) {
+    const isFoe = e.who === foe.id || e.vs === foe.id;
+    const dg = distGain(physGap);
+    const ek = vmKind({ name: e.attack, dir: e.dir });
+
+    if (e.type === 'hit') {
+      sfxThud(0.52 * dg);
+      if (e.who === me.id) {
+        camShake = 0.5; hitFlash = 1; say('&nbsp;');
+        burst('dust', camera.position.clone().add(new THREE.Vector3(0, -0.35, -0.9)));
+      } else {
+        camShake = 0.22;
+        burst('dust', foeRoot.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+      }
+    }
+    if (e.type === 'parry') {
+      parryFlash = 1; say('PARRY'); sfxClang(0.5 * dg, 1.32);
+      burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.35, 0)));
+    }
+    if (e.type === 'block') { camShake = Math.max(camShake, 0.16); sfxClang(0.34 * dg, 1); }
+    /* their two signature answers, named the way the game names them */
+    if (e.type === 'counter') { say('COUNTER', 800); parryFlash = Math.max(parryFlash, 0.55); sfxClang(0.42 * dg, 1.18); }
+    if (e.type === 'kick') { sfxThud(0.34 * dg); camShake = Math.max(camShake, 0.25); say('KICK', 700); }
+    if (e.type === 'guardbreak') { sfxClang(0.55 * dg, 0.8); camShake = 0.6; say('GUARD BROKEN', 900); }
+    if (e.type === 'disarmed') { say('DISARMED', 1500); camShake = 0.7; }
+    if (e.type === 'dodged') sfxWhoosh(0.22 * dg, 0.2, 1.2);
+    if (e.type === 'whiff') sfxWhoosh(0.18 * dg, 0.26, 0.9);
+    if (e.type === 'windup') sfxGrunt(isFoe ? 0.34 * dg : 0.12);
+    if (e.type === 'release') sfxWhoosh(isFoe ? 0.52 * dg : 0.26, ek === 'heavy' ? 0.42 : 0.3, ek === 'thrust' ? 1.25 : 1);
+    if (e.type === 'death') {
+      sfxThud(0.6 * dg); sfxGrunt(0.3);
+      const winner = e.who === foe.id ? 0 : 1;
+      score[winner]++;
+      updateDots();
+      over = score[0] >= 2 || score[1] >= 2;
+      say(winner === 0 ? 'THE FIELD IS YOURS' : 'YOU ARE DOWN', 1600);
+      if (foeActions.death) playFoe('death', { timeScale: 1 });
+      setTimeout(() => {
+        if (over) { say(score[0] > score[1] ? 'YOUR REALM HOLDS THE YARD  ·  R TO FIGHT AGAIN' : 'THE YARD IS LOST  ·  R TO FIGHT AGAIN', 6000); }
+        else newRound();
+      }, 1500);
+    }
+  }
+  /* THE DRAG READOUT IS NOW THE WEAPON'S REAL TURN LIMIT, read from their table.
+   * There is no accel or drag multiplier to print any more. */
+  const dragEl = document.getElementById('drag');
+  if (dragEl) {
+    if (me.attack && (me.state === 'windup' || me.state === 'release') && Math.abs(swingTurn) > 0.3) {
+      dragEl.textContent = 'WRIST ' + Math.round(swingTurn * 100) + '%  of ' + Math.round(me.attack.turn) + ' deg/s';
+      dragEl.style.color = swingTurn > 0 ? '#7dd3fc' : '#fde68a';
+      dragEl.style.opacity = 1;
+    } else dragEl.style.opacity = 0;
+  }
+
+  /* opponent poses follow the rules, so what you see is what is being resolved */
+  const fst = foe.state;
+  if ((fst === 'holding' || fst === 'windup') && foe.attack) {
+    /* OLD BUILD: the whole clip was squeezed into the windup, so the raise and the cut
+     * happened together in one blur and the swing was unreadable. Now the clip is wound
+     * to the frame where the weapon is up and FROZEN THERE for the length of the windup,
+     * so you get the full telegraph to see what is coming. */
+    const key = foeAttackClip(vmKind(foe.attack), vmLine(foe.attack));
+    const act = foeActions[key];
+    if (act) {
+      if (foePrev !== 'windup' || foeHold.key !== key) {
+        act.reset();
+        act.setLoop(THREE.LoopOnce, 1);
+        act.clampWhenFinished = true;
+        act.fadeIn(0.06);
+        act.play();
+        for (const k in foeActions) {
+          const o = foeActions[k];
+          if (o && o !== act && o.isRunning() && k !== 'idle') o.fadeOut(0.06);
+        }
+        const dur = act.getClip().duration;
+        foeHold = { key, raised: dur * 0.52, dur, act, A: CFG.ATTACKS[vmKind(foe.attack)] || CFG.ATTACKS.light };
+      }
+      /* the chamber runs across HOLD then WINDUPP, so the raise covers both */
+      /* stateT, not attack.t: the new core advances the FIGHTER's phase clock, and
+       * attack.t is never touched, which would have frozen his animation at the frame
+       * the clip was wound to. */
+      const holdT = foe.attack.hold;
+      const windT = foe.attack.windup;
+      const prog = fst === 'holding'
+        ? 0.5 * Math.min(1, foe.stateT / Math.max(0.001, holdT))
+        : 0.5 + 0.5 * Math.min(1, foe.stateT / Math.max(0.001, windT));
+      act.paused = true;
+      act.time = prog * foeHold.raised;
+    }
+  } else if ((fst === 'release' || fst === 'recovery') && foeHold.act) {
+    /* release: the rest of the clip whips through in about a fifth of a second */
+    const act = foeHold.act;
+    const A = foeHold.A || CFG.ATTACKS.light;
+    act.paused = false;
+    /* was A.active + A.recover, which no longer exist after the four-phase rewrite and
+     * would have made this NaN and frozen his animation entirely */
+    act.timeScale = Math.max(0.04, foeHold.dur - foeHold.raised) / Math.max(0.14, A.release + A.recovery);
+  } else if (foe.guard && !foe.busy && foePrev !== 'guard') {
+    /* the new core has no 'block' STATE: a guard is a held flag, so the pose keys off
+     * the flag rather than off a state that never appears. */
+    playFoe('block', { once: false });
+  } else if (fst === 'stagger' && foePrev !== 'stagger') {
+    playFoe('hit');
+  } else if (fst === 'dodge' && foePrev !== 'dodge') {
+    playFoe(foe.dodgeDir === 'right' ? 'dodgeR' : 'dodgeL');
+  } else if (fst === 'idle' && foePrev !== 'idle' && foeActions.idle) {
+    foeActions.idle.reset().fadeIn(0.15).play();
+  }
+  foePrev = fst;
+
+  stepTheField(dt);
+}
+
+
+/* ---------------------------------------------------------------- the look pipeline
+ * Tone mapping, glare, grade and antialiasing all happen in one ordered chain, because
+ * "For Honor level" is not one feature: it is correct tone response, a lens that blooms
+ * where light is genuinely bright, film-esque grade, and clean edges. Order matters.
+ * Render pass writes LINEAR HDR (the renderer is set to NoToneMapping), so bloom sees
+ * real light values and only the genuinely bright things glow: the sun, fire, polished
+ * steel. Tone mapping then happens once, in the grade pass, and never twice.
+ */
+const VERT_QUAD = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    exposure: { value: 1.12 },
+    contrast: { value: 1.05 },
+    sat: { value: 1.06 },
+    vig: { value: 0.52 },
+    grain: { value: 0.012 },
+    time: { value: 0 },
+  },
+  vertexShader: VERT_QUAD,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float exposure, contrast, sat, vig, grain, time;
+    varying vec2 vUv;
+    /* Narkowicz ACES fit: filmic shoulder so highlights roll off instead of clipping */
+    vec3 aces(vec3 x) {
+      return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb * exposure;
+      c = aces(c);
+      c = clamp((c - 0.5) * contrast + 0.5, 0.0, 1.0);
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, sat);
+      vec2 d = vUv - 0.5;
+      c *= clamp(1.0 - dot(d, d) * vig, 0.0, 1.0);
+      c = pow(c, vec3(1.0 / 2.2));
+      c += (hash(vUv * 1024.0 + time) - 0.5) * grain;
+      gl_FragColor = vec4(c, 1.0);
+    }
+  `,
+};
+let composer = null, gradePass = null;
+if (INSPECT) {
+  /* viewmodel inspection: neutral grey, everything else hidden, hand scaled up so
+   * fingers are big enough to judge. ?inspect=1&part=shield shows the other one. */
+  scene.background = new THREE.Color(0x6f7478);
+  scene.fog = null;
+  scene.environment = null;
+  scene.traverse(o => { if (o.isMesh || o.isPoints) o.visible = false; });
+  hand.visible = true;
+  hand.traverse(o => { if (o.isMesh) o.visible = true; });
+  /* inspect lights live on the SCENE, not on the hand: hiding the hand must not change
+   * the lighting or every frame diff measures the light rig instead of the silhouette */
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.5));
+  const key = new THREE.DirectionalLight(0xfff4e2, 2.4); key.position.set(-0.8, 1.1, 0.9); scene.add(key);
+  const rim2 = new THREE.DirectionalLight(0x9fc4ff, 1.1); rim2.position.set(0.9, 0.3, -0.8); scene.add(rim2);
+  /* frame the thing in front of the camera at a readable size instead of scaling the
+   * hand, which just pushed it into the near plane and filled the screen */
+  const back = /[?&]back=1\b/.test(location.search);
+  if (!/[?&]part=shield\b/.test(location.search)) {
+    shield.visible = false; sword.visible = true;
+    sword.scale.setScalar(1.0);
+    sword.rotation.set(back ? -0.10 : 0.10, back ? 2.95 : 0.42, 0.08);
+    sword.position.set(0, 0, -0.26);
+    /* centre the FIST itself rather than guessing an offset: measure where it ended up
+     * and slide the whole weapon back by that much */
+    sword.updateMatrixWorld(true);
+    const fw = new THREE.Vector3();
+    swordFist.getWorldPosition(fw);
+    sword.position.x -= fw.x; sword.position.y -= fw.y;
+  } else {
+    sword.visible = false; shield.visible = true;
+    shield.rotation.set(0.04, back ? 3.05 : -0.30, -0.06);
+    shield.position.set(0, 0, -0.30);
+    shield.updateMatrixWorld(true);
+    const fw2 = new THREE.Vector3();
+    shieldFist.getWorldPosition(fw2);
+    shield.position.x -= fw2.x; shield.position.y -= fw2.y;
+  }
+}
+if (!LOWQ) {
+  composer = new EffectComposer(renderer);
+  composer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
+  composer.setSize(innerWidth, innerHeight);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.36, 0.6, 0.92);
+  composer.addPass(bloom);
+  gradePass = new ShaderPass(GradeShader);
+  composer.addPass(gradePass);
+  composer.addPass(new SMAAPass(innerWidth, innerHeight));
+}
+
+/* frame hooks, used by the test rigs to aim the camera and read the sky */
+/* diagnose switches: each isolates one suspected cause of the blue ground */
+window.__diag = {
+  fogOff: () => { scene.fog = null; return true; },
+  sunFront: () => { sun.position.set(12.6, 31.5, 29.5); return sun.position.toArray(); },
+  sunHigh: () => { sun.position.set(6, 60, -12); return sun.position.toArray(); },
+  groundEnv: (v) => { for (const m of [ground.material]) { m.envMapIntensity = v; m.needsUpdate = true; } return v; },
+  flipWinding: () => {
+    const T = THREE, g = window.__ground.geometry;
+    const pos = g.getAttribute('position'), col = g.getAttribute('color'), uv = g.getAttribute('uv');
+    const P = [], C = [], U = [];
+    for (let i = 0; i < pos.count; i += 3) {
+      for (const k of [0, 2, 1]) {               /* swap two corners: normal flips to +Y */
+        P.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+        C.push(col.getX(i + k), col.getY(i + k), col.getZ(i + k));
+        U.push(uv.getX(i + k), uv.getY(i + k));
+      }
+    }
+    const ng = new T.BufferGeometry();
+    ng.setAttribute('position', new T.Float32BufferAttribute(P, 3));
+    ng.setAttribute('color', new T.Float32BufferAttribute(C, 3));
+    ng.setAttribute('uv', new T.Float32BufferAttribute(U, 2));
+    ng.computeVertexNormals();
+    window.__ground.geometry = ng;
+    const n = ng.getAttribute('normal');
+    return { firstNormalY: +n.getY(0).toFixed(2) };
+  },
+  sunNoShadow: (v) => { sun.castShadow = v === undefined ? false : v; return sun.castShadow; },
+  shadowInfo: () => ({ bias: sun.shadow.bias, normalBias: sun.shadow.normalBias,
+    mapSize: sun.shadow.mapSize.toArray(), cam: { left: sun.shadow.camera.left, right: sun.shadow.camera.right,
+    top: sun.shadow.camera.top, bottom: sun.shadow.camera.bottom, near: sun.shadow.camera.near, far: sun.shadow.camera.far },
+    pos: sun.position.toArray(), intensity: sun.intensity, castShadow: sun.castShadow }),
+  sunBias: (b, n) => { sun.shadow.bias = b; if (n !== undefined) sun.shadow.normalBias = n;
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } return [sun.shadow.bias, sun.shadow.normalBias]; },
+  envNull: () => { scene.environment = null; scene.background = null; return true; },
+  envBack: () => { scene.background = scene.environment ? null : scene.background; return true; },
+  sunOff: () => { sun.intensity = 0; return true; },
+  hemiOff: () => { fillLight.intensity = 0; bounce.intensity = 0; return true; },
+  hideProps: () => {
+    scene.traverse(o => {
+      if (o === window.__ground || o === ground) return;
+      if (o.isMesh || o.isPoints) {
+        let p = o, isVM = false;
+        while (p) { if (p === hand) { isVM = true; break; } p = p.parent; }
+        if (!isVM && o !== camera) o.visible = false;
+      }
+    });
+    scene.background = null; scene.fog = null; hand.visible = false;
+    return true;
+  },
+  unlit: () => {
+    const m = new THREE.MeshBasicMaterial({ vertexColors: true, map: window.__ground.material.map });
+    window.__ground.material = m;
+    return true;
+  },
+  sunPos: (x, y, z) => { sun.position.set(x, y, z); return sun.position.toArray(); },
+  warmGround: (r, g, b) => { window.__ground.material.color.setRGB(r, g, b); window.__ground.material.needsUpdate = true; return [r, g, b]; },
+  fillSet: (v, hex) => { fillLight.intensity = v; if (hex !== undefined) fillLight.color.setHex(hex); return v; },
+  sunSet: (v) => { sun.intensity = v; return v; },
+  tintGround: (hex) => { window.__ground.material.color.setHex(hex); window.__ground.material.needsUpdate = true; return true; },
+  hideVM: (v) => { hand.visible = !v; return !v; },
+  envAll: (v) => { let n = 0; scene.traverse(o => { const m = o.material; if (!m) return;
+      (Array.isArray(m) ? m : [m]).forEach(mm => { if ('envMapIntensity' in mm) { mm.envMapIntensity = v; mm.needsUpdate = true; n++; } }); });
+    return n; },
+  exposure: (v) => { if (gradePass) gradePass.uniforms.exposure.value = v; else renderer.toneMappingExposure = v; return v; },
+  sat: (v) => { if (gradePass) gradePass.uniforms.sat.value = v; return v; },
+  roughOff: () => { ground.material.roughnessMap = null; ground.material.roughness = 1.0; ground.material.needsUpdate = true; return true; },
+};
+
+window.__setPitch = (v) => { pitch = v; };
+window.__setYaw = (v) => { yaw = v; };
+window.__setSun = (x, y, z, intensity) => { sun.position.set(x, y, z); if (intensity) sun.intensity = intensity; return sun.position.toArray(); };
+
+/* ---------------------------------------------------------------- blade trail
+ * A cut only reads as a cut if you can see where the edge has been. This samples the
+ * blade every frame into a ribbon, brightest at the tip and fading back along the arc,
+ * and it only exists while a cut is actually travelling. */
+const TRAIL_N = 16;
+const trailSamples = Array.from({ length: TRAIL_N }, () => ({ root: new THREE.Vector3(), tip: new THREE.Vector3() }));
+const trailGeo = new THREE.BufferGeometry();
+const trailPosArr = new Float32Array(TRAIL_N * 2 * 3);
+const trailColArr = new Float32Array(TRAIL_N * 2 * 3);
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailColArr, 3));
+{
+  const idx = [];
+  for (let i = 0; i < TRAIL_N - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    idx.push(a, b, c, b, d, c);
+  }
+  trailGeo.setIndex(idx);
+}
+const trailMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+const trailMesh = new THREE.Mesh(trailGeo, trailMat);
+trailMesh.frustumCulled = false; trailMesh.visible = false;
+scene.add(trailMesh);
+const ROOT_LOCAL = new THREE.Vector3(0, 0.18, 0);
+const TIP_LOCAL = new THREE.Vector3(0, 0.94, 0);
+const _trailA = new THREE.Vector3(), _trailB = new THREE.Vector3();
+function updateTrail() {
+  sword.updateWorldMatrix(true, false);
+  const rootW = _trailA.copy(ROOT_LOCAL).applyMatrix4(sword.matrixWorld);
+  const tipW = _trailB.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+  const ph = swingPhase();
+  const live = !!ph && (ph.phase === 'strike' || ph.phase === 'follow');
+  if (!live) {
+    for (let i = 0; i < TRAIL_N; i++) { trailSamples[i].root.copy(rootW); trailSamples[i].tip.copy(tipW); }
+    trailMesh.visible = false;
+    return;
+  }
+  for (let i = TRAIL_N - 1; i > 0; i--) {
+    trailSamples[i].root.copy(trailSamples[i - 1].root);
+    trailSamples[i].tip.copy(trailSamples[i - 1].tip);
+  }
+  trailSamples[0].root.copy(rootW);
+  trailSamples[0].tip.copy(tipW);
+  const strength = (ph.phase === 'strike' ? 1 : 0.5) * (vmSwing.trail || 1);
+  trailMesh.visible = true;
+  for (let i = 0; i < TRAIL_N; i++) {
+    const s = trailSamples[i], k = i * 6;
+    trailPosArr[k] = s.root.x; trailPosArr[k + 1] = s.root.y; trailPosArr[k + 2] = s.root.z;
+    trailPosArr[k + 3] = s.tip.x; trailPosArr[k + 4] = s.tip.y; trailPosArr[k + 5] = s.tip.z;
+    const f = Math.pow(1 - i / TRAIL_N, 1.7) * strength;
+    trailColArr[k] = 0.45 * f; trailColArr[k + 1] = 0.62 * f; trailColArr[k + 2] = 0.90 * f;
+    trailColArr[k + 3] = 0.90 * f; trailColArr[k + 4] = 1.0 * f; trailColArr[k + 5] = 1.0 * f;
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.color.needsUpdate = true;
+}
+
+function render(dt) {
+  if (!duel) return;
+  const me = duel.a, foe = duel.b;
+
+  /* ---------------------------------------------------------------- walking */
+  const ax = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
+  const az = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
+  const strafe = ax;
+  const moveMag = Math.hypot(ax, az);
+  const sprinting = keys['shift'] && moveMag > 0.1;
+  const topSpeed = sprinting ? SPRINT : WALK;
+  /* forward is the way the camera faces, so WASD always means what you are looking at */
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  let wishX = 0, wishZ = 0;
+  if (moveMag > 0.001) {
+    wishX = (fx * az + rx * ax) / moveMag;
+    wishZ = (fz * az + rz * ax) / moveMag;
+  }
+  /* accelerate toward the wish direction rather than snapping: a body has mass */
+  const accel = moveMag > 0.001 ? 26 : 15;
+  playerVel.x = lerp(playerVel.x, wishX * topSpeed, Math.min(1, accel * dt));
+  playerVel.z = lerp(playerVel.z, wishZ * topSpeed, Math.min(1, accel * dt));
+  playerPos.x += playerVel.x * dt;
+  playerPos.z += playerVel.z * dt;
+  /* the wall is a wall */
+  const rr = Math.hypot(playerPos.x, playerPos.z);
+  if (rr > WALK_R) { playerPos.x *= WALK_R / rr; playerPos.z *= WALK_R / rr; playerVel.multiplyScalar(0.2); }
+
+  /* ---------------------------------------------------------------- his body */
+  const fo = foeRoot.position;
+  const gapX = playerPos.x - fo.x, gapZ = playerPos.z - fo.z;
+  physGap = Math.max(0.35, Math.hypot(gapX, gapZ));
+  const toMeX = gapX / physGap, toMeZ = gapZ / physGap;
+  /* he closes when there is room, gives ground when crowded, and works his way around
+   * whenever he is already at a good distance, which is what makes him feel alive */
+  foeCircleT -= dt;
+  if (foeCircleT <= 0) { foeCircleT = 1.4 + Math.random() * 1.8; foeCircle = Math.random() < 0.5 ? -1 : 1; }
+  let wantX = 0, wantZ = 0, foeSpeed = 0;
+  /* HE MUST STAND INSIDE SWORD REACH. At the old 1.25-2.3 band he settled at 2.3m,
+   * and a Longsword reaches 2.25: measured both men swinging into thin air for ten
+   * seconds with nobody able to land. The band is now inside the actual reach. */
+  if (physGap > 1.85) { wantX = toMeX; wantZ = toMeZ; foeSpeed = 3.4; }
+  else if (physGap < 1.15) { wantX = -toMeX; wantZ = -toMeZ; foeSpeed = 2.6; }
+  else { wantX = -toMeZ * foeCircle; wantZ = toMeX * foeCircle; foeSpeed = 1.25; }
+  foeVel.x = lerp(foeVel.x, wantX * foeSpeed, Math.min(1, 9 * dt));
+  foeVel.z = lerp(foeVel.z, wantZ * foeSpeed, Math.min(1, 9 * dt));
+  fo.x += foeVel.x * dt;
+  fo.z += foeVel.z * dt;
+  const fr = Math.hypot(fo.x, fo.z);
+  if (fr > WALK_R - 0.3) { fo.x *= (WALK_R - 0.3) / fr; fo.z *= (WALK_R - 0.3) / fr; }
+  /* never stand inside each other */
+  if (physGap < 0.78) {
+    const push = (0.78 - physGap);
+    playerPos.x += toMeX * push; playerPos.z += toMeZ * push;
+    fo.x -= toMeX * push; fo.z -= toMeZ * push;
+  }
+  foeRoot.rotation.y = Math.atan2(gapX, gapZ) + Math.PI;
+  orbit = Math.atan2(playerPos.x - fo.x, playerPos.z - fo.z);
+
+  /* camera: eye height, first person, shake, dodge lean */
+  const shake = camShake > 0 ? camShake : 0;
+  camShake = Math.max(0, camShake - dt * 3.2);
+
+  const lean = dodgeRoll;
+  /* WEIGHT: the hand trails the look and the camera takes the blow. A weapon that is
+   * welded to the lens reads as a sticker no matter how good the model is. */
+  const yawVel = (yaw - prevLook.x) / Math.max(dt, 0.001);
+  const pitchVel = (pitch - prevLook.y) / Math.max(dt, 0.001);
+  prevLook.x = yaw; prevLook.y = pitch;
+  /* how fast the wrist is moving, in rad/s: this is what drags and accelerates a cut */
+  lookYawVel = lookYawVel * 0.55 + yawVel * 0.45;
+  lookPitchVel = lookPitchVel * 0.55 + pitchVel * 0.45;
+  vmLagX = lerp(vmLagX, clampNum(-yawVel * 0.011, -0.032, 0.032), 1 - Math.pow(0.0015, dt));
+  vmLagY = lerp(vmLagY, clampNum(-pitchVel * 0.007, -0.028, 0.028), 1 - Math.pow(0.0015, dt));
+  /* impact: a landed hit stops the swing dead, a taken hit rocks the shield back */
+  if (foe.hp < lastFoeHp - 0.01) { hitStop = 0.075; camPunch = 0.55; }
+  if (me.hp < lastMeHp - 0.01) { hitStop = 0.095; camPunch = -0.85; shieldRock = 0.65; }
+  lastFoeHp = foe.hp; lastMeHp = me.hp;
+  hitStop = Math.max(0, hitStop - dt);
+  camPunch = lerp(camPunch, 0, 1 - Math.pow(0.0000012, dt));
+  shieldRock = lerp(shieldRock, 0, 1 - Math.pow(0.0006, dt));
+  /* footfalls: the body rises and falls, so the whole view does too */
+  const walking = Math.min(1, Math.hypot(playerVel.x, playerVel.z) / WALK);
+  walkAmp = lerp(walkAmp, walking, 1 - Math.pow(0.02, dt));
+  walkPhase += dt * (sprinting ? 12.5 : 8.4);
+  /* footsteps ride the existing walk cycle rather than a second timer: one step per
+   * half cycle, only while actually moving */
+  const stepIdx = Math.floor(walkPhase / Math.PI);
+  if (stepIdx !== lastStepIdx) {
+    lastStepIdx = stepIdx;
+    if (moveMag > 0.1 && !over) sfxStep(sprinting ? 0.2 : 0.15);
+  }
+  const bob = Math.sin(walkPhase) * 0.012 * walkAmp;
+
+  camera.position.set(
+    playerPos.x + Math.sin(performance.now() / 1000 * 11) * shake * 0.035 + lean * -0.35,
+    1.68 + Math.cos(performance.now() / 1000 * 13) * shake * 0.03 + bob,
+    playerPos.z - Math.abs(lean) * -0.12);
+
+
+  camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + (shake * 0.02) - strafe * 0.022, 'YXZ');
+  dodgeRoll *= 0.86;
+
+  /* the opponent stands at the duel's distance, always facing you */
+  const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
+  /* (circling is computed above, before the camera needs it) */
+if (foeMixer) foeMixer.update(dt);
+
+  /* viewmodel */
+  updateSwing(me, dt);
+  const target = targetPose(me, duel.clock);
+  const k = 1 - Math.pow(0.001, (hitStop > 0 ? dt * 0.07 : dt) * (target.fast / 12));
+  for (let i = 0; i < 3; i++) {
+    pose.pos[i] = lerp(pose.pos[i], target.p.pos[i], k);
+    pose.rot[i] = lerp(pose.rot[i], target.p.rot[i], k);
+    shieldPose.pos[i] = lerp(shieldPose.pos[i], target.s.pos[i], k);
+    shieldPose.rot[i] = lerp(shieldPose.rot[i], target.s.rot[i], k);
+  }
+  if (!INSPECT) {
+    /* breathing sway: a held weapon is never perfectly still, and a totally rigid hand
+     * reads as a graphic pasted on the screen */
+    const t = performance.now() / 1000;
+    const swayX = Math.sin(t * 1.1) * 0.0022 + Math.sin(t * 2.7) * 0.0009;
+    const swayY = Math.cos(t * 0.9) * 0.0026 + Math.sin(t * 3.1) * 0.0007;
+    sword.position.fromArray(pose.pos);
+    sword.rotation.fromArray(pose.rot);
+    sword.position.x += swayX + vmLagX;
+    sword.position.y += swayY + vmLagY + bob * 0.6;
+    sword.rotation.z += swayX * 1.6 + vmLagX * 1.4;
+    sword.rotation.x += vmLagY * 1.1;
+  }
+  updateTrail();
+  if (!INSPECT) {
+    shield.position.fromArray(shieldPose.pos);
+    shield.rotation.fromArray(shieldPose.rot);
+    /* the shield is heavier than the sword, so it lags less and rocks on a block */
+    shield.position.x += vmLagX * 0.65;
+    shield.position.y += vmLagY * 0.65 + bob * 0.5;
+    shield.rotation.x += shieldRock * 0.15;
+    shield.rotation.z += shieldRock * 0.07;
+  }
+  /* the shield hides the upper body while guarding: a real cost to turtling */
+  shield.visible = true;
+
+  /* HUD */
+  hpMe.style.width = Math.max(0, me.hp) + '%';
+  stMe.style.width = Math.max(0, me.stam) + '%';
+  hpFoe.style.width = Math.max(0, foe.hp) + '%';
+  for (const z in zoneEls) zoneEls[z].classList.toggle('on', guardZone === z);
+
+  /* the read: what is coming, where, and how heavy */
+  if ((foe.state === 'windup' || foe.state === 'holding') && foe.attack) {
+    const zone = vmLine(foe.attack);
+    const arrow = zone === 'L' ? '◀' : zone === 'R' ? '▶' : '▲';
+    telEl.textContent = arrow;
+    telEl.style.color = TEL_COLOR[vmKind(foe.attack)] || '#fff';
+    telEl.style.opacity = 0.85;
+    telEl.style.transform = `translate(-50%,0) translateX(${zone === 'L' ? -130 : zone === 'R' ? 130 : 0}px)`;
+  } else { telEl.style.opacity = 0; }
+
+  parryFlash = Math.max(0, parryFlash - dt * 4);
+  hitFlash = Math.max(0, hitFlash - dt * 2);
+  flashEl.style.opacity = parryFlash * 0.5;
+  vigEl.style.opacity = hitFlash * 0.8;
+
+  stepBits(dt);
+  stepWorld(performance.now() / 1000);
+  if (gradePass) gradePass.uniforms.time.value = performance.now() / 1000;
+  if (composer) composer.render(dt);
+  else renderer.render(scene, camera);
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (composer) composer.setSize(innerWidth, innerHeight);
+});
+
+/* honest frame timing, so quality decisions are made on numbers and not on vibes */
+let __frames = 0, __fpsT = performance.now();
+window.__perf = () => ({ fps: window.__fps || 0, lowq: LOWQ });
+
+/* test harness: drive the real tick and render at full speed, because the software
+ * renderer in CI only manages 1-2 fps and a swing can never resolve at that rate */
+window.__tickN = (n) => {
+  for (let i = 0; i < n; i++) {
+    try { tick(1 / 60); } catch (err) {
+      if (!window.__firstLoopError) window.__firstLoopError = { msg: String(err && err.message || err), stack: String(err && err.stack || '') };
+      (window.__loopErrors = window.__loopErrors || []).push(String(err && err.message || err));
+    }
+  }
+  return { clock: +duel.clock.toFixed(2), hp: [duel.a.hp, duel.b.hp], state: duel.a.state };
+};
+window.__renderOnce = (d) => { render(d || 1 / 60); return true; };
+window.__audioRms = () => {
+  if (!vinylAnalyser) return -1;
+  const a = new Float32Array(vinylAnalyser.fftSize);
+  vinylAnalyser.getFloatTimeDomainData(a);
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * a[i];
+  return Math.sqrt(s / a.length);
+};
+window.__audioState = () => (AC ? AC.state : 'none');
+window.__sfx = { whoosh: (g,d,pi) => sfxWhoosh(g,d,pi), grunt: (g) => sfxGrunt(g), clang: (g,b) => sfxClang(g,b), thud: (g) => sfxThud(g), step: (g) => sfxStep(g) };
+window.__audioInit = (done) => { audioInit(); done = done || 0; return AC ? AC.state : 'none'; };
+requestAnimationFrame(frame);
+window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
+window.__vm = { sword, shield, blade, tip, camera, THREE, swordFist, shieldFist };
+window.__ground = ground;
+</script>
+</body>
+</html>
