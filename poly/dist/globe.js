@@ -30664,7 +30664,7 @@
   var LANE_SPEED = 15;
   var BEAT = 1;
   var MAX_PIPS = 5;
-  var PIP_GAIN = 0.03;
+  var PIP_GAIN = 0.04;
   var COMMANDERS_NAMED = [
     "Aldric",
     "Bram",
@@ -30698,7 +30698,7 @@
     "Elspeth"
   ];
   var COMMANDER_TRAITS = {
-    wallbreaker: { label: "wall-breaker", blurb: "his men hit the garrison 18% harder in a storm" },
+    wallbreaker: { label: "wall-breaker", blurb: "his storm costs 30% fewer men on the wall" },
     sapper: { label: "sapper", blurb: "his picks take a wall down 25% faster" },
     steady: { label: "steady", blurb: "his men lose 20% less nerve in the storm" },
     butcher: { label: "butcher", blurb: "he kills 12% harder in the open field" }
@@ -32636,7 +32636,11 @@
         Math.round(Math.max(0, n.garrison) * 0.9) + 1,
         Math.round(men * 0.11 * Math.min(2.2, ratio) * wallbreakers)
       );
-      const dmgMen = Math.min(Math.round(men * 0.22) + 1, Math.round(n.garrison * 0.075 * wallNow / Math.max(0.35, ratio)));
+      const wallShield = commanderMult(h, "wallbreaker", 0.3);
+      const dmgMen = Math.min(
+        Math.round(men * 0.22) + 1,
+        Math.round(n.garrison * 0.075 * wallNow / Math.max(0.35, ratio) * (2 - wallShield))
+      );
       const lost = Math.min(dmgMen, s.party);
       n.garrison = Math.max(0, n.garrison - dmgGar);
       s.party = Math.max(0, s.party - lost);
