@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-11 12:08</div>
+  <div id="build">BUILD 2026-11-11 12:23</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -89,6 +89,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
+import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
+import { STYLES, styleRule } from './chiv.styles.js';
 import { RGBELoader } from './lib/RGBELoader.js';
 import { EffectComposer } from './lib/EffectComposer.js';
 import { RenderPass } from './lib/RenderPass.js';
@@ -928,7 +930,7 @@ function stepBits(dt) {
   }
 }
 /* the opponent's rig, mixer and clip table live here; the loader below fills them */
-let foeModel = null, foeMixer = null, foeActions = {}, knightClips = null;
+let foeModel = null, foeMixer = null, foeActions = {}, knightClips = null, foeRig = null;
 const foeRoot = new THREE.Group();
 scene.add(foeRoot);
 
@@ -955,15 +957,43 @@ function clipMap(clips) {
   };
 }
 
+/* ============================== THE LAB ==============================
+ * "3 different models, and 3 different pvp styles, 1 chiv 2 for honor 3 a true
+ * mix of both." Both are switchable from the panel, and both are honest: the
+ * model is a real rig difference and the style is a real RULE difference, so a
+ * fight in each one is a different fight and not a reskin.
+ * ==================================================================== */
+const LAB = (() => {
+  const q = new URLSearchParams(location.search);
+  const model = ['knight', 'soldier', 'xbot'].includes(q.get('model')) ? q.get('model') : 'knight';
+  const style = ['chiv', 'fh', 'mix'].includes(q.get('style')) ? q.get('style') : 'chiv';
+  return { model, style };
+})();
+const MODEL_FILE = { knight: './knight.glb', soldier: './Soldier.glb', xbot: './Xbot.glb' };
+const MODEL_LABEL = { knight: '1 KAYKIT KNIGHT', soldier: '2 MIXAMO SOLDIER', xbot: '3 MIXAMO MANNEQUIN' };
+const MODEL_NOTE = {
+  knight: 'stylized · 7k tris · 1024px atlas in 13KB · 76 combat clips',
+  soldier: 'realistic · 11.4k tris · jpeg diffuse · 4 clips',
+  xbot: 'neutral · 49k tris · untextured · 7 clips',
+};
+window.__lab = { model: LAB.model, style: LAB.style };
+
 const ROUND_MSG = $('#msg');
 const loader = new GLTFLoader();
 let ready = false;
-loader.load('./knight.glb', (gltf) => {
+loader.load(MODEL_FILE[LAB.model], (gltf) => {
   const src = gltf.scene;
-  const box = new THREE.Box3().setFromObject(src);
-  const h = box.max.y - box.min.y;
-  const k = 1.86 / h;
-  src.scale.setScalar(k);
+  scene.add(src);
+  /* THE SCALE HAS TO BE DECIDED PER ASSET. A skinned mesh's bounding box is not
+   * its pose: measured off the box the realistic Soldier came out 5x too large,
+   * and off the skeleton the stylized knight came out 2x too tall. autoFit tries
+   * the skeleton, checks the limb proportions, and falls back to the art box. */
+  const fit = autoFit(src, 1.86);
+  scene.remove(src);
+  window.__fit = { model: LAB.model, ...fit };
+  /* NO EXTRA ROTATION. Whether a rig faces +Z or -Z is already measured from its
+   * own toes (rig.forward) and mirrored inside rigpose, so rotating the mesh too
+   * flips it twice and every swing comes out of his back. */
   src.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false; } });
   foeModel = src;
   foeRoot.add(src);
@@ -976,6 +1006,30 @@ loader.load('./knight.glb', (gltf) => {
   }
   ready = true;
   if (foeActions.idle) { foeActions.idle.play(); foeActions.idle.setEffectiveWeight(1); }
+  /* THE SWING IS NOT A CLIP ANY MORE. The clips keep the feet, the guard, the hit
+   * reactions and the death; the sword arm is driven by the rules through rigpose,
+   * because his rig only carries ONE horizontal melee clip and Chivalry's data
+   * needs a left cut and a right cut that chamber on opposite sides. */
+  foeRig = bindRig(foeModel);
+  window.__swingCalls = 0;
+  window.__forceSwing = (state, u, alt) => {
+    const fake = { attack: { name: 'Slash', dir: alt ? 'Right' : 'Left', type:'slash' }, state, stateT: u, stateDur: 1, guard: false };
+    foeRig.root.updateWorldMatrix(true, true);
+    const before = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
+    const ret = applySwing(foeRig, fake, { faceSign: 1 });
+    foeRig.root.updateWorldMatrix(true, true);
+    const after = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
+    return { moved: +before.distanceTo(after).toFixed(3), ret: !!ret,
+             hand: [+after.x.toFixed(3), +after.y.toFixed(3), +after.z.toFixed(3)],
+             target: ret && ret.hand ? [+ret.hand.x.toFixed(3), +ret.hand.y.toFixed(3), +ret.hand.z.toFixed(3)] : null };
+  };
+  window.__foeHand = () => {
+    if (!foeRig || !foeRig.ok) return null;
+    const wp = foeRig.armR.hand.getWorldPosition(new THREE.Vector3());
+    const lp = foeModel.worldToLocal(wp.clone());
+    return { x:+lp.x.toFixed(3), y:+lp.y.toFixed(3), z:+lp.z.toFixed(3) };
+  };
+  window.__foeRig = foeRig ? { kind: foeRig.kind, ok: foeRig.ok, reach: +foeRig.reach.toFixed(3), forward: foeRig.forward } : null;
   buildTheField();
 }, undefined, (e) => {
   ROUND_MSG.textContent = 'COULD NOT LOAD THE OPPONENT';
@@ -1058,7 +1112,7 @@ function buildTheField() {
     const gap = 1.7;
     const a = new Fighter('ally' + i, -1, 'Longsword');
     const b = new Fighter('foe' + i, 1, 'Longsword');
-    const duel = new Duel(a, b, { dist: gap });
+    const duel = new Duel(a, b, { dist: gap, style: LAB.style });
     const sa = makeSoldier(a, -1, REALM_BLUE);
     const sb = makeSoldier(b, 1, REALM_RED);
     sa.root.position.set(ax - gap / 2, 0, az);
@@ -1088,13 +1142,13 @@ function stepTheField(dt) {
         a.state = b.state = 'idle'; a.attack = b.attack = null; a.guard = b.guard = false;
         a.guardLock = b.guardLock = 0; a.riposteUntil = b.riposteUntil = -99;
         a.counterUntil = b.counterUntil = -99;
-        const fresh = new Duel(a, b, { dist: pair.gap });
+        const fresh = new Duel(a, b, { dist: pair.gap, style: LAB.style });
         pair.duel = fresh;
       }
     } else {
       pair.respawnIn = 4;
-      const ia = chivThink(pair.ba, a, b, duel.dist, duel.clock, dt);
-      const ib = chivThink(pair.bb, b, a, duel.dist, duel.clock, dt);
+      const ia = chivThink(pair.ba, a, b, duel.dist, duel.clock, dt, duel.style);
+      const ib = chivThink(pair.bb, b, a, duel.dist, duel.clock, dt, duel.style);
       ia.move = 0; ib.move = 0;
       duel.step(dt, ia, ib);
     }
@@ -1127,6 +1181,93 @@ window.__squad = () => SQUAD.map((q, i) => ({
   aState: q.duel.a.state, bState: q.duel.b.state,
   aActs: q.sa.cur, bActs: q.sb.cur, over: q.duel.over,
 }));
+/* ============================== THE LAB PANEL ==============================
+ * Six buttons: three rigs, three rule sets. A reload per press keeps it honest,
+ * because a half-swapped rig state is how you end up measuring nothing.
+ * ======================================================================== */
+function labGo(patch) {
+  const q = new URLSearchParams(location.search);
+  for (const k in patch) q.set(k, patch[k]);
+  location.search = q.toString();
+}
+const labPanel = document.createElement('div');
+labPanel.style.cssText = 'position:fixed;bottom:10px;right:10px;z-index:60;' +
+  'font:600 10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.1em;' +
+  'color:#dfe8ef;background:#000000c0;border:1px solid #2b3641;padding:8px 10px;text-align:right';
+function labRow(title, items, current, key) {
+  const row = document.createElement('div');
+  row.style.cssText = 'margin-bottom:5px';
+  const lab = document.createElement('div');
+  lab.textContent = title;
+  lab.style.cssText = 'opacity:.5;font-size:9px;letter-spacing:.18em;margin-bottom:2px';
+  row.appendChild(lab);
+  for (const it of items) {
+    const b = document.createElement('button');
+    b.textContent = it.label;
+    b.title = it.note || '';
+    const on = it.id === current;
+    b.style.cssText = 'display:block;width:100%;margin:1px 0;padding:3px 7px;cursor:pointer;' +
+      'font:inherit;text-align:left;border:1px solid ' + (on ? '#5f8cb0' : '#2b3641') + ';' +
+      'background:' + (on ? '#1d3a52' : 'transparent') + ';color:' + (on ? '#cfe6f7' : '#93a3b0');
+    b.onclick = () => labGo({ [key]: it.id });
+    row.appendChild(b);
+  }
+  return row;
+}
+labPanel.appendChild(labRow('model',
+  [{ id: 'knight', label: MODEL_LABEL.knight, note: MODEL_NOTE.knight },
+   { id: 'soldier', label: MODEL_LABEL.soldier, note: MODEL_NOTE.soldier },
+   { id: 'xbot', label: MODEL_LABEL.xbot, note: MODEL_NOTE.xbot }], LAB.model, 'model'));
+labPanel.appendChild(labRow('pvp style',
+  [{ id: 'chiv', label: '1 CHIVALRY', note: 'one block, counter the same type' },
+   { id: 'fh', label: '2 FOR HONOR', note: 'three stances, unblockable heavies' },
+   { id: 'mix', label: '3 THE MIX', note: 'stances plus line-matching counters' }], LAB.style, 'style'));
+const labNote = document.createElement('div');
+labNote.textContent = MODEL_NOTE[LAB.model];
+labNote.style.cssText = 'opacity:.45;font-size:9px;max-width:190px;letter-spacing:.02em';
+labPanel.appendChild(labNote);
+document.body.appendChild(labPanel);
+
+/* the style line, on the HUD, so the difference is never hidden */
+window.__labStyle = { id: LAB.style, name: STYLES[LAB.style].name, rule: styleRule(STYLES[LAB.style]) };
+
+/* A HEAD-TO-HEAD, so the styles can be compared by what they DO rather than by how
+ * they read on paper. Same armour, same weapon, same brains, only the rules differ. */
+window.__labRun = (bouts = 40, styleOverride = null) => {
+  const st = styleOverride || LAB.style;
+  const agg = { style: st, bouts, a: 0, b: 0, draw: 0, hits: 0, blocks: 0, parries: 0,
+                outread: 0, counters: 0, guardbreaks: 0, unblockable: 0, feints: 0, time: 0 };
+  for (let i = 0; i < bouts; i++) {
+    const fa = new Fighter('a' + i, -1, 'Longsword');
+    const fb = new Fighter('b' + i, 1, 'Longsword');
+    const d = new Duel(fa, fb, { dist: 1.7, style: st });
+    const ba = makeChivBrain('Longsword', 'knight', 500 + i * 13);
+    const bb = makeChivBrain('Longsword', 'knight', 900 + i * 17);
+    let guard = 0;
+    while (!d.over && guard++ < 60 * 45) {
+      const ia = chivThink(ba, fa, fb, d.dist, d.clock, 1 / 60, d.style);
+      const ib = chivThink(bb, fb, fa, d.dist, d.clock, 1 / 60, d.style);
+      const ev = d.step(1 / 60, ia, ib);
+      for (const e of ev) {
+        if (e.type === 'hit') agg.hits++;
+        else if (e.type === 'block') agg.blocks++;
+        else if (e.type === 'parry') agg.parries++;
+        else if (e.type === 'outread') agg.outread++;
+        else if (e.type === 'counter') agg.counters++;
+        else if (e.type === 'guardbreak') agg.guardbreaks++;
+        else if (e.type === 'unblockable') agg.unblockable++;
+        else if (e.type === 'feint') agg.feints++;
+      }
+    }
+    agg.time += d.clock;
+    if (!d.over) agg.draw++;
+    else if (d.winner === fa) agg.a++;
+    else agg.b++;
+  }
+  agg.avgTime = +(agg.time / bouts).toFixed(1);
+  return agg;
+};
+
 const kHudEl = (() => {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:40;' +
@@ -1136,7 +1277,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-11 12:08');
+console.log('REALMS KINGDOM BUILD 2026-11-11 12:23');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1480,7 +1621,7 @@ let foeHold = { key: null, raised: 0, dur: 0, act: null };
 
 function newRound() {
   /* a Duel is two Fighters plus the clock, never an empty shell */
-  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60 });
+  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60, style: LAB.style });
   // a fresh duel starts with both fighters at full health and stamina
   brain = makeChivBrain('Longsword', styleKey, (Date.now() & 0xffff) ^ round);
   foePrev = 'idle';
@@ -1826,7 +1967,7 @@ function tick(dt) {
     feint: pendingFeint,
     dodge: pendingDodge,
   };
-  const ib = chivThink(brain, foe, me, duel.dist, duel.clock, dt);
+  const ib = chivThink(brain, foe, me, duel.dist, duel.clock, dt, duel.style);
   ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
   const events = duel.step(dt, ia, ib) || [];
   pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
@@ -2278,6 +2419,15 @@ function render(dt) {
   const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
   /* (circling is computed above, before the camera needs it) */
 if (foeMixer) foeMixer.update(dt);
+/* THE OVERRIDE RUNS AFTER THE MIXER, so the clips own the body and rigpose owns the
+ * sword arm and the torso twist. Applied for the whole swing, not just the release,
+ * because the chamber you read and the cut you react to have to be the same motion. */
+if (foeRig && foeRig.ok) {
+  const swinging = foe.attack && (foe.state === 'holding' || foe.state === 'windup'
+    || foe.state === 'release' || foe.state === 'recovery' || foe.state === 'thwack');
+  if (swinging || foe.guard) applySwing(foeRig, foe, { faceSign: 1 });
+  else if (window.__foeRigHeld) resetRig(foeRig);
+}
 
   /* viewmodel */
   updateSwing(me, dt);

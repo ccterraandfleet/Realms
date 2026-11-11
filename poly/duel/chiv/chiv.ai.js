@@ -1,3 +1,4 @@
+import { zoneOf } from './chiv.styles.js';
 /* ===========================================================================
  * A CHIVALRY OPPONENT FOR THE DATA-DRIVEN CORE
  * ===========================================================================
@@ -52,7 +53,7 @@ const ATTACKS_BY_TYPE = {
   stab: ['Stab', 'StabHeavy'],
 };
 
-export function chivThink(brain, self, foe, dist, clock, dt) {
+export function chivThink(brain, self, foe, dist, clock, dt, style) {
   const out = {};
   if (!self || !foe) return out;
   const rng = brain.rng;
@@ -85,7 +86,29 @@ export function chivThink(brain, self, foe, dist, clock, dt) {
     if (brain.stance === 'hold') guard = true;
     else if (brain.stance === 'parry' && nearlyHome) guard = true;
   }
-  if (!inDanger) brain.stanceFor = null;
+
+  /* ---- THE READ, for the directional styles ----
+   * In a directional style the guard is worthless unless it is on the right side,
+   * so the bot has to actually read the incoming cut. Its skill is its reaction
+   * time: it knows which side after a fraction of that, and it gets it WRONG at a
+   * rate that rises as it gets slower, which is exactly how a recruit feels. */
+  let stanceOut = null;
+  if (style && style.directional) {
+    if (inDanger && brain.readFor !== fAtk) {
+      brain.readFor = fAtk;
+      const readSkill = Math.max(0.45, Math.min(0.97, 1.05 - brain.reaction * 1.1));
+      brain.readRight = rng() < readSkill;
+      brain.readAt = clock + brain.reaction * 0.5;
+      const inc = zoneOf(foe.attack);
+      const others = ['L', 'R', 'T'].filter((z) => z !== inc);
+      brain.readZone = brain.readRight ? inc : others[Math.floor(rng() * others.length) % others.length];
+    }
+    if (inDanger && clock >= brain.readAt) stanceOut = brain.readZone;
+    else stanceOut = brain.lastStance || 'T';
+    if (brain.guard || guard) brain.lastStance = stanceOut;
+  }
+  if (!inDanger) { brain.stanceFor = null; brain.readFor = null; }
+  if (stanceOut) out.stance = stanceOut;
   /* stay behind the guard for a beat after a block so the riposte window is usable */
   if (clock < self.riposteUntil) guard = false;          // drop it so the attack can fire
   if (self.guardLock > 0) guard = false;

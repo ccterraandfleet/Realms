@@ -37,6 +37,8 @@
 
 import { WEAPONS, DEFAULTS } from './chiv.data.js';
 
+import { STYLES, styleById, zoneOf, lineOf } from './chiv.styles.js';
+
 export const CFG = {
   HP: 100,
   STAM_MAX: 100,
@@ -140,6 +142,8 @@ export class Fighter {
     this.stateDur = 0;
     this.attack = null;            // the in-flight ability
     this.guard = false;
+    this.guardZone = null;         // which side is guarded (directional styles)
+    this.guardZoneAt = -99;        // when the guard last CHANGED side
     this.guardUpAt = -99;
     this.guardLock = 0;            // can't raise the guard while > 0
     this.riposteUntil = -99;
@@ -251,7 +255,12 @@ export class Fighter {
   canRaiseGuard(clock) {
     return this.alive && !this.busy && this.guardLock <= 0 && clock >= this.exhaustedUntil;
   }
-  raiseGuard(clock) {
+  /* zone is optional: the Chivalry style has nothing to aim, and passes none */
+  raiseGuard(clock, zone = null) {
+    if (zone && zone !== this.guardZone) {
+      this.guardZone = zone;
+      this.guardZoneAt = clock;
+    }
     if (this.guard) return true;
     if (!this.canRaiseGuard(clock)) return false;
     this.guard = true;
@@ -328,6 +337,7 @@ export class Duel {
     this.events = [];
     this.over = false;
     this.winner = null;
+    this.style = styleById(opts.style);
   }
 
   emit(type, data = {}) { this.events.push({ t: this.clock, type, ...data }); }
@@ -355,15 +365,19 @@ export class Duel {
 
       /* intent */
       if (inp.turn) f.applyTurn(inp.turn, this.clock);
-      if (inp.guard) f.raiseGuard(this.clock);
+      if (inp.guard) f.raiseGuard(this.clock, this.style.directional ? (inp.stance || f.guardZone || 'T') : null);
       else if (f.guard) f.dropGuard();
       if (inp.dodge) f.startDodge(inp.dodge, this.clock);
-      if (inp.feint) f.feint(this.clock);
+      if (inp.feint && this.style.feint) f.feint(this.clock);
       if (inp.attack) {
         const name = inp.attack;
-        const isCounter = f.counterUntil > this.clock
-          && (TYPE_OF[name] === f.counterType);
+        /* THE BLOCK HAS TO BE SNAPSHOTTED BEFORE THE NEW SWING STARTS, because
+         * startAttack clears the counter window as part of chaining. The ANSWER's
+         * own direction comes from f.attack once it exists. */
+        const cSnap = { until: f.counterUntil, zone: f.counterZone,
+                        line: f.counterLine, type: f.counterType };
         f.startAttack(name, { alt: !!inp.alt, clock: this.clock, combo: !!inp.combo });
+        const isCounter = this.counterMatches(f, name, cSnap);
         if (f.attack && isCounter) {
           f.stats.countered++;
           this.emit('counter', { who: f.id, vs: F[1 - i].id, attack: name });
@@ -465,19 +479,33 @@ export class Duel {
         att.state = 'recovery'; att.stateT = 0; att.stateDur = a.blocked;
         return;
       }
-      /* a raised guard stops anything from the front */
-      const fresh = (this.clock - def.guardUpAt) <= CFG.PARRY_WINDOW;
-      const cost = a.damage * CFG.BLOCK_STAM_PER_DMG;
+      /* ---- THE STYLE GATE ----
+       * This is the one place the three styles disagree about defending.
+       * Chivalry blocks from any side; the directional styles only block the
+       * side he actually cut from; and an unblockable goes through either way. */
+      const gate = this.blockGate(att, def, a);
+      if (!gate.ok) {
+        this.emit(gate.reason === 'unblockable' ? 'unblockable' : 'outread',
+          { who: def.id, vs: att.id, attack: a.name, dir: a.dir, zone: gate.zone, held: gate.held });
+        /* fall through to the damage path below */
+      } else {
+      const fresh = (this.clock - def.guardUpAt) <= this.style.parryWindow;
+      const cost = a.damage * CFG.BLOCK_STAM_PER_DMG * (this.style.blockStam / 0.30);
       def.spendStam(cost, this.clock);
       def.stats.blocked++;
       def.lastBlockedAt = this.clock;
-      def.counterUntil = this.clock + CFG.COUNTER_WINDOW;
+      def.counterUntil = this.clock + this.style.counterWindow;
       def.counterType = type;
+      def.counterZone = zoneOf(a);
+      def.counterLine = lineOf(a);
+      def.counterDir = a.dir;
       def.riposteUntil = this.clock + CFG.RIPOSTE_WINDOW;
       if (fresh) {
         def.stats.parried++;
         def.stam = Math.min(CFG.STAM_MAX, def.stam + 8);
         this.emit('parry', { who: def.id, vs: att.id, attack: a.name, attackType: type });
+        /* FOR HONOR punishes a parry: he is left open long enough to answer */
+        if (this.style.parryPunish > 0) att.stagger(this.style.parryPunish, this.clock);
       } else {
         this.emit('block', { who: def.id, vs: att.id, attack: a.name, attackType: type });
       }
@@ -488,6 +516,7 @@ export class Duel {
       /* the attacker eats the ability's own Blocked recovery */
       att.state = 'recovery'; att.stateT = 0; att.stateDur = a.blocked;
       return;
+      }
     }
 
     if (isKick) {
@@ -508,6 +537,31 @@ export class Duel {
     att.stateT = 0;
     att.stateDur = a.thwack ?? a.recovery;
     if (def.stagger) def.stagger(0.3, this.clock);
+  }
+
+  /* does the guard actually stop this? */
+  blockGate(att, def, a) {
+    const st = this.style;
+    const zone = zoneOf(a);
+    if (st.unblockable.includes(a.name)) {
+      return { ok: false, reason: 'unblockable', zone, held: def.guardZone };
+    }
+    if (!st.directional) return { ok: true, zone, held: def.guardZone };
+    /* directional: the stance he is holding has to be the side it is coming from */
+    const held = def.guardZone;
+    if (held === zone) return { ok: true, zone, held };
+    return { ok: false, reason: 'outread', zone, held };
+  }
+
+  /* what counts as a counter is different in each style */
+  counterMatches(f, name, snap) {
+    const st = this.style;
+    if (st.counterBy === 'none' || !snap) return false;
+    if (snap.until <= this.clock) return false;
+    if (st.counterBy === 'type') return TYPE_OF[name] === snap.type;
+    /* 'line': the answer has to come from the side AND on the line he blocked */
+    if (!f.attack) return false;
+    return zoneOf(f.attack) === snap.zone && lineOf(f.attack) === snap.line;
   }
 
   applyDamage(f, dmg) {

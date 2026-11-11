@@ -1,0 +1,82 @@
+<!doctype html><html><head><meta charset="utf-8"><title>rigpose</title>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+</head><body><pre id="out">running…</pre>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { bindRig, applySwing, solveArm, SWINGS, lineFor, detectRigKind, scaleToHeight, autoFit, forwardSign } from './rigpose.js';
+
+const scene = new THREE.Scene();
+const lines = ['L','R','T','thrust'];
+const load = (url) => new Promise((res, rej) => new GLTFLoader().load(url, res, undefined, rej));
+
+function mockFighter(dirName, dir) {
+  return { attack: { name: dirName, dir }, state:'holding', stateT:0, stateDur:0.001, guard:false };
+}
+
+/* run one full Chivalry Longsword slash through the driver and record where the
+ * hand actually goes, in the body's own frame */
+function measure(rig, name, dir) {
+  const f = mockFighter(name, dir);
+  const phases = [['holding',0.35],['windup',0.225],['release',0.475],['recovery',0.80]];
+  const samples = [];
+  for (const [state,dur] of phases) {
+    f.state = state; f.stateDur = dur;
+    const steps = 14;
+    for (let i=0;i<=steps;i++) {
+      f.stateT = (i/steps)*dur;
+      const ret = applySwing(rig, f, { faceSign: 1 });
+      rig.root.updateWorldMatrix(true, true);
+      const hp = rig.armR.hand.getWorldPosition(new THREE.Vector3());
+      /* does the arm actually REACH the pose, or is it clamped short? */
+      if (ret && ret.hand) window.__resid.push(hp.distanceTo(ret.hand));
+      const local = rig.root.worldToLocal(hp.clone());
+      samples.push({ state, u:+(i/steps).toFixed(2), x:+local.x.toFixed(3), y:+local.y.toFixed(3), z:+local.z.toFixed(3) });
+    }
+  }
+  const rel = samples.filter(s=>s.state==='release');
+  const first = rel[0], last = rel[rel.length-1];
+  const ch = samples.find(s=>s.state==='windup' && s.u===1) || samples[0];
+  return {
+    line: lineFor({name:name, dir}),
+    chamber: [ch.x, ch.y, ch.z],
+    releaseStart: [first.x, first.y, first.z],
+    releaseEnd: [last.x, last.y, last.z],
+    dx: +(last.x-first.x).toFixed(3), dy: +(last.y-first.y).toFixed(3), dz: +(last.z-first.z).toFixed(3),
+    travel: +Math.hypot(last.x-first.x, last.y-first.y, last.z-first.z).toFixed(3),
+  };
+}
+
+window.__resid = [];
+const out = document.getElementById('out');
+const report = { rigs: [] };
+for (const file of ['knight.glb','Soldier.glb','Xbot.glb']) {
+  try {
+    const g = await load('./'+file);
+    let root = g.scene;
+    scene.add(root); root.updateWorldMatrix(true,true);
+    const fit = autoFit(root, 1.86);
+    const applied = fit.scale || 1;
+    const h = 1.86;
+    const kind = detectRigKind(root);
+    const rig = bindRig(root);
+    const entry = { file, kind, ok: !!(rig&&rig.ok), rawH:+h.toFixed(3), scale:+applied.toFixed(4), mode:fit.mode, fwd:forwardSign(root),
+      len: rig&&rig.len ? {u:+rig.len.upper.toFixed(3), l:+rig.len.lower.toFixed(3)} : null, swings: [], resid: [] };
+    if (rig && rig.ok) {
+      entry.swings.push(measure(rig, 'Slash', 'Left'));
+      entry.swings.push(measure(rig, 'Slash', 'Right'));
+      entry.swings.push(measure(rig, 'Overhead', 'Down'));
+      entry.swings.push(measure(rig, 'Stab', null));
+    }
+    if (window.__resid.length) {
+      const r = window.__resid;
+      entry.resid = { n: r.length, max: +Math.max(...r).toFixed(3), mean: +(r.reduce((a,b)=>a+b,0)/r.length).toFixed(3) };
+      window.__resid = [];
+    }
+    report.rigs.push(entry);
+    scene.remove(root);
+  } catch (e) { report.rigs.push({ file, error: String(e).slice(0,160) }); }
+}
+window.__rigReport = report;
+out.textContent = JSON.stringify(report, null, 1);
+</script></body></html>
