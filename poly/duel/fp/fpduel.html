@@ -1,6 +1,19 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script>
+/* GITHUB PAGES CACHES THIS PAGE FOR 10 MINUTES (cache-control max-age=600). That is how a
+ * deploy that IS live looks unchanged. So the page refuses to run from a cached copy: if
+ * the URL carries no nonce, it reloads itself once with one, which forces a fresh fetch. */
+(function () {
+  var h = location.hash || '';
+  if (h.indexOf('nonce=') >= 0) return;
+  var u = new URL(location.href);
+  if (u.searchParams.get('n')) return;
+  u.searchParams.set('n', String(Date.now()));
+  location.replace(u.toString() + (h ? '' : ''));
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>REALMS — first person duel</title>
@@ -52,7 +65,17 @@
   <div id="tel"></div>
   <div id="msg"></div>
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
-  <div id="hint"><b>LMB</b> attack, aimed by the mouse: up overhead &middot; left / right cuts &middot; down thrust &nbsp;|&nbsp; <b>RMB</b> guard, follows the mouse &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>Q</b> feint &middot; <b>Shift</b> dodge</div>
+  <div id="turn">NEUTRAL</div>
+  <div id="drag">ACCEL</div>
+  <div id="build">BUILD 2026-11-11 11:11</div>
+  <style>
+    #turn { position: fixed; left: 50%; transform: translateX(-50%); top: 34px; font: 700 11px/1 ui-monospace, monospace;
+      letter-spacing: .16em; color: #cbd5e1; z-index: 60; pointer-events: none; text-shadow: 0 1px 3px #000a; }
+    #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
+      letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
+    #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
+  </style>
+  <div id="hint"><b>LMB</b> attack by mouse direction: up overhead &middot; left/right cuts &middot; down thrust &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>R</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge &nbsp;|&nbsp; turn <b>with</b> a cut to accel it, <b>against</b> it to drag</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
 <div id="intro">
@@ -926,6 +949,8 @@ loader.load('./knight.glb', (gltf) => {
   console.error('glb', e);
 });
 
+console.log('REALMS FP BUILD 2026-11-11 11:11');
+
 /* ------------------------------------------------------------------ duel state */
 let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
 const keys = Object.create(null);
@@ -970,6 +995,7 @@ function attackFromClick(kind) {
  * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
 /* motion weight state: the weapon is attached to a body, not to the lens */
+let lookYawVel = 0, lookPitchVel = 0;
 let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase = 0, walkAmp = 0;
 let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
@@ -1071,7 +1097,7 @@ window.__feel = () => {
   return { orbit: n(orbit), dist: duel ? n(duel.dist) : null, guard: rmbDown ? guardZone : null,
     hitStop: n(hitStop), camPunch: n(camPunch), shieldRock: n(shieldRock), lag: [n(vmLagX), n(vmLagY)] };
 };
-let foePrev = 'idle';
+let foePrev = 'idle', lastCalloutId = null;
 /* his attack clips are HELD at the raised frame during the windup, then released fast */
 let foeHold = { key: null, raised: 0, dur: 0, act: null };
 
@@ -1139,6 +1165,8 @@ addEventListener('keydown', (e) => {
   /* WASD is MOVEMENT now, the way it is in every first-person game: W and S close and
    * open the distance, A and D circle the opponent. Combat never touches the keyboard. */
   if (k === 'q' || k === 'f') pendingFeint = true;
+  /* a jab is the answer to a swing already in motion */
+  if (k === 'r') pendingAttack = { kind: 'jab', zone: 'T' };
   /* Shift holds a sprint, so a dodge lives on Space instead of stealing the run */
   if (k === ' ') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
   if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
@@ -1193,7 +1221,10 @@ function updateSwing(me, dt) {
     vmSwing.windup = CFG.ATTACKS[A.kind].windup;
   }
   if (vmSwing.on) {
-    vmSwing.t += dt;
+    /* the same multiplier the rules use, so a dragged cut LOOKS slow and an
+     * accelerated one looks fast: the eye and the resolution always agree */
+    if (me?.attack?.durMul) vmSwing.mul = me.attack.durMul;
+    vmSwing.t += dt / (vmSwing.mul || 1);
     if (vmSwing.t > vmSwing.windup + SWING.strike + SWING.follow + SWING.settle) vmSwing.on = false;
   }
 }
@@ -1331,8 +1362,24 @@ function tick(dt) {
   /* the combat core keeps every one of its rules, but its notion of distance is now
    * measured between two bodies instead of driven by a movement number */
   if (duel) duel.dist = Math.max(0.6, Math.min(6, physGap));
+  /* DRAG AND ACCEL. Turning with the arc speeds the cut up; turning against it slows
+   * the blade down and carries it further. The page only reports which way the wrist
+   * is going relative to that particular cut; the core owns the effect. */
+  let swingTurn = 0;
+  if (me.state === 'windup' && vmSwing.on) {
+    const lineNow = vmSwing.line;
+    const raw = lineNow === 'R' ? lookYawVel / CFG.TURN_FULL
+      : lineNow === 'L' ? -lookYawVel / CFG.TURN_FULL
+      : -lookPitchVel / CFG.TURN_FULL;
+    swingTurn = Math.max(-1, Math.min(1, raw));
+    if (Math.abs(swingTurn) > 0.42) {
+      if (swingTurn > 0 && me.attack && !me.attack.accelled) { me.attack.accelled = true; }
+      if (swingTurn < 0 && me.attack && !me.attack.dragged) { me.attack.dragged = true; }
+    }
+  }
   const ia = {
     move: 0,
+    turn: swingTurn,
     guard: rmbDown || keys[' '] ? guardZone : null,
     press: pressGuard,
     attack: pendingAttack ? pendingAttack.kind : null,
@@ -1361,6 +1408,9 @@ function tick(dt) {
     if (e.type === 'block') { camShake = Math.max(camShake, 0.16); }
     if (e.type === 'guardbreak') { say('GUARD BROKEN'); camShake = 0.6; }
     if (e.type === 'baited') { say('BAITED'); }
+    if (e.type === 'guardtrade') { say('TRADED ON HIS BLADE', 900); parryFlash = 0.5; }
+    if (e.type === 'jabbed') { camShake = Math.max(camShake, 0.3); }
+    if (e.type === 'disarmed') { say('DISARMED', 1500); camShake = 0.7; }
     if (e.type === 'death') {
       const winner = e.who === foe.id ? 0 : 1;
       score[winner]++;
@@ -1373,6 +1423,27 @@ function tick(dt) {
         else newRound();
       }, 1500);
     }
+  }
+
+  /* CHIVALRY CALLOUTS. The game tells you what you just did, the way Chivalry's blue
+   * counter and yellow riposte indicators do, because a mechanic you cannot see is a
+   * mechanic you cannot learn. */
+  if (me.attack && me.attack.id !== lastCalloutId) {
+    lastCalloutId = me.attack.id;
+    if (me.attack.isCounter) { say('COUNTER', 800); parryFlash = Math.max(parryFlash, 0.5); }
+    else if (me.attack.isRiposte) { say('RIPOSTE', 800); }
+  }
+  const turnEl2 = document.getElementById('turn');
+  if (turnEl2) {
+    const t = duel.turn;
+    turnEl2.textContent = t === null ? 'NEUTRAL' : t === me.id ? 'YOUR TURN' : 'HIS TURN';
+    turnEl2.style.color = t === null ? '#cbd5e1' : t === me.id ? '#7dd3fc' : '#fca5a5';
+  }
+  const dragEl = document.getElementById('drag');
+  if (dragEl) {
+    if (me.state === 'windup' && swingTurn > 0.42) { dragEl.textContent = 'ACCEL'; dragEl.style.opacity = 1; }
+    else if (me.state === 'windup' && swingTurn < -0.42) { dragEl.textContent = 'DRAG'; dragEl.style.opacity = 1; }
+    else dragEl.style.opacity = 0;
   }
 
   /* opponent poses follow the rules, so what you see is what is being resolved */
@@ -1712,6 +1783,9 @@ function render(dt) {
   const yawVel = (yaw - prevLook.x) / Math.max(dt, 0.001);
   const pitchVel = (pitch - prevLook.y) / Math.max(dt, 0.001);
   prevLook.x = yaw; prevLook.y = pitch;
+  /* how fast the wrist is moving, in rad/s: this is what drags and accelerates a cut */
+  lookYawVel = lookYawVel * 0.55 + yawVel * 0.45;
+  lookPitchVel = lookPitchVel * 0.55 + pitchVel * 0.45;
   vmLagX = lerp(vmLagX, clampNum(-yawVel * 0.011, -0.032, 0.032), 1 - Math.pow(0.0015, dt));
   vmLagY = lerp(vmLagY, clampNum(-pitchVel * 0.007, -0.028, 0.028), 1 - Math.pow(0.0015, dt));
   /* impact: a landed hit stops the swing dead, a taken hit rocks the shield back */

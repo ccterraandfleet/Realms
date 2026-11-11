@@ -54,6 +54,9 @@ export const CFG = {
     light:  { windup: 0.34, active: 0.08, recover: 0.26, dmg: 12, stam: 10, reach: 2.05, line: 'zone' },
     heavy:  { windup: 0.58, active: 0.11, recover: 0.42, dmg: 24, stam: 20, reach: 2.25, line: 'zone' },
     thrust: { windup: 0.40, active: 0.08, recover: 0.32, dmg: 14, stam: 14, reach: 2.45, line: 'thrust', breaksBlock: true },
+    /* a jab does almost nothing except STOP A SWING ALREADY IN MOTION, which is the
+     * only answer to a committed heavy besides giving ground */
+    jab:    { windup: 0.17, active: 0.05, recover: 0.22, dmg: 4, stam: 7, reach: 1.95, line: 'zone', interrupt: true },
   },
   /* DEFENCE MUST BE THE CHEAPER HALF OF THE EXCHANGE OR SPAMMING IS CORRECT PLAY.
    * At light 14 the defender spent 33 stamina a second to survive what cost the
@@ -62,6 +65,26 @@ export const CFG = {
    * recovers at 40% rate, so the man swinging pays for his own aggression. */
   BLOCK_ABSORB: { light: 6, heavy: 14, thrust: 9 },
   GUARD_REGEN_SCALE: 0.4,   // a held guard still breathes, slowly
+
+  /* ============================ THE CHIVALRY LAYER ============================
+   * Modelled on how Chivalry 2 actually resolves a duel, from the mechanics
+   * documented by its own guides: INITIATIVE is a real turn you hold or lose,
+   * COUNTERS are a block followed by the SAME line (they give stamina back and
+   * guard while they travel), RIPOSTES are a block followed by any attack (faster,
+   * also guarding), a JAB stops a swing already in motion, and DRAGS and ACCELS
+   * let the mouse bend the timing of a cut - dragged against the arc it is slower
+   * and reaches further, swung with the arc it is faster. */
+  COUNTER_WINDOW: 0.34,    // a block this recent, then the same line back, is a counter
+  COUNTER_SPEED: 0.74,     // a counter is far faster than a plain swing
+  COUNTER_REFUND: 12,      // and it REGAINS stamina, which is why stamina wars are winnable
+  RIPOSTE_SPEED: 0.82,
+  OFF_TURN_SLOW: 1.40,     // swinging when it is not your turn is this much slower
+  ACCEL_MIN: 0.68,         // turning INTO the arc can cut the windup to 68%
+  DRAG_MAX: 1.50,          // turning AGAINST the arc can stretch it to 150%
+  DRAG_REACH: 0.34,        // a drag carries the blade further, Chivalry's signature
+  TURN_FULL: 2.4,          // rad/s of body turn that counts as a full drag or accel
+  TRADE_ABSORB: 0.55,      // what a guarding counter/riposte pays to eat a swing
+  DISARM_TIME: 1.7,        // blocking at zero stamina costs you the weapon
   BLOCK_REGEN_PENALTY: 0,  // blocking stops regen entirely
 };
 
@@ -95,6 +118,15 @@ export class Fighter {
     this.guardLockUntil = 0;
     this.feintLock = 0;
     this.forcedStagger = 0;
+    /* chivalry layer */
+    this.blockedAt = -99;      // when this fighter last stopped a swing
+    this.blockedKind = null;   // and with what line, so a counter can match it
+    this.blockedZone = null;
+    this.disarmUntil = -99;
+    this.counters = 0;
+    this.jabbed = 0;
+    this.drags = 0;
+    this.accels = 0;
   }
 
   get alive() { return this.hp > 0; }
@@ -147,21 +179,57 @@ export class Fighter {
   /* effective means the guard has finished crossing to its zone */
   guardUp(clock) { return !!this.guard && clock >= (this.transitionUntil ?? 0); }
 
-  startAttack(kind, zone, clock) {
+  startAttack(kind, zone, clock, opts = {}) {
     if (!this.canAct()) return false;
+    if (clock < this.disarmUntil) return false;
     if (this.guard) return false;
     if (this.feintLock > 0) return false;
     const a = CFG.ATTACKS[kind];
     if (!a) return false;
     if (this.stam < a.stam * 0.5) return false;   // too spent to swing properly
+    if (opts.offTurn && kind === 'heavy') return false;   // a heavy off turn never leaves
     this.spend(a.stam, clock);
+
+    const line = a.line === 'thrust' ? 'T' : zone;
+    /* COUNTER: raise the guard on a line, then throw that SAME line back. Chivalry
+     * gives it stamina back, makes it faster, and lets it guard while it travels,
+     * which is what makes stamina wars and 1vX survivable. */
+    const countered = kind !== 'jab' && this.blockedAt >= clock - CFG.COUNTER_WINDOW &&
+      this.blockedKind === kind && (kind === 'thrust' || this.blockedZone === line);
+    /* RIPOSTE: any attack straight out of a block, already opened by a parry or a
+     * block. Faster than a plain swing, and it guards at the start. */
+    const riposte = !countered && kind !== 'jab' &&
+      (this.riposteUntil > clock || this.blockedAt >= clock - CFG.COUNTER_WINDOW);
+
+    let base = 1;
+    if (countered) { base *= CFG.COUNTER_SPEED; this.stam = Math.min(CFG.STAM_MAX, this.stam + CFG.COUNTER_REFUND); this.counters++; }
+    else if (riposte) base *= CFG.RIPOSTE_SPEED;
+    /* INITIATIVE. Swinging when the turn is not yours is slower, so trading into a
+     * man who already has it loses the race. This is the rule that stops mashing. */
+    if (opts.offTurn) base *= CFG.OFF_TURN_SLOW;
+
     this.state = 'windup';
     this.tState = 0;
     this.lastKind = kind;
     this.attackSeq = (this.attackSeq || 0) + 1;
-    this.attack = { id: this.id * 10000 + this.attackSeq, kind,
-      zone: a.line === 'thrust' ? 'T' : zone, t: 0, resolved: false, deflectedThisSwing: false };
+    this.attack = { id: this.id * 10000 + this.attackSeq, kind, zone: line, t: 0,
+      resolved: false, deflectedThisSwing: false,
+      baseMul: base, durMul: base, isCounter: countered, isRiposte: riposte,
+      guarded: countered || riposte, reachBonus: 0, turn: 0, offTurn: !!opts.offTurn };
     return true;
+  }
+
+  /* DRAG AND ACCEL. The page measures how fast the player is turning and which way
+   * relative to the arc; positive turns into the swing and speeds it up, negative
+   * turns against it, slowing the blade and carrying it further. This is the single
+   * deepest skill in Chivalry's combat and it costs nothing but the wrist. */
+  applySwingTurn(turn) {
+    if (this.state !== 'windup' || !this.attack) return;
+    const t = Math.max(-1, Math.min(1, turn || 0));
+    this.attack.turn = t;
+    const turnMul = t >= 0 ? 1 - (1 - CFG.ACCEL_MIN) * t : 1 + (CFG.DRAG_MAX - 1) * (-t);
+    this.attack.durMul = this.attack.baseMul * turnMul;
+    this.attack.reachBonus = CFG.DRAG_REACH * Math.max(0, -t);
   }
 
   tryFeint(clock) {
@@ -222,6 +290,9 @@ export class Duel {
     this.over = false;
     this.winner = null;
     this.maxTime = opts.maxTime ?? 45;   // a duel that runs long is a draw
+    /* WHO HAS THE TURN. null means neutral: nobody has landed or stopped anything
+     * yet, so both men swing at full speed and the faster line wins the exchange. */
+    this.turn = null;
   }
 
   emit(type, data = {}) { this.events.push({ t: this.clock, type, ...data }); }
@@ -253,6 +324,20 @@ export class Duel {
     const riposte = att.riposteUntil > this.clock;
     let dmg = A.dmg * (riposte ? CFG.RIPOSTE_MULT : 1);
 
+    /* A COUNTER OR RIPOSTE GUARDS WHILE IT TRAVELS. The swing comes in on the same
+     * line this man is already throwing and his blade eats it, for a fraction of the
+     * stamina a static block would cost. Without this, being outnumbered is fatal and
+     * the counter has no reason to exist. */
+    if (def.state === 'windup' && def.attack && def.attack.guarded &&
+        (def.attack.zone === zone || A.line === 'thrust')) {
+      const chip = (CFG.BLOCK_ABSORB[att.attack.kind] ?? 8) * CFG.TRADE_ABSORB;
+      def.stam = Math.max(0, def.stam - chip);
+      def.lastAction = this.clock;
+      this.turn = def.id;
+      this.emit('guardtrade', { who: def.id, vs: att.id, zone, chip: Math.round(chip * 10) / 10 });
+      return;
+    }
+
     if (def.inDodgeIFrames()) {
       att.whiffs++;
       this.emit('dodge', { who: def.id, vs: att.id });
@@ -272,12 +357,15 @@ export class Duel {
         att.stagger(CFG.DEFLECT_STAGGER);
         def.stam = Math.min(CFG.STAM_MAX, def.stam + CFG.PARRY_REFUND);
         def.riposteUntil = this.clock + CFG.RIPOSTE_WINDOW;
+        def.blockedAt = this.clock; def.blockedKind = att.attack.kind; def.blockedZone = zone;
+        this.turn = def.id;                     // the deflector takes the turn
         this.emit('parry', { who: def.id, vs: att.id, zone });
         return;
       }
       if (A.breaksBlock) {
         def.guard = null;
         def.stagger(CFG.GUARD_BREAK_STAGGER);
+        this.turn = att.id;
         this.emit('guardbreak', { who: def.id, vs: att.id });
         return;
       }
@@ -285,13 +373,30 @@ export class Duel {
       const broke = def.stam - chip <= 0;
       def.stam = Math.max(0, def.stam - chip);
       def.lastAction = this.clock;
-      if (broke) { def.exhaust(); this.emit('exhausted', { who: def.id }); }
-      else this.emit('block', { who: def.id, vs: att.id, zone, chip });
+      /* remember the line that was blocked: this is what a counter is built on */
+      def.blockedAt = this.clock; def.blockedKind = att.attack.kind; def.blockedZone = zone;
+      this.turn = def.id;                       // blocking takes the turn
+      if (broke) {
+        /* CHIVALRY'S CRUELEST RULE: block with nothing left and you DROP THE WEAPON */
+        def.exhaust();
+        def.disarmUntil = this.clock + CFG.DISARM_TIME;
+        this.emit('disarmed', { who: def.id, vs: att.id });
+      } else this.emit('block', { who: def.id, vs: att.id, zone, chip });
       return;
     }
 
+    /* A JAB STOPS A SWING THAT IS ALREADY MOVING. It is the only cheap answer to a
+     * committed heavy, and it takes the turn when it lands. */
+    if (A.interrupt && (def.state === 'windup' || def.state === 'active')) {
+      def.stagger(0.34);
+      att.jabbed++;
+      this.turn = att.id;
+      this.emit('jabbed', { who: def.id, vs: att.id });
+      return;
+    }
     def.hp = Math.max(0, def.hp - dmg);
     att.hits++;
+    this.turn = att.id;                         // landing a hit takes the turn
     this.emit('hit', { who: def.id, vs: att.id, dmg: Math.round(dmg), riposte, zone, hp: def.hp });
     if (def.hp <= 0) { this.over = true; this.winner = att; this.emit('death', { who: def.id, vs: att.id }); }
     else if (!def.guard) { def.stagger(0.22); }
@@ -322,7 +427,12 @@ export class Duel {
       else if (!inp.guard && f.guard) f.stopBlock();
       if (inp.dodge && !inp._dodgeLatch && f.canAct()) f.startDodge(inp.dodge, this.clock);
       if (inp.feint && !inp._feintLatch) { if (f.tryFeint(this.clock)) this.resolveFeint(f, o); }
-      if (inp.attack && !inp._attackLatch) f.startAttack(inp.attack, inp.zone, this.clock);
+      if (inp.attack && !inp._attackLatch) {
+        f.startAttack(inp.attack, inp.zone, this.clock,
+          { offTurn: this.turn !== null && this.turn !== f.id });
+      }
+      /* the mouse bends the swing: accel shortens it, drag stretches it */
+      if (f.state === 'windup' && inp.turn) f.applySwingTurn(inp.turn);
 
       /* STATE MACHINE */
       if (f.state === 'stagger') {
@@ -332,11 +442,15 @@ export class Duel {
       } else if (f.state === 'dodge') {
         if (f.tState >= CFG.DODGE_TIME) { f.state = 'idle'; f.tState = 0; }
       } else if (f.state === 'windup') {
-        f.attack.t += dt;
+        /* durMul is the swing's own clock rate: a counter or an accel runs it faster,
+         * a drag or an off-turn swing runs it slower, and the VISUAL swing reads this
+         * same number so what you see always matches what is being resolved */
+        f.attack.t += dt / (f.attack.durMul || 1);
         if (f.attack.t >= CFG.ATTACKS[f.attack.kind].windup) {
           f.state = 'active'; f.tState = 0;
           const A = CFG.ATTACKS[f.attack.kind];
-          if (!f.attack.resolved && this.dist <= A.reach) {
+          const reach = A.reach * (1 + (f.attack.reachBonus || 0));
+          if (!f.attack.resolved && this.dist <= reach) {
             f.attack.resolved = true;
             this.resolveStrike(f, o);
             if (this.over) return this.events;
