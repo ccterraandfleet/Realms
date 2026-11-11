@@ -935,6 +935,17 @@ let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = fa
  * left and right = the two side cuts, down = thrust. The guard follows the mouse the same
  * way, so the hand that aims the cut also aims the block. */
 let rmbDown = false, lastZone = 'T', orbit = 0;
+/* THIS IS A PLACE, NOT A DUEL STAGE. The old build faked movement by moving a single
+ * number (the gap) so there was nothing to walk around in. Now the player and the
+ * opponent are both real bodies with positions in the world, the camera rides the
+ * player, and the duelling rules read the ACTUAL distance between the two bodies. */
+const playerPos = new THREE.Vector3(0, 0, 4.2);
+const playerVel = new THREE.Vector3();
+const foeVel = new THREE.Vector3();
+let foeCircle = 1, foeCircleT = 0, physGap = 4.2;
+/* the wall ring is at radius ARENA_R (10.5); a body stops just inside it */
+const WALK_R = ARENA_R - 0.8;
+const WALK = 4.3, SPRINT = 7.1;
 const mouseHist = [];          /* {t, dx, dy} so a click knows which way the mouse was going */
 function mouseDir() {
   const now = performance.now();
@@ -963,6 +974,12 @@ let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase
 let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+window.__where = () => ({
+  x: +playerPos.x.toFixed(2), z: +playerPos.z.toFixed(2),
+  speed: +Math.hypot(playerVel.x, playerVel.z).toFixed(2),
+  foe: [+foeRoot.position.x.toFixed(2), +foeRoot.position.z.toFixed(2)],
+  gap: +physGap.toFixed(2), duelDist: duel ? +duel.dist.toFixed(2) : null,
+});
 window.__feel = () => {
   const n = (v) => (typeof v === 'number' && isFinite(v) ? +v.toFixed(2) : null);
   return { orbit: n(orbit), dist: duel ? n(duel.dist) : null, guard: rmbDown ? guardZone : null,
@@ -1034,8 +1051,8 @@ addEventListener('keydown', (e) => {
   /* WASD is MOVEMENT now, the way it is in every first-person game: W and S close and
    * open the distance, A and D circle the opponent. Combat never touches the keyboard. */
   if (k === 'q' || k === 'f') pendingFeint = true;
-  if (k === 'shift') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
-  if (k === ' ') pendingDodge = 'back';
+  /* Shift holds a sprint, so a dodge lives on Space instead of stealing the run */
+  if (k === ' ') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
   if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
   if (k >= '1' && k <= '7') {
     const order = ['sentinel', 'turtle', 'flurry', 'breaker', 'feinter', 'blender', 'duelist'];
@@ -1158,8 +1175,11 @@ function frame(now) {
 function tick(dt) {
   if (!duel) return;
   const me = duel.a, foe = duel.b;
+  /* the combat core keeps every one of its rules, but its notion of distance is now
+   * measured between two bodies instead of driven by a movement number */
+  if (duel) duel.dist = Math.max(0.6, Math.min(6, physGap));
   const ia = {
-    move: (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0),
+    move: 0,
     guard: rmbDown || keys[' '] ? guardZone : null,
     press: pressGuard,
     attack: pendingAttack ? pendingAttack.kind : null,
@@ -1168,7 +1188,7 @@ function tick(dt) {
     dodge: pendingDodge,
   };
   const ib = think(brain, foe, me, duel.clock, dt, duel.dist);
-  ib.move = ib.move ?? 0;
+  ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
   const events = duel.step(dt, ia, ib) || [];
   pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
 
@@ -1392,10 +1412,58 @@ function render(dt) {
   if (!duel) return;
   const me = duel.a, foe = duel.b;
 
-  /* A and D circle the man instead of shuffling sideways: the bearing to him swings,
-   * which is what a lock-on duel feels like in For Honor. W and S still set the gap. */
-  const strafe = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
-  orbit += strafe * 1.9 * dt;
+  /* ---------------------------------------------------------------- walking */
+  const ax = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
+  const az = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
+  const strafe = ax;
+  const moveMag = Math.hypot(ax, az);
+  const sprinting = keys['shift'] && moveMag > 0.1;
+  const topSpeed = sprinting ? SPRINT : WALK;
+  /* forward is the way the camera faces, so WASD always means what you are looking at */
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  let wishX = 0, wishZ = 0;
+  if (moveMag > 0.001) {
+    wishX = (fx * az + rx * ax) / moveMag;
+    wishZ = (fz * az + rz * ax) / moveMag;
+  }
+  /* accelerate toward the wish direction rather than snapping: a body has mass */
+  const accel = moveMag > 0.001 ? 26 : 15;
+  playerVel.x = lerp(playerVel.x, wishX * topSpeed, Math.min(1, accel * dt));
+  playerVel.z = lerp(playerVel.z, wishZ * topSpeed, Math.min(1, accel * dt));
+  playerPos.x += playerVel.x * dt;
+  playerPos.z += playerVel.z * dt;
+  /* the wall is a wall */
+  const rr = Math.hypot(playerPos.x, playerPos.z);
+  if (rr > WALK_R) { playerPos.x *= WALK_R / rr; playerPos.z *= WALK_R / rr; playerVel.multiplyScalar(0.2); }
+
+  /* ---------------------------------------------------------------- his body */
+  const fo = foeRoot.position;
+  const gapX = playerPos.x - fo.x, gapZ = playerPos.z - fo.z;
+  physGap = Math.max(0.35, Math.hypot(gapX, gapZ));
+  const toMeX = gapX / physGap, toMeZ = gapZ / physGap;
+  /* he closes when there is room, gives ground when crowded, and works his way around
+   * whenever he is already at a good distance, which is what makes him feel alive */
+  foeCircleT -= dt;
+  if (foeCircleT <= 0) { foeCircleT = 1.4 + Math.random() * 1.8; foeCircle = Math.random() < 0.5 ? -1 : 1; }
+  let wantX = 0, wantZ = 0, foeSpeed = 0;
+  if (physGap > 2.3) { wantX = toMeX; wantZ = toMeZ; foeSpeed = 3.4; }
+  else if (physGap < 1.25) { wantX = -toMeX; wantZ = -toMeZ; foeSpeed = 2.6; }
+  else { wantX = -toMeZ * foeCircle; wantZ = toMeX * foeCircle; foeSpeed = 1.25; }
+  foeVel.x = lerp(foeVel.x, wantX * foeSpeed, Math.min(1, 9 * dt));
+  foeVel.z = lerp(foeVel.z, wantZ * foeSpeed, Math.min(1, 9 * dt));
+  fo.x += foeVel.x * dt;
+  fo.z += foeVel.z * dt;
+  const fr = Math.hypot(fo.x, fo.z);
+  if (fr > WALK_R - 0.3) { fo.x *= (WALK_R - 0.3) / fr; fo.z *= (WALK_R - 0.3) / fr; }
+  /* never stand inside each other */
+  if (physGap < 0.78) {
+    const push = (0.78 - physGap);
+    playerPos.x += toMeX * push; playerPos.z += toMeZ * push;
+    fo.x -= toMeX * push; fo.z -= toMeZ * push;
+  }
+  foeRoot.rotation.y = Math.atan2(gapX, gapZ) + Math.PI;
+  orbit = Math.atan2(playerPos.x - fo.x, playerPos.z - fo.z);
 
   /* camera: eye height, first person, shake, dodge lean */
   const shake = camShake > 0 ? camShake : 0;
@@ -1416,15 +1484,15 @@ function render(dt) {
   camPunch = lerp(camPunch, 0, 1 - Math.pow(0.0000012, dt));
   shieldRock = lerp(shieldRock, 0, 1 - Math.pow(0.0006, dt));
   /* footfalls: the body rises and falls, so the whole view does too */
-  const walking = (keys['arrowup'] || keys['arrowdown']) ? 1 : 0;
+  const walking = Math.min(1, Math.hypot(playerVel.x, playerVel.z) / WALK);
   walkAmp = lerp(walkAmp, walking, 1 - Math.pow(0.02, dt));
-  walkPhase += dt * 8.4;
+  walkPhase += dt * (sprinting ? 12.5 : 8.4);
   const bob = Math.sin(walkPhase) * 0.012 * walkAmp;
 
   camera.position.set(
-    Math.sin(performance.now() / 1000 * 11) * shake * 0.035 + lean * -0.35,
+    playerPos.x + Math.sin(performance.now() / 1000 * 11) * shake * 0.035 + lean * -0.35,
     1.68 + Math.cos(performance.now() / 1000 * 13) * shake * 0.03 + bob,
-    -Math.abs(lean) * -0.12);
+    playerPos.z - Math.abs(lean) * -0.12);
 
 
   camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + (shake * 0.02) - strafe * 0.022, 'YXZ');
@@ -1433,10 +1501,7 @@ function render(dt) {
   /* the opponent stands at the duel's distance, always facing you */
   const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
   /* (circling is computed above, before the camera needs it) */
-  const bearing = yaw + orbit;
-  foeRoot.position.set(Math.sin(bearing) * -d, 0, Math.cos(bearing) * -d);
-  foeRoot.rotation.y = bearing + Math.PI;
-  if (foeMixer) foeMixer.update(dt);
+if (foeMixer) foeMixer.update(dt);
 
   /* viewmodel */
   const target = targetPose(me, duel.clock);
