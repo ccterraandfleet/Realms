@@ -73,6 +73,11 @@ const $ = (s) => document.querySelector(s);
 
 /* ------------------------------------------------------------------ renderer */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -82,138 +87,475 @@ renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x8fb4cf);
-scene.fog = new THREE.Fog(0x8fb4cf, 26, 120);
+const SKY_TOP = 0x4a86c8, SKY_HOR = 0xdfe9e6;
+scene.background = new THREE.Color(SKY_HOR);
+scene.fog = new THREE.Fog(0xc9d8d8, 62, 275);
 
-const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 400);
-camera.position.set(0, 1.68, 0);
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 500);
 
-scene.add(new THREE.HemisphereLight(0xbdd7ee, 0x5c6b45, 1.15));
-const sun = new THREE.DirectionalLight(0xffedd2, 2.2);
-sun.position.set(-14, 22, 10);
-sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
-sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
-sun.shadow.bias = -0.0009;
-scene.add(sun);
-
-/* ------------------------------------------------------------------ ground */
-function groundTexture() {
-  const c = document.createElement('canvas'); c.width = c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#6f7a4a'; g.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 5200; i++) {
-    const x = Math.random() * 256, y = Math.random() * 256, r = Math.random() * 2.2;
-    const v = 0.72 + Math.random() * 0.5;
-    g.fillStyle = `rgba(${Math.round(110 * v)},${Math.round(122 * v)},${Math.round(70 * v)},0.55)`;
-    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(48, 48);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+/* sky dome: a real gradient, because one flat background colour reads as a wall */
+{
+  const m = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color(SKY_TOP) }, hor: { value: new THREE.Color(SKY_HOR) } },
+    vertexShader: 'varying float vy; void main(){ vy = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'varying float vy; uniform vec3 top; uniform vec3 hor; void main(){ float t = clamp(vy * 1.4 + 0.10, 0.0, 1.0); gl_FragColor = vec4(mix(hor, top, t), 1.0); }',
+  });
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(260, 24, 16), m));
 }
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(300, 300),
-  new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 0.96 }));
-ground.rotation.x = -Math.PI / 2;
+
+/* light: warm key from the west, cold fill, thin blue rim to separate silhouettes */
+scene.add(new THREE.HemisphereLight(0xbcd9f0, 0x59684a, 0.92));
+const sun = new THREE.DirectionalLight(0xfff1d8, 2.6);
+sun.position.set(24, 30, 15);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -14; sun.shadow.camera.right = 14;
+sun.shadow.camera.top = 14; sun.shadow.camera.bottom = -14;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 95;
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+const rim = new THREE.DirectionalLight(0x9fc4ff, 0.6);
+rim.position.set(-20, 12, -24);
+scene.add(rim);
+
+/* ---------------------------------------------------------------- the ground
+ * Faceted terrain, not a plane. This project's whole look is flat-shaded facets
+ * carrying the colour, and a smooth ground makes every rock and tree standing on it
+ * read as pasted on. Two hash octaves of height plus a ridge to the north, and the
+ * arena floor is flattened exactly to zero so no duel is ever fought on a slope. */
+const FIELD = 132, SEGS = 84;
+function hash2(x, y) { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); }
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+}
+function heightAt(x, z) {
+  const r = Math.hypot(x, z);
+  let h = (vnoise(x * 0.045, z * 0.045) - 0.5) * 5.0
+        + (vnoise(x * 0.13, z * 0.13) - 0.5) * 1.4
+        + (vnoise(x * 0.34, z * 0.34) - 0.5) * 0.42;
+  h += Math.max(0, 1 - Math.abs((z + 64) / 30)) * (vnoise(x * 0.055, 3.3) * 8 + 3.4);
+  const flat = Math.min(1, Math.max(0, (r - 9.5) / 9.5));
+  return h * flat;
+}
+const PAL = {
+  grass: [0x84a244, 0x77983f, 0x93ae4c, 0x6b8c39],
+  dry: [0xa8ab4e, 0x9a9e47],
+  earth: [0x7a6742, 0x8a7450],
+  worn: [0x7e9a44, 0x71903c, 0x6d8a3a, 0x7f6c48],
+  stone: [0x85888c, 0x76797d],
+};
+function groundMesh() {
+  const pos = [], col = [], c = new THREE.Color();
+  const step = FIELD / SEGS;
+  const at = (i, j) => { const x = -FIELD / 2 + i * step, z = -FIELD / 2 + j * step; return [x, heightAt(x, z), z]; };
+  for (let j = 0; j < SEGS; j++) {
+    for (let i = 0; i < SEGS; i++) {
+      const a = at(i, j), b = at(i + 1, j), d = at(i + 1, j + 1), e = at(i, j + 1);
+      for (const tri of [[a, b, d], [a, d, e]]) {
+        const [p0, p1, p2] = tri;
+        const slope = Math.abs(p1[1] - p0[1]) + Math.abs(p2[1] - p0[1]) + Math.abs(p2[1] - p1[1]);
+        const r = Math.hypot((p0[0] + p1[0] + p2[0]) / 3, (p0[2] + p1[2] + p2[2]) / 3);
+        const n = hash2(Math.round(p0[0] * 3.1), Math.round(p0[2] * 2.7));
+        let fam = PAL.grass;
+        if (slope > 1.35) fam = PAL.stone;
+        else if (r > 40 && n > 0.58) fam = PAL.dry;
+        else if (r < 13) fam = PAL.worn;
+        c.setHex(fam[Math.floor(n * fam.length) % fam.length]).multiplyScalar(0.9 + n * 0.18);
+        for (const q of tri) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); }
+      }
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, flatShading: true }));
+}
+const ground = groundMesh();
 ground.receiveShadow = true;
 scene.add(ground);
 
-/* a ring of stone so the duel reads as a place, not a void */
-const stone = new THREE.MeshStandardMaterial({ color: 0x9aa0a2, roughness: 0.9 });
-for (let i = 0; i < 22; i++) {
-  const a = (i / 22) * Math.PI * 2;
-  if (Math.abs(Math.sin(a)) < 0.22 && Math.cos(a) < 0) continue;
-  const h = 0.5 + Math.random() * 0.35;
-  const b = new THREE.Mesh(new THREE.BoxGeometry(0.9 + Math.random() * 0.5, h, 0.6), stone);
-  b.position.set(Math.cos(a) * 9.2, h / 2, Math.sin(a) * 9.2);
-  b.rotation.y = -a; b.castShadow = true; b.receiveShadow = true;
-  scene.add(b);
+/* ---------------------------------------------------------------- the field dressing */
+const swayers = [];   /* banners and flames, stepped every frame */
+const stoneMat = new THREE.MeshStandardMaterial({ color: 0x8b8f92, roughness: 0.92, flatShading: true });
+const stoneDark = new THREE.MeshStandardMaterial({ color: 0x6f7478, roughness: 0.94, flatShading: true });
+const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 1 });
+const ironMat = new THREE.MeshStandardMaterial({ color: 0x3b4046, metalness: 0.6, roughness: 0.55 });
+
+/* conifers: three stacked cones on a trunk, the reference look for this project */
+function conifer(x, z, s, tint) {
+  const g = new THREE.Group();
+  const h = heightAt(x, z);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.11 * s, 0.17 * s, 1.5 * s, 5), woodMat);
+  trunk.position.y = 0.75 * s;
+  g.add(trunk);
+  const leafMat = new THREE.MeshStandardMaterial({ color: tint, roughness: 1, flatShading: true });
+  for (let i = 0; i < 3; i++) {
+    const c = new THREE.Mesh(new THREE.ConeGeometry((1.25 - i * 0.3) * s, (1.7 - i * 0.32) * s, 6), leafMat);
+    c.position.y = (1.5 + i * 0.85) * s;
+    c.castShadow = true;
+    g.add(c);
+  }
+  g.position.set(x, h, z);
+  g.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(g);
+  return g;
 }
-/* treeline for depth */
-const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 1 });
-const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f5b33, roughness: 1 });
-for (let i = 0; i < 46; i++) {
-  const a = Math.random() * Math.PI * 2, r = 16 + Math.random() * 46;
+const TREE_TINTS = [0x35592f, 0x2f5230, 0x3d6335, 0x2b4a2c, 0x40663a];
+for (let i = 0; i < 150; i++) {
+  const a = Math.random() * Math.PI * 2;
+  const r = 15 + Math.pow(Math.random(), 0.65) * 52;
   const x = Math.cos(a) * r, z = Math.sin(a) * r;
-  const t = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.6, 5), trunkMat);
-  t.position.set(x, 0.8, z); scene.add(t);
-  const c = new THREE.Mesh(new THREE.ConeGeometry(1.15 + Math.random() * 0.5, 2.8 + Math.random() * 1.6, 6), leafMat);
-  c.position.set(x, 2.2, z); c.castShadow = true; scene.add(c);
-}
-/* two braziers, warm light on the fighter's armour */
-for (const sx of [-4.4, 4.4]) {
-  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.5, 6), trunkMat);
-  post.position.set(sx, 0.75, -2.4); scene.add(post);
-  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.16, 0.22, 8),
-    new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.7, roughness: 0.5 }));
-  bowl.position.set(sx, 1.55, -2.4); scene.add(bowl);
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xffb85c }));
-  flame.position.set(sx, 1.68, -2.4); scene.add(flame);
-  const pl = new THREE.PointLight(0xffa758, 2.6, 9, 2);
-  pl.position.set(sx, 1.7, -2.4); scene.add(pl);
+  if (z < -22 && Math.abs(x) < 9) continue;                 /* keep the sightline to the keep clear */
+  if (vnoise(x * 0.07, z * 0.07) < 0.34 && r < 40) continue; /* clearings */
+  conifer(x, z, 0.8 + Math.random() * 0.85, TREE_TINTS[i % TREE_TINTS.length]);
 }
 
-/* ------------------------------------------------------------------ the sword in your hands */
-/* A METAL WITH NO ENVIRONMENT MAP RENDERS BLACK. metalness 0.95 with nothing to
- * reflect gave a sword that was in frame and invisible. The viewmodel gets its own
- * small light, and the blade is calmer metal so it reads as polished steel. */
-const steel = new THREE.MeshStandardMaterial({ color: 0xdfe7ef, metalness: 0.55, roughness: 0.34 });
-const vmLight = new THREE.PointLight(0xfff4e2, 2.4, 2.6, 2);
-vmLight.position.set(0.15, 0.05, 0.28);
-const gripMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.95 });
-const brass = new THREE.MeshStandardMaterial({ color: 0xb08d4a, metalness: 0.8, roughness: 0.35 });
-const skin = new THREE.MeshStandardMaterial({ color: 0xb98a63, roughness: 0.85 });
+/* the outer treeline: the horizon needs a wall of trees or the top of the frame is
+ * empty sky and the whole scene reads as a field with nothing behind it */
+for (let i = 0; i < 130; i++) {
+  const a = Math.random() * Math.PI * 2;
+  const r = 21 + Math.pow(Math.random(), 0.5) * 22;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (z < -30 && Math.abs(x) < 12) continue;        /* leave the keep in view */
+  conifer(x, z, 1.25 + Math.random() * 1.15, TREE_TINTS[(i + 2) % TREE_TINTS.length]);
+}
+
+/* grass tufts: instanced so 1,400 of them cost one draw call */
+{
+  const n = 1400;
+  const geo = new THREE.ConeGeometry(0.15, 0.46, 3);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x7e9449, roughness: 1, flatShading: true });
+  const inst = new THREE.InstancedMesh(geo, mat, n);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  const col = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, r = 5 + Math.pow(Math.random(), 0.6) * 58;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    v.set(x, heightAt(x, z) + 0.2, z);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI);
+    sc.setScalar(0.7 + Math.random() * 0.9);
+    m.compose(v, q, sc);
+    inst.setMatrixAt(i, m);
+    col.setHex(i % 3 === 0 ? 0x94ab48 : 0x7f9a3c).multiplyScalar(0.88 + Math.random() * 0.28);
+    inst.setColorAt(i, col);
+  }
+  inst.castShadow = false;
+  scene.add(inst);
+}
+
+/* boulders */
+for (let i = 0; i < 46; i++) {
+  const a = Math.random() * Math.PI * 2, r = 12 + Math.random() * 46;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const s = 0.35 + Math.random() * 1.1;
+  const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(s, 0), Math.random() > 0.5 ? stoneMat : stoneDark);
+  rock.position.set(x, heightAt(x, z) + s * 0.45, z);
+  rock.rotation.set(Math.random(), Math.random() * Math.PI, Math.random());
+  rock.castShadow = true; rock.receiveShadow = true;
+  scene.add(rock);
+}
+
+/* the ring: a ruined curtain wall with four gaps, so the fight has a place */
+const ARENA_R = 10.5;
+for (let i = 0; i < 16; i++) {
+  const a = (i / 16) * Math.PI * 2;
+  if (i % 4 === 0) continue;                       /* gaps at the compass points */
+  const h = 1.05 + (i % 3 === 0 ? 0.55 : 0) + Math.random() * 0.25;
+  const seg = new THREE.Mesh(new THREE.BoxGeometry(3.4, h, 0.62), i % 2 ? stoneMat : stoneDark);
+  seg.position.set(Math.cos(a) * ARENA_R, h / 2, Math.sin(a) * ARENA_R);
+  seg.rotation.y = -a;
+  seg.castShadow = true; seg.receiveShadow = true;
+  scene.add(seg);
+  /* capstones, because a bare box top reads as a fence */
+  for (let k = -1; k <= 1; k++) {
+    if (Math.random() < 0.25) continue;
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.22, 0.7), stoneMat);
+    cap.position.set(Math.cos(a) * ARENA_R + Math.cos(a + Math.PI / 2) * k * 1.05, h + 0.11, Math.sin(a) * ARENA_R + Math.sin(a + Math.PI / 2) * k * 1.05);
+    cap.rotation.y = -a;
+    cap.castShadow = true;
+    scene.add(cap);
+  }
+}
+
+/* braziers at the four gaps: post, bowl, animated flame, embers, and a real light */
+const flames = [];
+function brazier(x, z) {
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 1.35, 6), woodMat);
+  post.position.y = 0.68;
+  g.add(post);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.15, 0.24, 8), ironMat);
+  bowl.position.y = 1.42;
+  g.add(bowl);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.52, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffb457, transparent: true, opacity: 0.92 }));
+  flame.position.y = 1.78;
+  g.add(flame);
+  const core = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 5),
+    new THREE.MeshBasicMaterial({ color: 0xfff2c4 }));
+  core.position.y = 1.7;
+  g.add(core);
+  const pl = new THREE.PointLight(0xffa552, 3.2, 11, 2);
+  pl.position.y = 1.85;
+  g.add(pl);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  flames.push({ flame, core, pl, phase: Math.random() * 6.28 });
+}
+for (let i = 0; i < 4; i++) {
+  const a = (i / 4) * Math.PI * 2;
+  brazier(Math.cos(a) * (ARENA_R - 0.9), Math.sin(a) * (ARENA_R - 0.9));
+}
+
+/* banners: your colours on your side, theirs opposite */
+function banner(x, z, colour) {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 3.1, 6), woodMat);
+  pole.position.y = 1.55;
+  g.add(pole);
+  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 1.35, 6, 4),
+    new THREE.MeshStandardMaterial({ color: colour, roughness: 0.95, side: THREE.DoubleSide }));
+  cloth.position.set(0.46, 2.32, 0);
+  g.add(cloth);
+  g.position.set(x, heightAt(x, z), z);
+  scene.add(g);
+  swayers.push({ cloth, phase: Math.random() * 6.28 });
+}
+banner(-4.6, -7.4, 0x2f6fb8);
+banner(4.6, -7.4, 0xb03a2e);
+
+/* the keep on the ridge: something to fight in front of, and a reason to look up */
+{
+  const keep = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(6.4, 8.6, 6.4), stoneDark);
+  body.position.y = 4.3;
+  keep.add(body);
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.4, 10.4, 8), stoneMat);
+    t.position.set(sx * 3.3, 5.2, sz * 3.3);
+    keep.add(t);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(1.7, 2.5, 8),
+      new THREE.MeshStandardMaterial({ color: 0x2f6fb8, roughness: 0.85, flatShading: true }));
+    roof.position.set(sx * 3.3, 11.6, sz * 3.3);
+    keep.add(roof);
+  }
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(4.9, 3.6, 8),
+    new THREE.MeshStandardMaterial({ color: 0x2f6fb8, roughness: 0.85, flatShading: true }));
+  roof.position.y = 10.4;
+  keep.add(roof);
+  keep.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } });
+  keep.position.set(0, heightAt(0, -58) - 0.4, -58);
+  scene.add(keep);
+}
+
+/* flying dust in the air, which is the cheapest way to make a still frame live */
+{
+  const n = 220, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    pos[i * 3] = (Math.random() - 0.5) * 40;
+    pos[i * 3 + 1] = Math.random() * 9 + 0.3;
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 40;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const dust = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xf3ead8, size: 0.035, transparent: true, opacity: 0.5, depthWrite: false }));
+  dust.name = 'dust';
+  scene.add(dust);
+}
+
+function stepWorld(t) {
+  for (const f of flames) {
+    const k = 1 + Math.sin(t * 9 + f.phase) * 0.12 + Math.sin(t * 21 + f.phase) * 0.06;
+    f.flame.scale.set(k, 1 / k * (0.9 + Math.sin(t * 13 + f.phase) * 0.1), k);
+    f.core.scale.setScalar(0.9 + Math.sin(t * 17 + f.phase) * 0.12);
+    f.pl.intensity = 3.0 + Math.sin(t * 11 + f.phase) * 0.7;
+  }
+  for (const s of swayers) {
+    s.cloth.rotation.y = Math.sin(t * 1.6 + s.phase) * 0.16;
+    s.cloth.position.x = 0.46 + Math.sin(t * 1.9 + s.phase) * 0.02;
+  }
+  const dust = scene.getObjectByName('dust');
+  if (dust) dust.rotation.y = t * 0.012;
+}
+/* ---------------------------------------------------------------- what you hold
+ * The viewmodel is on screen 100% of the time, so it carries the read: steel with a
+ * diamond section that catches the key light, a wrapped grip and leather bands, a
+ * gloved fist with fingers, and a plank shield with an iron rim, an iron boss and
+ * your own crown painted on it. All primitives: no asset cost, no pop-in. */
+const steel = new THREE.MeshStandardMaterial({ color: 0xdbe4ee, metalness: 0.95, roughness: 0.22 });
+const steelDark = new THREE.MeshStandardMaterial({ color: 0x8d99a6, metalness: 0.85, roughness: 0.42 });
+const gripMat = new THREE.MeshStandardMaterial({ color: 0x4a3423, roughness: 0.92 });
+const leather = new THREE.MeshStandardMaterial({ color: 0x5d4630, roughness: 0.95 });
+const brass = new THREE.MeshStandardMaterial({ color: 0xb08d4a, metalness: 0.78, roughness: 0.33 });
+const glove = new THREE.MeshStandardMaterial({ color: 0x6b5136, roughness: 0.9 });
 const linen = new THREE.MeshStandardMaterial({ color: 0x4d5a66, roughness: 1 });
 
-const hand = new THREE.Group();          // everything the player holds
+/* A metal with nothing to reflect renders black, which is how the first sword ended up
+ * invisible while technically in frame. A 32x64 gradient probe is enough to give every
+ * blade a horizon and a sky. */
+try {
+  const cv = document.createElement('canvas'); cv.width = 32; cv.height = 64;
+  const cx = cv.getContext('2d');
+  const grd = cx.createLinearGradient(0, 0, 0, 64);
+  grd.addColorStop(0, '#7fa8cc'); grd.addColorStop(0.5, '#eef3f6'); grd.addColorStop(1, '#4a4235');
+  cx.fillStyle = grd; cx.fillRect(0, 0, 32, 64);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromEquirectangular(tex).texture;
+  pmrem.dispose();
+} catch (e) { /* a missing environment only costs shine, never the page */ }
+
+const vmLight = new THREE.PointLight(0xfff2df, 1.6, 2.2, 2);
+vmLight.position.set(0.14, 0.1, 0.18);
+
+const hand = new THREE.Group();
 camera.add(hand);
-camera.add(vmLight);
+hand.add(vmLight);
 scene.add(camera);
 
 const sword = new THREE.Group();
-const blade = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.94, 0.011), steel);
-blade.position.y = 0.55; blade.castShadow = true; sword.add(blade);
-const tip = new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.13, 4), steel);
-tip.position.y = 1.08; sword.add(tip);
-const guard = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.028, 0.034), brass);
+const bladeGeo = new THREE.CylinderGeometry(0.014, 0.03, 0.84, 4, 1);
+bladeGeo.translate(0, 0.42, 0);
+bladeGeo.rotateY(Math.PI / 4);
+const blade = new THREE.Mesh(bladeGeo, steel);
+blade.scale.z = 0.4;                        /* flatten the diamond into a blade section */
+sword.add(blade);
+const fuller = new THREE.Mesh(new THREE.BoxGeometry(0.007, 0.66, 0.004), steelDark);
+fuller.position.set(0, 0.4, 0.011);
+sword.add(fuller);
+const tip = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.1, 4), steel);
+tip.rotation.y = Math.PI / 4; tip.scale.z = 0.4; tip.position.set(0, 0.88, 0);
+sword.add(tip);
+const guard = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.025, 0.036), brass);
+guard.position.y = 0.004;
 sword.add(guard);
-const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.023, 0.17, 6), gripMat);
-grip.position.y = -0.09; sword.add(grip);
-const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 6), brass);
-pommel.position.y = -0.18; sword.add(pommel);
-/* VIEWMODEL PROPORTIONS, MEASURED NOT GUESSED. At fov 72 the first attempt put a
- * 0.94-unit blade 0.6 from the eye, so the tip projected to NDC y=1.65 and the whole
- * blade sat off the top of the screen; the frame showed a shield boss and nothing
- * else. Scaled to 0.66 and seated at the hand, the tip lands near NDC (0.18, 0.65)
- * and the fist near (0.39, -0.65), which is a weapon you can see yourself holding. */
-sword.scale.setScalar(0.66);
+for (const s of [-1, 1]) {
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), brass);
+  knob.position.set(s * 0.112, 0.004, 0);
+  sword.add(knob);
+}
+const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.021, 0.15, 8), gripMat);
+grip.position.y = -0.078;
+sword.add(grip);
+for (let i = 0; i < 5; i++) {
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0212, 0.0212, 0.011, 8), leather);
+  band.position.y = -0.028 - i * 0.026;
+  sword.add(band);
+}
+const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.026, 10, 8), brass);
+pommel.position.y = -0.155;
+sword.add(pommel);
+
+/* forearm and gloved fist */
+const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.068, 0.4, 7), linen);
+arm.position.set(0.02, -0.3, 0.07);
+arm.rotation.set(0.5, 0, -0.12);
+sword.add(arm);
+const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.072, 0.055, 7), leather);
+cuff.position.set(0.03, -0.135, 0.03);
+cuff.rotation.set(0.5, 0, -0.12);
+sword.add(cuff);
+const fist = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.095, 0.088), glove);
+fist.position.set(0, -0.075, 0.014);
+sword.add(fist);
+for (let i = 0; i < 4; i++) {
+  const fg = new THREE.Mesh(new THREE.CylinderGeometry(0.0115, 0.0115, 0.054, 5), glove);
+  fg.position.set(-0.029 + i * 0.0195, -0.052, 0.038);
+  fg.rotation.x = 1.35;
+  sword.add(fg);
+}
+const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.0135, 0.0135, 0.046, 5), glove);
+thumb.position.set(0.04, -0.062, 0.022);
+thumb.rotation.set(0.9, 0, -0.7);
+sword.add(thumb);
 sword.position.set(0.26, -0.32, -0.56);
 sword.rotation.set(-0.16, 0.16, 0.22);
 hand.add(sword);
 
-/* forearm + fist, so it reads as a body and not a floating weapon */
-const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.062, 0.44, 6), linen);
-arm.position.set(0.10, -0.12, 0.30); arm.rotation.set(1.28, 0, 0.16); arm.castShadow = true; sword.add(arm);
-const fist = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.10, 0.09), skin);
-fist.position.set(0, -0.07, 0.005); sword.add(fist);
-
+/* shield: six planks, an iron rim, an iron boss, and the crown you also carry on banners */
 const shield = new THREE.Group();
-const board = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.52, 0.045),
-  new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.95 }));
-board.castShadow = true; shield.add(board);
-const rim = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.56, 0.02), brass);
-rim.position.z = -0.02; shield.add(rim);
-const boss = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), steel);
-boss.position.z = 0.05; boss.scale.z = 0.6; shield.add(boss);
-shield.position.set(-0.30, -0.34, -0.60);
-shield.rotation.set(0.1, 0.42, -0.10);
+const plankW = 0.068;
+for (let i = 0; i < 6; i++) {
+  const p = new THREE.Mesh(
+    new THREE.BoxGeometry(plankW - 0.004, 0.5 - Math.abs(i - 2.5) * 0.014, 0.038),
+    new THREE.MeshStandardMaterial({ color: i % 2 ? 0x7b5c3c : 0x87684a, roughness: 0.93, flatShading: true }));
+  p.position.set((i - 2.5) * plankW, 0, 0);
+  shield.add(p);
+}
+for (const [w, h2, x, y] of [[0.42, 0.024, 0, 0.248], [0.42, 0.024, 0, -0.248], [0.024, 0.5, 0.2, 0], [0.024, 0.5, -0.2, 0]]) {
+  const r = new THREE.Mesh(new THREE.BoxGeometry(w, h2, 0.05), steelDark);
+  r.position.set(x, y, 0.004);
+  shield.add(r);
+}
+const boss = new THREE.Mesh(new THREE.SphereGeometry(0.062, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), steel);
+boss.rotation.x = Math.PI / 2;
+boss.position.z = 0.026;
+shield.add(boss);
+{
+  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
+  const cx = cv.getContext('2d');
+  cx.fillStyle = '#2f6fb8';
+  cx.beginPath();
+  cx.moveTo(30, 88); cx.lineTo(98, 88); cx.lineTo(92, 42);
+  cx.lineTo(76, 60); cx.lineTo(64, 32); cx.lineTo(52, 60); cx.lineTo(36, 42);
+  cx.closePath(); cx.fill();
+  cx.fillStyle = '#eef4f8'; cx.fillRect(30, 92, 68, 7);
+  const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 4;
+  const paint = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3),
+    new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.9 }));
+  paint.position.z = 0.041;
+  shield.add(paint);
+}
+shield.position.set(-0.3, -0.34, -0.6);
+shield.rotation.set(0.1, 0.42, -0.1);
 hand.add(shield);
 
-/* ------------------------------------------------------------------ the opponent */
+/* ---------------------------------------------------------------- sparks and dust
+ * Cheap, pooled, and only ever spawned by a rule that actually fired, so the effect
+ * is evidence of an event rather than decoration. */
+const sparkGeo = new THREE.SphereGeometry(0.013, 4, 3);
+const sparkMatBright = new THREE.MeshBasicMaterial({ color: 0xffe6a8 });
+const dustMat = new THREE.MeshBasicMaterial({ color: 0xcbbfa6, transparent: true, opacity: 0.55 });
+const bits = [];
+function burst(kind, at) {
+  const n = kind === 'parry' ? 18 : 10;
+  const mat = kind === 'parry' ? sparkMatBright : dustMat;
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(sparkGeo, mat);
+    m.position.copy(at);
+    m.position.x += (Math.random() - 0.5) * 0.2;
+    m.position.y += (Math.random() - 0.5) * 0.3;
+    scene.add(m);
+    bits.push({
+      m,
+      v: new THREE.Vector3((Math.random() - 0.5) * (kind === 'parry' ? 4.2 : 2.2),
+        Math.random() * (kind === 'parry' ? 3.4 : 1.2) + 0.4,
+        (Math.random() - 0.5) * (kind === 'parry' ? 4.2 : 2.2)),
+      life: kind === 'parry' ? 0.55 : 0.8,
+      max: kind === 'parry' ? 0.55 : 0.8,
+      g: kind === 'parry' ? 9 : 2,
+    });
+  }
+}
+function stepBits(dt) {
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const b = bits[i];
+    b.v.y -= b.g * dt;
+    b.m.position.addScaledVector(b.v, dt);
+    b.life -= dt;
+    const k = Math.max(0.01, b.life / b.max);
+    b.m.scale.setScalar(k * 1.5);
+    if (b.life <= 0) { scene.remove(b.m); bits.splice(i, 1); }
+  }
+}
+/* the opponent's rig, mixer and clip table live here; the loader below fills them */
 let foeModel = null, foeMixer = null, foeActions = {};
 const foeRoot = new THREE.Group();
 scene.add(foeRoot);
@@ -451,8 +793,17 @@ function tick(dt) {
 
   for (const e of events) {
     if (e.type === 'hit' && e.who === me.id) { camShake = 0.5; hitFlash = 1; }
-    if (e.type === 'hit' && e.who === foe.id) { camShake = 0.22; }
-    if (e.type === 'parry') { parryFlash = 1; say('PARRY'); }
+    if (e.type === 'hit' && e.who === foe.id) {
+      camShake = 0.22;
+      burst('dust', foeRoot.position.clone().add(new THREE.Vector3(0, 1.2, 0)));
+    }
+    if (e.type === 'hit' && e.who === me.id) {
+      burst('dust', camera.position.clone().add(new THREE.Vector3(0, -0.35, -0.9)));
+    }
+    if (e.type === 'parry') {
+      parryFlash = 1; say('PARRY');
+      burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.35, 0)));
+    }
     if (e.type === 'block') { camShake = Math.max(camShake, 0.16); }
     if (e.type === 'guardbreak') { say('GUARD BROKEN'); camShake = 0.6; }
     if (e.type === 'baited') { say('BAITED'); }
@@ -546,6 +897,8 @@ function render(dt) {
   flashEl.style.opacity = parryFlash * 0.5;
   vigEl.style.opacity = hitFlash * 0.8;
 
+  stepBits(dt);
+  stepWorld(performance.now() / 1000);
   renderer.render(scene, camera);
 }
 
