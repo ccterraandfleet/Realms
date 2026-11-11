@@ -44,20 +44,44 @@ export const CFG = {
   MOVE_SPEED: 3.0,
   ATTACK_RANGE: 2.05,      // blades meet at about two paces
   ZONES: ['L', 'R', 'T'],
+  /* ===================== CHIVALRY'S REAL ATTACK PHASES =====================
+   * Pulled from the datamined game data (github.com/Chiv2-Community/chivalry2-weapons,
+   * raw_data/AbilitiesOverride.json, 1037 ability rows, 497 with live values), which is
+   * the same source polehammer.net publishes. CHIVALRY RUNS FOUR PHASES:
+   *
+   *   HOLDING -> WINDUP -> RELEASE -> RECOVERY
+   *
+   * HOLDING is a FIXED 350ms on every weapon in the game and is where the attack is
+   * committed but not yet travelling. WINDUP is when the weapon is drawn with no
+   * hitbox. RELEASE is how long the hitbox is ACTIVE. RECOVERY is the dead time after.
+   *
+   * MY OLD NUMBERS WERE WRONG IN A WAY THAT NO ANIMATION COULD HAVE FIXED. A real
+   * Longsword Slash is hold 350 / windup 225 / release 475 / recovery 800 = 1850ms.
+   * Mine was windup 340 / active 80 / recover 260 = 680ms, with the hitbox live for
+   * only 80ms against their 475ms. Their hitbox is live SIX TIMES longer than mine.
+   * An 80ms window is a tap no matter how pretty the arc is; that is the whole reason
+   * the duel read as scuff. These are the median values per attack family across every
+   * weapon in the game, with the Longsword kept as the reference blade. */
+  HOLD: 0.35,              // fixed for every weapon in Chivalry
   ATTACKS: {
-    /* THE TELEGRAPH HAS TO BE READABLE OR DEFENCE IS A COIN FLIP. A light at 180ms is
-     * faster than human reaction, so nobody can see the zone in time, and a bot
-     * cannot either: measured, light spam won 83-85% of every matchup including
-     * against a dedicated parrier, which is the definition of a broken system.
-     * At 340ms the zone is visible, the guard takes 90ms to cross, and the parry
-     * window still demands a press between 230ms and 90ms before impact. */
-    light:  { windup: 0.34, active: 0.08, recover: 0.26, dmg: 12, stam: 10, reach: 2.05, line: 'zone' },
-    heavy:  { windup: 0.58, active: 0.11, recover: 0.42, dmg: 24, stam: 20, reach: 2.25, line: 'zone' },
-    thrust: { windup: 0.40, active: 0.08, recover: 0.32, dmg: 14, stam: 14, reach: 2.45, line: 'thrust', breaksBlock: true },
+    /* medians across 118-122 real slash/overhead/stab abilities */
+    light:  { hold: 0.35, windup: 0.225, release: 0.475, recovery: 0.800, combo: 0.15, thwack: 0.90,
+              dmg: 40, stam: 10, reach: 2.05, line: 'zone', turnLimit: 45 },
+    heavy:  { hold: 0.35, windup: 0.475, release: 0.500, recovery: 0.950, combo: 0.15, thwack: 0.95,
+              dmg: 60, stam: 20, reach: 2.25, line: 'zone', turnLimit: 48 },
+    thrust: { hold: 0.35, windup: 0.275, release: 0.400, recovery: 0.800, combo: 0.20, thwack: 1.00,
+              dmg: 55, stam: 14, reach: 2.45, line: 'thrust', breaksBlock: true, turnLimit: 45 },
     /* a jab does almost nothing except STOP A SWING ALREADY IN MOTION, which is the
      * only answer to a committed heavy besides giving ground */
-    jab:    { windup: 0.17, active: 0.05, recover: 0.22, dmg: 4, stam: 7, reach: 1.95, line: 'zone', interrupt: true },
+    jab:    { hold: 0.10, windup: 0.17, release: 0.12, recovery: 0.30, combo: 0.12, thwack: 0.25,
+              dmg: 6, stam: 7, reach: 1.95, line: 'zone', interrupt: true, turnLimit: 60 },
   },
+  /* RIPOSTE REPLACES THE WINDUP PHASE ENTIRELY in Chivalry, it does not merely speed it
+   * up: phases become Holding -> Riposte -> Release -> Recovery. A riposte therefore
+   * skips the windup outright, which is why it feels dramatically faster than a swing. */
+  RIPOSTE_WINDUP: 0.0,
+  /* a RIPOSTE and a COUNTER may start attacking this soon after the block */
+  COMBO_GRACE: 0.35,
   /* DEFENCE MUST BE THE CHEAPER HALF OF THE EXCHANGE OR SPAMMING IS CORRECT PLAY.
    * At light 14 the defender spent 33 stamina a second to survive what cost the
    * attacker 21, so the blocker always broke first and light spam won every single
@@ -186,8 +210,12 @@ export class Fighter {
     if (!this.canAct()) return false;
     /* YOU CANNOT START A SWING WHILE MID-SWING. canAct() only excludes stagger, exhausted
      * and dodge, so a held button (or a repeated intent) used to restart the windup every
-     * frame and quietly drain stamina, which made a swing look like it never finished. */
-    if (this.state === 'windup' || this.state === 'active' || this.state === 'recover') return false;
+     * frame and quietly drain stamina, which made a swing look like it never finished.
+     * A COMBO IS THE ONE EXCEPTION: attacking during your own recovery chains, and in
+     * Chivalry the chain replaces recovery with Holding+Combo, so the chained attack
+     * skips the fixed 350ms hold. That is why pressure feels fast and one swing heavy. */
+    const comboing = this.state === 'recover' && !this.attack;
+    if (!comboing && (this.state === 'hold' || this.state === 'windup' || this.state === 'active' || this.state === 'recover')) return false;
     if (clock < this.disarmUntil) return false;
     if (this.guard) return false;
     if (this.feintLock > 0) return false;
@@ -197,6 +225,8 @@ export class Fighter {
     this.spend(a.stam, clock);
 
     const line = a.line === 'thrust' ? 'T' : zone;
+    /* a riposte REPLACES the windup phase entirely, it does not merely speed it up */
+    const ripostingNow = this.riposteUntil > this.clock;
     /* COUNTER: raise the guard on a line, then throw that SAME line back. Chivalry
      * gives it stamina back, makes it faster, and lets it guard while it travels,
      * which is what makes stamina wars and 1vX survivable. */
@@ -210,11 +240,15 @@ export class Fighter {
     let base = 1;
     if (countered) { base *= CFG.COUNTER_SPEED; this.stam = Math.min(CFG.STAM_MAX, this.stam + CFG.COUNTER_REFUND); this.counters++; }
     else if (riposte) base *= CFG.RIPOSTE_SPEED;
-    this.state = 'windup';
+    const holdTime = comboing ? a.combo : a.hold;
+    const windupTime = ripostingNow ? CFG.RIPOSTE_WINDUP : a.windup;
+    this.state = 'hold';
     this.tState = 0;
+    this.hitRecovery = null;
     this.lastKind = kind;
     this.attackSeq = (this.attackSeq || 0) + 1;
     this.attack = { id: this.id * 10000 + this.attackSeq, kind, zone: line, t: 0,
+      holdTime, windupTime, comboing, riposting: ripostingNow, baseWindup: a.windup * base, releaseMul: 1,
       resolved: false, deflectedThisSwing: false,
       baseMul: base, durMul: base, isCounter: countered, isRiposte: riposte,
       guarded: countered || riposte, reachBonus: 0, turn: 0 };
@@ -225,17 +259,28 @@ export class Fighter {
    * relative to the arc; positive turns into the swing and speeds it up, negative
    * turns against it, slowing the blade and carrying it further. This is the single
    * deepest skill in Chivalry's combat and it costs nothing but the wrist. */
+  /* DRAG AND ACCEL, modelled the way Chivalry actually behaves rather than as a single
+   * multiplier on the windup. An ACCEL drives the blade through the arc early, so the
+   * hitbox starts sooner. A DRAG carries the blade ACROSS the release, so it stays live
+   * longer and reaches further, which is why a dragged attack catches a man who has
+   * already moved and why it beats a parry that was timed off the normal arc. */
   applySwingTurn(turn) {
-    if (this.state !== 'windup' || !this.attack) return;
+    if ((this.state !== 'hold' && this.state !== 'windup') || !this.attack) return;
     const t = Math.max(-1, Math.min(1, turn || 0));
+    const accel = Math.max(0, t), drag = Math.max(0, -t);
     this.attack.turn = t;
-    const turnMul = t >= 0 ? 1 - (1 - CFG.ACCEL_MIN) * t : 1 + (CFG.DRAG_MAX - 1) * (-t);
-    this.attack.durMul = this.attack.baseMul * turnMul;
-    this.attack.reachBonus = CFG.DRAG_REACH * Math.max(0, -t);
+    const baseWind = this.attack.baseWindup ?? CFG.ATTACKS[this.attack.kind].windup;
+    this.attack.windupTime = baseWind * (1 - (1 - CFG.ACCEL_MIN) * accel) * (1 + 0.45 * drag);
+    this.attack.releaseMul = 1 + (CFG.DRAG_MAX - 1) * drag;
+    this.attack.reachBonus = CFG.DRAG_REACH * drag;
+    this.attack.durMul = 1;
+    if (accel > 0.2) this.accels++; else if (drag > 0.2) this.drags++;
   }
 
   tryFeint(clock) {
-    if (this.state !== 'windup' || !this.attack) return false;
+    /* the feint window in Chivalry is 175ms and it cancels across the chamber, i.e.
+     * HOLDING and into the windup, not the windup alone */
+    if ((this.state !== 'windup' && this.state !== 'hold') || !this.attack) return false;
     if (this.attack.t < CFG.FEINT_EARLIEST) return false;
     if (this.stam < CFG.FEINT_COST) return false;
     this.spend(CFG.FEINT_COST, clock);
@@ -276,6 +321,19 @@ export class Fighter {
     this.attack = null;
     this.guard = null;
     this.guardBreaks++;
+  }
+
+  /* WHERE THE ATTACK IS, NORMALISED PER PHASE. The first-person viewmodel drives itself
+   * off this, so the blade you see and the hitbox that resolves are the same object in
+   * time instead of two clocks that drift apart. */
+  phaseInfo() {
+    if (!this.attack) return null;
+    const A = CFG.ATTACKS[this.attack.kind];
+    if (this.state === 'hold') return { phase: 'hold', u: Math.min(1, this.attack.t / Math.max(0.001, this.attack.holdTime ?? A.hold)) };
+    if (this.state === 'windup') return { phase: 'windup', u: Math.min(1, this.attack.t / Math.max(0.001, this.attack.windupTime ?? A.windup)) };
+    if (this.state === 'active') return { phase: 'release', u: Math.min(1, this.tState / Math.max(0.001, A.release * (this.attack.releaseMul || 1))) };
+    if (this.state === 'recover') return { phase: 'recover', u: Math.min(1, this.tState / (this.hitRecovery ?? A.recovery)) };
+    return null;
   }
 
   inDodgeIFrames() {
@@ -402,6 +460,8 @@ export class Duel {
     }
     def.hp = Math.max(0, def.hp - dmg);
     att.hits++;
+    /* THWACK: the attacker is locked in the hit for A.thwack, 0.9-1.2s in Chivalry */
+    att.hitRecovery = A.thwack;
     this.turn = att.id;                         // landing a hit takes the turn
     this.emit('hit', { who: def.id, vs: att.id, dmg: Math.round(dmg), riposte, zone, hp: def.hp });
     if (def.hp <= 0) { this.over = true; this.winner = att; this.emit('death', { who: def.id, vs: att.id }); }
@@ -448,30 +508,50 @@ export class Duel {
         if (f.tState >= CFG.EXHAUST_TIME) { f.state = 'idle'; f.tState = 0; }
       } else if (f.state === 'dodge') {
         if (f.tState >= CFG.DODGE_TIME) { f.state = 'idle'; f.tState = 0; }
+      } else if (f.state === 'hold') {
+        /* HOLDING: committed, not yet travelling, 350ms. This is the window where the
+         * player has already chosen and the opponent can still see it coming. */
+        f.attack.t += dt;
+        if (f.attack.t >= (f.attack.holdTime ?? CFG.HOLD)) {
+          f.state = 'windup'; f.tState = 0; f.attack.t = 0;
+          this.emit('windup', { who: f.id, kind: f.attack.kind, zone: f.attack.zone });
+        }
       } else if (f.state === 'windup') {
         /* durMul is the swing's own clock rate: a counter or an accel runs it faster,
          * a drag or an off-turn swing runs it slower, and the VISUAL swing reads this
          * same number so what you see always matches what is being resolved */
         f.attack.t += dt / (f.attack.durMul || 1);
-        if (f.attack.t >= CFG.ATTACKS[f.attack.kind].windup) {
+        if (f.attack.t >= (f.attack.windupTime ?? CFG.ATTACKS[f.attack.kind].windup)) {
           f.state = 'active'; f.tState = 0;
-          const A = CFG.ATTACKS[f.attack.kind];
-          const reach = A.reach * (1 + (f.attack.reachBonus || 0));
-          /* BOTH MEN CAN BE MID-SWING. Land the blades after both have been advanced,
-           * so neither side gets the first slot by array order and a simultaneous
-           * exchange resolves on speed rather than on who the loop happened to visit. */
-          if (!f.attack.resolved) {
-            f.attack.resolved = true;
-            pending.push({ f, o, reach, over: f.attack.t - CFG.ATTACKS[f.attack.kind].windup, who: f.id });
-          }
+          this.emit('release', { who: f.id, kind: f.attack.kind, zone: f.attack.zone });
         }
       } else if (f.state === 'active') {
-        if (f.tState >= CFG.ATTACKS[f.lastKind ?? 'light'].active) {
+        /* RELEASE. The hitbox is live for the WHOLE release phase, so a swing that is
+         * still travelling can catch a man who steps into it, and the strike is judged
+         * on the first frame he is inside the arc rather than on one instant. */
+        const A = CFG.ATTACKS[f.attack.kind];
+        const reach = A.reach * (1 + (f.attack.reachBonus || 0));
+        const relDur = A.release * (f.attack.releaseMul || 1);
+        if (!f.attack.resolved) {
+          if (this.dist <= reach) {
+            f.attack.resolved = true;
+            pending.push({ f, o, reach, over: f.attack.t - (f.attack.windupTime ?? A.windup), who: f.id });
+          } else if (f.tState >= relDur) {
+            f.attack.resolved = true;             // swung the whole arc and caught nothing
+            f.whiffs++;
+            this.emit('outofrange', { who: f.id });
+          }
+        }
+        if (f.tState >= relDur) {
           f.state = 'recover'; f.tState = 0;
-          f.attack = null;
         }
       } else if (f.state === 'recover') {
-        if (f.tState >= CFG.ATTACKS[f.lastKind ?? 'light'].recover) { f.state = 'idle'; f.tState = 0; }
+        const A = CFG.ATTACKS[f.lastKind ?? 'light'];
+        /* THWACK. A landed hit replaces recovery with a long hitstop - Chivalry's is
+         * 900ms to 1.2s, which is where the weight of a connect comes from. A miss
+         * gets plain recovery. */
+        const rec = f.hitRecovery ?? A.recovery;
+        if (f.tState >= rec) { f.state = 'idle'; f.tState = 0; f.hitRecovery = null; f.lastAttackEnd = this.clock; }
       }
 
       /* STAMINA. Regeneration waits for the grace period and stops dead while a

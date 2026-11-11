@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-11 11:22</div>
+  <div id="build">BUILD 2026-11-11 11:32</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -947,7 +947,125 @@ loader.load('./knight.glb', (gltf) => {
   console.error('glb', e);
 });
 
-console.log('REALMS FP BUILD 2026-11-11 11:22');
+console.log('REALMS FP BUILD 2026-11-11 11:32');
+
+/* ============================== SOUND ==============================
+ * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
+ * sounded when this phase begins" about the windup, because sound is how you answer a
+ * blade you are not looking at. Everything here is synthesised with WebAudio, no assets:
+ * a chamber grunt on hold, a whoosh on release, a metallic clang on block or parry, a
+ * wet thud on a hit, and footsteps tied to the walk cycle. */
+let AC = null, master = null, noiseBuf = null, vinylAnalyser = null;
+function audioInit() {
+  if (AC) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    AC = new Ctx();
+    master = AC.createGain();
+    master.gain.value = 0.55;
+    /* a tap on the real output so "is it actually making sound" can be MEASURED
+     * instead of assumed */
+    vinylAnalyser = AC.createAnalyser();
+    vinylAnalyser.fftSize = 2048;
+    master.connect(vinylAnalyser);
+    vinylAnalyser.connect(AC.destination);
+    const n = Math.floor(AC.sampleRate * 1.0);
+    noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+}
+const audioReady = () => AC && AC.state !== 'closed';
+/* distance loudness, so a blade far off is faint and one at your face is not */
+function distGain(dist) { return Math.max(0.12, Math.min(1, 1.35 / (1 + Math.max(0, dist - 1.2) * 0.7))); }
+function noiseSrc() { const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true; return s; }
+
+/* a blade travelling: band-passed noise sweeping down, the classic whoosh */
+function sfxWhoosh(gain = 0.5, dur = 0.34, pitch = 1) {
+  if (!audioReady()) return;
+  const t = AC.currentTime;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 1.1;
+  bp.frequency.setValueAtTime(2400 * pitch, t);
+  bp.frequency.exponentialRampToValueAtTime(420 * pitch, t + dur);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + dur * 0.22);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(bp).connect(g).connect(master);
+  src.start(t); src.stop(t + dur + 0.02);
+}
+/* the chamber: a short breath grunt, low and clipped */
+function sfxGrunt(gain = 0.3) {
+  if (!audioReady()) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(96, t + 0.16);
+  const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 620; f.Q.value = 2;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+  o.connect(f).connect(g).connect(master);
+  o.start(t); o.stop(t + 0.2);
+}
+/* steel on steel. An FM ring measured DEAD SILENT (peak 0.0000 through a tap on the real
+ * output) so it is gone: this is a straight inharmonic stack, the partials set at bell-like
+ * ratios rather than whole multiples, each decaying at its own rate, plus a bright noise
+ * transient at the front for the impact. Boring and reliable beats clever and silent. */
+function sfxClang(gain = 0.4, bright = 1) {
+  if (!audioReady()) return;
+  const t = AC.currentTime;
+  const base = 430 * bright;
+  const partials = [[1, 1.0, 0.55], [2.76, 0.62, 0.34], [5.40, 0.34, 0.22], [8.93, 0.18, 0.14]];
+  for (const [ratio, amp, decay] of partials) {
+    const o = AC.createOscillator();
+    o.type = ratio > 4 ? 'triangle' : 'sine';
+    o.frequency.value = base * ratio;
+    const g = AC.createGain();
+    g.gain.setValueAtTime(Math.max(0.0002, gain * amp), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+    o.connect(g).connect(master);
+    o.start(t); o.stop(t + decay + 0.02);
+  }
+  const src = noiseSrc();
+  const hp = AC.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2200;
+  const ng = AC.createGain();
+  ng.gain.setValueAtTime(Math.max(0.0002, gain * 0.7), t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+  src.connect(hp).connect(ng).connect(master);
+  src.start(t); src.stop(t + 0.1);
+}
+/* a body taking the blow: low thump with a short tear of noise over it */
+function sfxThud(gain = 0.5) {
+  if (!audioReady()) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(120, t);
+  o.frequency.exponentialRampToValueAtTime(46, t + 0.22);
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+  o.connect(g).connect(master); o.start(t); o.stop(t + 0.3);
+  const src = noiseSrc();
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+  const ng = AC.createGain();
+  ng.gain.setValueAtTime(gain * 0.5, t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.13);
+  src.connect(lp).connect(ng).connect(master); src.start(t); src.stop(t + 0.14);
+}
+function sfxStep(gain = 0.16) {
+  if (!audioReady()) return;
+  const t = AC.currentTime;
+  const src = noiseSrc();
+  const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 0.8;
+  const g = AC.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+  src.connect(bp).connect(g).connect(master); src.start(t); src.stop(t + 0.12);
+}
 
 /* ------------------------------------------------------------------ duel state */
 let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
@@ -994,7 +1112,8 @@ function attackFromClick(kind) {
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
 /* motion weight state: the weapon is attached to a body, not to the lens */
 let lookYawVel = 0, lookPitchVel = 0;
-let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase = 0, walkAmp = 0;
+let liveMe = null;
+let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase = 0, walkAmp = 0, lastStepIdx = 0;
 let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1127,6 +1246,7 @@ newRound();
 /* ------------------------------------------------------------------ input */
 const intro = $('#intro');
 intro.addEventListener('click', () => {
+  audioInit();
   intro.style.display = 'none';
   renderer.domElement.requestPointerLock?.();
 });
@@ -1152,6 +1272,7 @@ document.addEventListener('mousemove', (e) => {
 /* ---------------------------------------------------------------- mouse combat */
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mousedown', (e) => {
+  audioInit();
   if (!document.pointerLockElement && !window.__forceInput) return;
   if (e.button === 0) { pendingAttack = attackFromClick('light'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
   if (e.button === 2) { rmbDown = true; pressGuard = true; guardZone = lastZone; e.preventDefault(); }
@@ -1217,35 +1338,36 @@ const P = {
 const SWING = { strike: 0.15, follow: 0.16, settle: 0.34, lead: 0.88 };
 const vmSwing = { id: null, t: 0, on: false, line: 'T', kind: 'light', windup: 0.34 };
 function updateSwing(me, dt) {
+  liveMe = me;
   const A = me?.attack;
   if (A && A.id !== vmSwing.id) {
-    vmSwing.id = A.id; vmSwing.t = 0; vmSwing.on = true;
+    vmSwing.id = A.id;
     vmSwing.kind = A.kind;
     vmSwing.line = A.kind === 'thrust' ? 'T' : A.zone;
-    vmSwing.windup = CFG.ATTACKS[A.kind].windup;
   }
-  if (vmSwing.on) {
-    /* the same multiplier the rules use, so a dragged cut LOOKS slow and an
-     * accelerated one looks fast: the eye and the resolution always agree */
-    if (me?.attack?.durMul) {
-      vmSwing.mul = me.attack.durMul;
-      /* the faster the blade is actually travelling, the hotter the ribbon burns */
-      vmSwing.trail = Math.max(0.45, Math.min(1.35, 1.6 - me.attack.durMul * 0.62));
-    }
-    vmSwing.t += dt / (vmSwing.mul || 1);
-    if (vmSwing.t > vmSwing.windup + SWING.strike + SWING.follow + SWING.settle) vmSwing.on = false;
+  vmSwing.on = !!(A && me.phaseInfo && me.phaseInfo());
+  if (A) {
+    const turn = A.turn || 0;
+    vmSwing.trail = turn > 0 ? 1 + 0.45 * turn : 1 + 0.4 * turn;
+    vmSwing.dragMul = A.releaseMul || 1;
   }
 }
+/* THE BLADE IS DRIVEN BY THE RULES. It used to run on its own clock that happened to be
+ * shorter than the attack: a 150ms visual strike against an 80ms rule window looked fine,
+ * but against Chivalry's real 475ms release the sword would have finished travelling and
+ * gone back to rest while the hitbox was still live. The pose now asks the core where the
+ * attack is, so the arc you see and the arc that resolves are the same arc. */
 function swingPhase() {
-  if (!vmSwing.on) return null;
-  const wStart = vmSwing.windup * SWING.lead;
-  if (vmSwing.t < wStart) return { phase: 'wind', u: vmSwing.t / wStart };
-  let t = vmSwing.t - wStart;
-  if (t < SWING.strike) return { phase: 'strike', u: t / SWING.strike };
-  t -= SWING.strike;
-  if (t < SWING.follow) return { phase: 'follow', u: t / SWING.follow };
-  t -= SWING.follow;
-  return { phase: 'settle', u: Math.min(1, t / SWING.settle) };
+  const me = liveMe;
+  const info = me && me.phaseInfo ? me.phaseInfo() : null;
+  if (!info) return null;
+  if (info.phase === 'hold') return { phase: 'wind', u: info.u * 0.45 };
+  if (info.phase === 'windup') return { phase: 'wind', u: 0.45 + info.u * 0.55 };
+  if (info.phase === 'release') {
+    if (info.u < 0.78) return { phase: 'strike', u: info.u / 0.78 };
+    return { phase: 'follow', u: (info.u - 0.78) / 0.22 };
+  }
+  return { phase: 'settle', u: info.u };
 }
 const lerpPose = (a, b, t) => ({
   pos: [lerp(a.pos[0], b.pos[0], t), lerp(a.pos[1], b.pos[1], t), lerp(a.pos[2], b.pos[2], t)],
@@ -1432,6 +1554,18 @@ function tick(dt) {
     }
     if (e.type === 'block') { camShake = Math.max(camShake, 0.16); }
     if (e.type === 'guardbreak') { say('GUARD BROKEN'); camShake = 0.6; }
+    /* ---- sound, driven by the rules themselves ---- */
+    const isFoe = e.who === foe.id || e.vs === foe.id;
+    const dg = distGain(physGap);
+    if (e.type === 'windup') sfxGrunt(isFoe ? 0.34 * dg : 0.12);
+    if (e.type === 'release') sfxWhoosh(isFoe ? 0.52 * dg : 0.26, e.kind === 'heavy' ? 0.42 : 0.3, e.kind === 'thrust' ? 1.25 : 1);
+    if (e.type === 'block') sfxClang(0.34 * dg, 1);
+    if (e.type === 'parry') { sfxClang(0.5 * dg, 1.32); say('PARRY'); }
+    if (e.type === 'guardtrade') sfxClang(0.42 * dg, 1.18);
+    if (e.type === 'hit') { sfxThud(0.52 * dg); say('&nbsp;'); }
+    if (e.type === 'guardbreak') sfxClang(0.55 * dg, 0.8);
+    if (e.type === 'jabbed') sfxThud(0.3 * dg);
+    if (e.type === 'death') { sfxThud(0.6 * dg); sfxGrunt(0.3); }
     if (e.type === 'baited') { say('BAITED'); }
     if (e.type === 'guardtrade') { say('TRADED ON HIS BLADE', 900); parryFlash = 0.5; }
     if (e.type === 'jabbed') { camShake = Math.max(camShake, 0.3); }
@@ -1471,7 +1605,7 @@ function tick(dt) {
 
   /* opponent poses follow the rules, so what you see is what is being resolved */
   const fst = foe.state;
-  if (fst === 'windup' && foe.attack) {
+  if ((fst === 'hold' || fst === 'windup') && foe.attack) {
     /* OLD BUILD: the whole clip was squeezed into the windup, so the raise and the cut
      * happened together in one blur and the swing was unreadable. Now the clip is wound
      * to the frame where the weapon is up and FROZEN THERE for the length of the windup,
@@ -1492,7 +1626,13 @@ function tick(dt) {
         const dur = act.getClip().duration;
         foeHold = { key, raised: dur * 0.52, dur, act };
       }
-      const prog = Math.min(1, (foe.attack.t || 0) / CFG.ATTACKS[foe.attack.kind].windup);
+      /* the chamber runs across HOLD then WINDUPP, so the raise covers both */
+      const fA = CFG.ATTACKS[foe.attack.kind];
+      const holdT = foe.attack.holdTime ?? fA.hold;
+      const windT = foe.attack.windupTime ?? fA.windup;
+      const prog = fst === 'hold'
+        ? 0.5 * Math.min(1, (foe.attack.t || 0) / Math.max(0.001, holdT))
+        : 0.5 + 0.5 * Math.min(1, (foe.attack.t || 0) / Math.max(0.001, windT));
       act.paused = true;
       act.time = prog * foeHold.raised;
     }
@@ -1501,7 +1641,9 @@ function tick(dt) {
     const act = foeHold.act;
     const A = CFG.ATTACKS[foe.lastKind || 'light'];
     act.paused = false;
-    act.timeScale = Math.max(0.04, foeHold.dur - foeHold.raised) / Math.max(0.14, A.active + A.recover);
+    /* was A.active + A.recover, which no longer exist after the four-phase rewrite and
+     * would have made this NaN and frozen his animation entirely */
+    act.timeScale = Math.max(0.04, foeHold.dur - foeHold.raised) / Math.max(0.14, A.release + A.recovery);
   } else if (fst === 'block' && foePrev !== 'block') {
     playFoe('block', { once: false });
   } else if (fst === 'stagger' && foePrev !== 'stagger') {
@@ -1800,6 +1942,7 @@ function render(dt) {
   /* camera: eye height, first person, shake, dodge lean */
   const shake = camShake > 0 ? camShake : 0;
   camShake = Math.max(0, camShake - dt * 3.2);
+
   const lean = dodgeRoll;
   /* WEIGHT: the hand trails the look and the camera takes the blow. A weapon that is
    * welded to the lens reads as a sticker no matter how good the model is. */
@@ -1822,6 +1965,13 @@ function render(dt) {
   const walking = Math.min(1, Math.hypot(playerVel.x, playerVel.z) / WALK);
   walkAmp = lerp(walkAmp, walking, 1 - Math.pow(0.02, dt));
   walkPhase += dt * (sprinting ? 12.5 : 8.4);
+  /* footsteps ride the existing walk cycle rather than a second timer: one step per
+   * half cycle, only while actually moving */
+  const stepIdx = Math.floor(walkPhase / Math.PI);
+  if (stepIdx !== lastStepIdx) {
+    lastStepIdx = stepIdx;
+    if (moveMag > 0.1 && !over) sfxStep(sprinting ? 0.2 : 0.15);
+  }
   const bob = Math.sin(walkPhase) * 0.012 * walkAmp;
 
   camera.position.set(
@@ -1925,6 +2075,17 @@ window.__tickN = (n) => {
   return { clock: +duel.clock.toFixed(2), hp: [duel.a.hp, duel.b.hp], state: duel.a.state };
 };
 window.__renderOnce = (d) => { render(d || 1 / 60); return true; };
+window.__audioRms = () => {
+  if (!vinylAnalyser) return -1;
+  const a = new Float32Array(vinylAnalyser.fftSize);
+  vinylAnalyser.getFloatTimeDomainData(a);
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * a[i];
+  return Math.sqrt(s / a.length);
+};
+window.__audioState = () => (AC ? AC.state : 'none');
+window.__sfx = { whoosh: (g,d,pi) => sfxWhoosh(g,d,pi), grunt: (g) => sfxGrunt(g), clang: (g,b) => sfxClang(g,b), thud: (g) => sfxThud(g), step: (g) => sfxStep(g) };
+window.__audioInit = (done) => { audioInit(); done = done || 0; return AC ? AC.state : 'none'; };
 requestAnimationFrame(frame);
 window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
 window.__vm = { sword, shield, blade, tip, camera, THREE, swordFist, shieldFist };
