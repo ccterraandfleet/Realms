@@ -974,6 +974,92 @@ let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase
 let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+/* measures the blade's own path through a swing, so "is the arc real" is a number */
+window.__swingProbe = (kind = 'light', zone = 'R') => {
+  const keep = { ...vmSwing, pos: [...pose.pos], rot: [...pose.rot] };
+  vmSwing.id = 'probe'; vmSwing.on = true; vmSwing.kind = kind;
+  vmSwing.line = kind === 'thrust' ? 'T' : zone;
+  vmSwing.windup = CFG.ATTACKS[kind].windup;
+  const total = vmSwing.windup + SWING.strike + SWING.follow + SWING.settle;
+  const step = 1 / 120;
+  const rows = [];
+  const tipW = new THREE.Vector3();
+  for (let t = 0; t <= total; t += step) {
+    vmSwing.t = t;
+    const ph = swingPhase();
+    const p = targetPose({ state: 'windup', attack: { id: 'probe', kind, zone }, guard: null }, 0);
+    sword.position.fromArray(p.p.pos);
+    sword.rotation.fromArray(p.p.rot);
+    sword.updateWorldMatrix(true, false);
+    tipW.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+    rows.push({ ph: ph ? ph.phase : 'none', x: tipW.x, y: tipW.y, z: tipW.z });
+  }
+  /* path length per phase, and the biggest single step (top speed) */
+  const out = {};
+  let last = null;
+  for (const r of rows) {
+    if (last && last.ph === r.ph) {
+      const d = Math.hypot(r.x - last.x, r.y - last.y, r.z - last.z);
+      out[r.ph] = +(((out[r.ph] || 0) + d)).toFixed(3);
+      out[r.ph + '_max'] = +Math.max(out[r.ph + '_max'] || 0, d / step).toFixed(2);
+    }
+    last = r;
+  }
+  const span = (phase) => {
+    const sel = rows.filter((r) => r.ph === phase);
+    if (!sel.length) return null;
+    const a = sel[0], b = sel[sel.length - 1];
+    return +Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z).toFixed(3);
+  };
+  vmSwing.id = keep.id; vmSwing.on = keep.on; vmSwing.t = keep.t;
+  vmSwing.kind = keep.kind; vmSwing.line = keep.line; vmSwing.windup = keep.windup;
+  pose.pos = keep.pos; pose.rot = keep.rot;
+  return { phases: Object.keys(out).filter((k) => !k.endsWith('_max')),
+    path: Object.fromEntries(Object.entries(out).filter(([k]) => !k.endsWith('_max'))),
+    topSpeed: Object.fromEntries(Object.entries(out).filter(([k]) => k.endsWith('_max'))),
+    windupSpan: span('wind'), strikeSpan: span('strike'), followSpan: span('follow') };
+};
+/* drives the ribbon through a whole cut and reports how much of the screen-space arc it
+ * covers, so "is there a visible trail" is measured rather than hoped for */
+window.__trailProbe = (kind = 'light', zone = 'R') => {
+  const keepT = vmSwing.t, keepOn = vmSwing.on, keepId = vmSwing.id, keepLine = vmSwing.line, keepKind = vmSwing.kind;
+  vmSwing.id = 'tp'; vmSwing.on = true; vmSwing.kind = kind;
+  vmSwing.line = kind === 'thrust' ? 'T' : zone;
+  vmSwing.windup = CFG.ATTACKS[kind].windup;
+  const wStart = vmSwing.windup * SWING.lead;
+  let samples = 0, visible = 0;
+  let minX = 9, maxX = -9, minY = 9, maxY = -9;
+  for (let i = 0; i < 40; i++) {
+    vmSwing.t = wStart + (i / 39) * SWING.strike;
+    const p = targetPose({ state: 'active', attack: { id: 'tp', kind, zone }, guard: null }, 0);
+    sword.position.fromArray(p.p.pos);
+    sword.rotation.fromArray(p.p.rot);
+    sword.scale.setScalar(1);
+    updateTrail();
+    samples++;
+    if (trailMesh.visible) {
+      visible++;
+      for (let k = 0; k < TRAIL_N * 2; k++) {
+        const x = trailPosArr[k * 3], y = trailPosArr[k * 3 + 1];
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    }
+  }
+  const box = trailMesh.visible ? new THREE.Box3().setFromBufferAttribute(trailGeo.attributes.position).getSize(new THREE.Vector3()) : null;
+  vmSwing.t = keepT; vmSwing.on = keepOn; vmSwing.id = keepId; vmSwing.line = keepLine; vmSwing.kind = keepKind;
+  return { visibleFrames: visible, totalFrames: samples,
+    ribbonSize: box ? [+box.x.toFixed(2), +box.y.toFixed(2), +box.z.toFixed(2)] : null,
+    tris: trailGeo.index ? trailGeo.index.count / 3 : 0 };
+};
+window.__foeAnim = () => {
+  const a = foeHold.act;
+  return { state: duel ? duel.b.state : null, clip: foeHold.key,
+    t: a ? +a.time.toFixed(3) : null, dur: a ? +a.getClip().duration.toFixed(2) : null,
+    raised: +foeHold.raised.toFixed(2), paused: a ? a.paused : null,
+    timeScale: a ? +a.timeScale.toFixed(2) : null,
+    windT: duel && duel.b.attack ? +duel.b.attack.t.toFixed(3) : null };
+};
 window.__where = () => ({
   x: +playerPos.x.toFixed(2), z: +playerPos.z.toFixed(2),
   speed: +Math.hypot(playerVel.x, playerVel.z).toFixed(2),
@@ -986,6 +1072,8 @@ window.__feel = () => {
     hitStop: n(hitStop), camPunch: n(camPunch), shieldRock: n(shieldRock), lag: [n(vmLagX), n(vmLagY)] };
 };
 let foePrev = 'idle';
+/* his attack clips are HELD at the raised frame during the windup, then released fast */
+let foeHold = { key: null, raised: 0, dur: 0, act: null };
 
 function newRound() {
   /* a Duel is two Fighters plus the clock, never an empty shell */
@@ -1077,16 +1165,67 @@ const P = {
    * the frame: at -0.32 the hand's centre landed exactly on the bottom edge and all you
    * ever saw of it was a cut-off sliver, which is what read as "messed up" */
   rest: { pos: [0.285, -0.235, -0.545], rot: [-0.16, 0.16, 0.22] },
-  leftW: { pos: [0.10, -0.14, -0.50], rot: [-0.15, -0.45, 0.95] },
-  rightW: { pos: [0.44, -0.12, -0.50], rot: [-0.15, 0.70, -0.30] },
-  topW: { pos: [0.22, 0.10, -0.50], rot: [-1.05, 0.14, 0.10] },
-  thrustW: { pos: [0.22, -0.22, -0.30], rot: [-0.05, 0.10, 0.10] },
-  leftS: { pos: [-0.10, -0.24, -0.62], rot: [-0.30, -0.85, 1.25] },
-  rightS: { pos: [0.60, -0.26, -0.62], rot: [-0.30, 0.95, -0.30] },
-  topS: { pos: [0.18, -0.44, -0.66], rot: [0.15, 0.08, 0.18] },
-  thrustS: { pos: [0.16, -0.22, -0.96], rot: [0.02, 0.04, 0.04] },
+  /* drawn back far enough that the weapon is unmistakably cocked, struck through far
+   * enough that the tip covers real ground: a cut that only travels 30cm is a tap */
+  leftW: { pos: [-0.16, -0.02, -0.44], rot: [-0.05, -0.95, 1.15] },
+  rightW: { pos: [0.56, -0.02, -0.44], rot: [-0.05, 0.95, -0.35] },
+  topW: { pos: [0.26, 0.44, -0.40], rot: [-1.55, 0.10, 0.05] },
+  thrustW: { pos: [0.28, -0.18, -0.22], rot: [-0.02, 0.14, 0.10] },
+  leftS: { pos: [0.62, -0.36, -0.60], rot: [-0.40, 0.85, -1.10] },
+  rightS: { pos: [-0.30, -0.36, -0.60], rot: [-0.40, -0.85, 1.15] },
+  topS: { pos: [0.10, -0.60, -0.66], rot: [0.34, 0.05, 0.22] },
+  thrustS: { pos: [0.10, -0.20, -1.04], rot: [0.01, 0.03, 0.03] },
   blockSword: { pos: [0.32, -0.24, -0.52], rot: [-0.50, 0.08, 1.05] },
 };
+/* THE SWING TIMELINE. An attack used to be two static poses with an 80ms hop between
+ * them, which is why it read as a tap. It is now a real arc: draw back to a visible
+ * start, HOLD there long enough to be read, cut through the target line, follow
+ * through past it, then settle. Contact happens near the start of the cut, so the
+ * blade is still travelling when the hit resolves. */
+const SWING = { strike: 0.15, follow: 0.16, settle: 0.34, lead: 0.88 };
+const vmSwing = { id: null, t: 0, on: false, line: 'T', kind: 'light', windup: 0.34 };
+function updateSwing(me, dt) {
+  const A = me?.attack;
+  if (A && A.id !== vmSwing.id) {
+    vmSwing.id = A.id; vmSwing.t = 0; vmSwing.on = true;
+    vmSwing.kind = A.kind;
+    vmSwing.line = A.kind === 'thrust' ? 'T' : A.zone;
+    vmSwing.windup = CFG.ATTACKS[A.kind].windup;
+  }
+  if (vmSwing.on) {
+    vmSwing.t += dt;
+    if (vmSwing.t > vmSwing.windup + SWING.strike + SWING.follow + SWING.settle) vmSwing.on = false;
+  }
+}
+function swingPhase() {
+  if (!vmSwing.on) return null;
+  const wStart = vmSwing.windup * SWING.lead;
+  if (vmSwing.t < wStart) return { phase: 'wind', u: vmSwing.t / wStart };
+  let t = vmSwing.t - wStart;
+  if (t < SWING.strike) return { phase: 'strike', u: t / SWING.strike };
+  t -= SWING.strike;
+  if (t < SWING.follow) return { phase: 'follow', u: t / SWING.follow };
+  t -= SWING.follow;
+  return { phase: 'settle', u: Math.min(1, t / SWING.settle) };
+}
+const lerpPose = (a, b, t) => ({
+  pos: [lerp(a.pos[0], b.pos[0], t), lerp(a.pos[1], b.pos[1], t), lerp(a.pos[2], b.pos[2], t)],
+  rot: [lerp(a.rot[0], b.rot[0], t), lerp(a.rot[1], b.rot[1], t), lerp(a.rot[2], b.rot[2], t)],
+});
+/* the four marks of a cut: drawn back, crossing the line, past the line, recovered */
+function swingArc(line, kind) {
+  const W = line === 'L' ? P.leftW : line === 'R' ? P.rightW : kind === 'thrust' ? P.thrustW : P.topW;
+  const S = line === 'L' ? P.leftS : line === 'R' ? P.rightS : kind === 'thrust' ? P.thrustS : P.topS;
+  const mid = {
+    pos: [(W.pos[0] + S.pos[0]) * 0.5, (W.pos[1] + S.pos[1]) * 0.5 + 0.04, (W.pos[2] + S.pos[2]) * 0.5 - 0.04],
+    rot: [(W.rot[0] + S.rot[0]) * 0.5, (W.rot[1] + S.rot[1]) * 0.5, (W.rot[2] + S.rot[2]) * 0.5],
+  };
+  const through = {
+    pos: [S.pos[0] + (line === 'L' ? -0.16 : line === 'R' ? 0.16 : 0), S.pos[1] - 0.12, S.pos[2] + 0.07],
+    rot: [S.rot[0] + 0.35, S.rot[1] * 1.2, S.rot[2] * 1.2],
+  };
+  return { W, mid, S, through };
+}
 const pose = { pos: [...P.rest.pos], rot: [...P.rest.rot] };
 const shieldPose = { pos: [-0.345, -0.385, -0.615], rot: [0.1, 0.42, -0.10] };
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -1099,18 +1238,32 @@ function targetPose(me, clock) {
   if (me.guard && st !== 'windup' && st !== 'active') {
     return { p: P.blockSword, s: { pos: [-0.12, -0.22, -0.48], rot: [0.05, 0.12, -0.04] }, fast: 12 };
   }
-  if (st === 'windup' && A) {
-    const w = CFG.ATTACKS[A.kind].windup;
-    const t = Math.min(1, A.t / w);
-    const key = A.zone === 'L' ? P.leftW : A.zone === 'R' ? P.rightW : A.kind === 'thrust' ? P.thrustW : P.topW;
-    return { p: key, s: { pos: [-0.26, -0.30, -0.54], rot: [0.05, 0.2, -0.03] }, fast: 8 + 10 * t, ease: t };
+  /* the swing owns the hand from the moment it starts until it has settled, whatever
+   * the rule state machine is doing underneath it */
+  const ph = swingPhase();
+  if (ph) {
+    const arc = swingArc(vmSwing.line, vmSwing.kind);
+    if (ph.phase === 'wind') {
+      /* quick draw back, then hold: the hold is the part you read and answer */
+      const k = Math.min(1, ph.u / 0.5);
+      const u = k * k * (3 - 2 * k);
+      return { p: lerpPose(P.rest, arc.W, u), s: { pos: [-0.20, -0.27, -0.52], rot: [0.05, 0.16, -0.03] }, fast: 26 };
+    }
+    if (ph.phase === 'strike') {
+      /* accelerate out of the draw, cross the line, carry past it */
+      const u = Math.pow(ph.u, 0.72);
+      const p = u < 0.42 ? lerpPose(arc.W, arc.mid, u / 0.42) : lerpPose(arc.mid, arc.S, (u - 0.42) / 0.58);
+      return { p, s: { pos: [-0.30, -0.26, -0.50], rot: [0.1, 0.22, -0.02] }, fast: 60 };
+    }
+    if (ph.phase === 'follow') {
+      return { p: lerpPose(arc.S, arc.through, easeOut(ph.u)), s: { pos: [-0.34, -0.30, -0.56], rot: [0.12, 0.3, -0.05] }, fast: 26 };
+    }
+    const k = ph.u, sm = k * k * (3 - 2 * k);
+    return { p: lerpPose(arc.through, P.rest, sm), s: { pos: [-0.30, -0.34, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 16 };
   }
-  if (st === 'active' && A) {
-    const key = A.zone === 'L' ? P.leftS : A.zone === 'R' ? P.rightS : A.kind === 'thrust' ? P.thrustS : P.topS;
-    return { p: key, s: { pos: [-0.30, -0.26, -0.52], rot: [0.1, 0.22, -0.02] }, fast: 36 };
-  }
-  if (st === 'recover') {
-    return { p: P.rest, s: { pos: [-0.30, -0.34, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 9 };
+  if (st === 'stagger' || st === 'exhausted') {
+    return { p: { pos: [0.42, -0.52, -0.58], rot: [0.4, 0.55, 0.75] },
+      s: { pos: [-0.52, -0.50, -0.52], rot: [0.2, 0.5, 0.1] }, fast: 16 };
   }
   if (st === 'stagger' || st === 'exhausted') {
     return { p: { pos: [0.42, -0.52, -0.58], rot: [0.4, 0.55, 0.75] },
@@ -1224,10 +1377,37 @@ function tick(dt) {
 
   /* opponent poses follow the rules, so what you see is what is being resolved */
   const fst = foe.state;
-  if (fst === 'windup' && foe.attack && foePrev !== 'windup') {
-    const dur = foeActions[foeAttackClip(foe.attack.kind, foe.attack.zone)]?.getClip().duration || 1;
-    const span = CFG.ATTACKS[foe.attack.kind].windup + 0.1;
-    playFoe(foeAttackClip(foe.attack.kind, foe.attack.zone), { timeScale: Math.max(0.6, dur / span) });
+  if (fst === 'windup' && foe.attack) {
+    /* OLD BUILD: the whole clip was squeezed into the windup, so the raise and the cut
+     * happened together in one blur and the swing was unreadable. Now the clip is wound
+     * to the frame where the weapon is up and FROZEN THERE for the length of the windup,
+     * so you get the full telegraph to see what is coming. */
+    const key = foeAttackClip(foe.attack.kind, foe.attack.zone);
+    const act = foeActions[key];
+    if (act) {
+      if (foePrev !== 'windup' || foeHold.key !== key) {
+        act.reset();
+        act.setLoop(THREE.LoopOnce, 1);
+        act.clampWhenFinished = true;
+        act.fadeIn(0.06);
+        act.play();
+        for (const k in foeActions) {
+          const o = foeActions[k];
+          if (o && o !== act && o.isRunning() && k !== 'idle') o.fadeOut(0.06);
+        }
+        const dur = act.getClip().duration;
+        foeHold = { key, raised: dur * 0.52, dur, act };
+      }
+      const prog = Math.min(1, (foe.attack.t || 0) / CFG.ATTACKS[foe.attack.kind].windup);
+      act.paused = true;
+      act.time = prog * foeHold.raised;
+    }
+  } else if ((fst === 'active' || fst === 'recover') && foeHold.act) {
+    /* release: the rest of the clip whips through in about a fifth of a second */
+    const act = foeHold.act;
+    const A = CFG.ATTACKS[foe.lastKind || 'light'];
+    act.paused = false;
+    act.timeScale = Math.max(0.04, foeHold.dur - foeHold.raised) / Math.max(0.14, A.active + A.recover);
   } else if (fst === 'block' && foePrev !== 'block') {
     playFoe('block', { once: false });
   } else if (fst === 'stagger' && foePrev !== 'stagger') {
@@ -1408,6 +1588,64 @@ window.__setPitch = (v) => { pitch = v; };
 window.__setYaw = (v) => { yaw = v; };
 window.__setSun = (x, y, z, intensity) => { sun.position.set(x, y, z); if (intensity) sun.intensity = intensity; return sun.position.toArray(); };
 
+/* ---------------------------------------------------------------- blade trail
+ * A cut only reads as a cut if you can see where the edge has been. This samples the
+ * blade every frame into a ribbon, brightest at the tip and fading back along the arc,
+ * and it only exists while a cut is actually travelling. */
+const TRAIL_N = 16;
+const trailSamples = Array.from({ length: TRAIL_N }, () => ({ root: new THREE.Vector3(), tip: new THREE.Vector3() }));
+const trailGeo = new THREE.BufferGeometry();
+const trailPosArr = new Float32Array(TRAIL_N * 2 * 3);
+const trailColArr = new Float32Array(TRAIL_N * 2 * 3);
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPosArr, 3));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailColArr, 3));
+{
+  const idx = [];
+  for (let i = 0; i < TRAIL_N - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+    idx.push(a, b, c, b, d, c);
+  }
+  trailGeo.setIndex(idx);
+}
+const trailMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+const trailMesh = new THREE.Mesh(trailGeo, trailMat);
+trailMesh.frustumCulled = false; trailMesh.visible = false;
+scene.add(trailMesh);
+const ROOT_LOCAL = new THREE.Vector3(0, 0.18, 0);
+const TIP_LOCAL = new THREE.Vector3(0, 0.94, 0);
+const _trailA = new THREE.Vector3(), _trailB = new THREE.Vector3();
+function updateTrail() {
+  sword.updateWorldMatrix(true, false);
+  const rootW = _trailA.copy(ROOT_LOCAL).applyMatrix4(sword.matrixWorld);
+  const tipW = _trailB.copy(TIP_LOCAL).applyMatrix4(sword.matrixWorld);
+  const ph = swingPhase();
+  const live = !!ph && (ph.phase === 'strike' || ph.phase === 'follow');
+  if (!live) {
+    for (let i = 0; i < TRAIL_N; i++) { trailSamples[i].root.copy(rootW); trailSamples[i].tip.copy(tipW); }
+    trailMesh.visible = false;
+    return;
+  }
+  for (let i = TRAIL_N - 1; i > 0; i--) {
+    trailSamples[i].root.copy(trailSamples[i - 1].root);
+    trailSamples[i].tip.copy(trailSamples[i - 1].tip);
+  }
+  trailSamples[0].root.copy(rootW);
+  trailSamples[0].tip.copy(tipW);
+  const strength = ph.phase === 'strike' ? 1 : 0.5;
+  trailMesh.visible = true;
+  for (let i = 0; i < TRAIL_N; i++) {
+    const s = trailSamples[i], k = i * 6;
+    trailPosArr[k] = s.root.x; trailPosArr[k + 1] = s.root.y; trailPosArr[k + 2] = s.root.z;
+    trailPosArr[k + 3] = s.tip.x; trailPosArr[k + 4] = s.tip.y; trailPosArr[k + 5] = s.tip.z;
+    const f = Math.pow(1 - i / TRAIL_N, 1.7) * strength;
+    trailColArr[k] = 0.45 * f; trailColArr[k + 1] = 0.62 * f; trailColArr[k + 2] = 0.90 * f;
+    trailColArr[k + 3] = 0.90 * f; trailColArr[k + 4] = 1.0 * f; trailColArr[k + 5] = 1.0 * f;
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.color.needsUpdate = true;
+}
+
 function render(dt) {
   if (!duel) return;
   const me = duel.a, foe = duel.b;
@@ -1504,6 +1742,7 @@ function render(dt) {
 if (foeMixer) foeMixer.update(dt);
 
   /* viewmodel */
+  updateSwing(me, dt);
   const target = targetPose(me, duel.clock);
   const k = 1 - Math.pow(0.001, (hitStop > 0 ? dt * 0.07 : dt) * (target.fast / 12));
   for (let i = 0; i < 3; i++) {
@@ -1525,6 +1764,7 @@ if (foeMixer) foeMixer.update(dt);
     sword.rotation.z += swayX * 1.6 + vmLagX * 1.4;
     sword.rotation.x += vmLagY * 1.1;
   }
+  updateTrail();
   if (!INSPECT) {
     shield.position.fromArray(shieldPose.pos);
     shield.rotation.fromArray(shieldPose.rot);
