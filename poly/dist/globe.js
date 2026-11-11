@@ -30704,6 +30704,8 @@
     butcher: { label: "butcher", blurb: "he kills 12% harder in the open field" }
   };
   var TRAIT_KEYS = Object.keys(COMMANDER_TRAITS);
+  var FIELD_SPEED = 6;
+  var FIELD_COST = { grain: 60, gold: 20 };
   var INTERCEPT_HOPS = 3;
   var INVEST_DRAIN = 55e-4;
   var SIEGE_DRAIN = 0.02;
@@ -31627,11 +31629,11 @@
       say(`road laid from ${label(a)} to ${label(b)}`);
       return true;
     }
-    const hasRoad = (n) => (incident.get(n.key) ?? []).length > 0;
+    const hasRoad = (n) => (incident.get(n.key) ?? []).some((k) => !edges.get(k)?.field);
     function isolated(n) {
       return !hasRoad(n);
     }
-    function addEdge(a, b, tier, seed, pts) {
+    function addEdge(a, b, tier, seed, pts, field = false) {
       const key2 = edgeKeyOf(a, b);
       if (edges.has(key2)) return key2;
       let path = pts;
@@ -31644,7 +31646,8 @@
         seed,
         cut: false,
         pts: path,
-        drawn: !!path
+        drawn: !!path,
+        field
       });
       const ia = incident.get(a) ?? [];
       ia.push(key2);
@@ -31693,7 +31696,7 @@
         const k = queue.shift();
         for (const ek of incident.get(k) ?? []) {
           const e = edges.get(ek);
-          if (!e || e.cut) continue;
+          if (!e || e.cut || e.field) continue;
           fed.add(ek);
           const other = e.a === k ? e.b : e.a;
           if (!seen.has(other)) {
@@ -31823,7 +31826,7 @@
         }
       }
     }
-    function pathBetween(from, to) {
+    function pathBetween(from, to, allowField = false) {
       if (from === to) return [from];
       const dist = /* @__PURE__ */ new Map([[from, 0]]);
       const prev = /* @__PURE__ */ new Map();
@@ -31838,8 +31841,9 @@
         for (const ek of incident.get(cur2.k) ?? []) {
           const e = edges.get(ek);
           if (!e) continue;
+          if (e.field && !allowField) continue;
           const cutPenalty = e.cut ? 6 : 1;
-          const step = cellSize / (e.tier ? TRUNK_SPEED : LANE_SPEED) * cutPenalty;
+          const step = cellSize / (e.field ? FIELD_SPEED : e.tier ? TRUNK_SPEED : LANE_SPEED) * cutPenalty;
           const other = e.a === cur2.k ? e.b : e.a;
           const nd = cur2.d + step;
           if (nd < (dist.get(other) ?? Infinity)) {
@@ -32086,6 +32090,27 @@
       say(`${toRaise} ${r.hearth ? "household troops" : "levies"} mustered at ${label(n)} \xB7 garrison ${n.garrison} of ${cap}` + (toRaise < raise ? ` \xB7 only ${room} fit: upgrade the keep or raise a Hearth for more room` : "") + ` \xB7 attack to march them out`);
       return true;
     }
+    function dryLine(a, b) {
+      for (let i = 1; i < 24; i++) {
+        const t = i / 24;
+        const d = a.dir.clone().lerp(b.dir, t).normalize();
+        if (o.terrainH(d) <= LAND_H) return false;
+      }
+      return true;
+    }
+    function routeFor(from, to) {
+      const road = pathBetween(from, to);
+      if (road.length >= 2) return { path: road, offroad: false };
+      const a = nodes2.get(from), b = nodes2.get(to);
+      if (!a || !b) return { path: [], offroad: false };
+      if (!dryLine(a, b)) return { path: [], offroad: false };
+      const priorField = pathBetween(from, to, true);
+      if (priorField.length >= 2) return { path: priorField, offroad: true };
+      addEdge(from, to, 0, 7, void 0, true);
+      const laid = pathBetween(from, to);
+      if (laid.length >= 2) return { path: laid, offroad: false };
+      return { path: pathBetween(from, to, true), offroad: true };
+    }
     function marchFrom(key2, to, men) {
       const n = nodes2.get(key2);
       if (!n || n.owner < 0) return false;
@@ -32096,10 +32121,22 @@
         say("no garrison there to march: muster first (M)");
         return false;
       }
-      const path = pathBetween(key2, to);
+      const route2 = routeFor(key2, to);
+      const path = route2.path;
       if (path.length < 2) {
-        say("no road route to that castle");
+        say("no road route to that castle, and no dry line across country either");
         return false;
+      }
+      if (route2.offroad) {
+        const me = realms[0];
+        if (n.owner === 0 && (me.res.grain < FIELD_COST.grain || me.res.gold < FIELD_COST.gold)) {
+          say(`taking a force off the road costs ${FIELD_COST.grain} grain and ${FIELD_COST.gold} gold`);
+          return false;
+        }
+        if (n.owner === 0) {
+          me.res.grain -= FIELD_COST.grain;
+          me.res.gold -= FIELD_COST.gold;
+        }
       }
       n.garrison -= take;
       const host = {
@@ -32117,16 +32154,18 @@
         // levies without a Hearth, household troops with one (power() reads this)
         tier: realms[n.owner].hearth ? 2 : 1
       };
+      host.offroad = route2.offroad;
       hosts.push(host);
-      say(`${take} men march from ${label(n)} \xB7 garrison ${n.garrison}`);
+      say(route2.offroad ? `${take} men march from ${label(n)} ACROSS COUNTRY \xB7 no supply follows them out there` : `${take} men march from ${label(n)} \xB7 garrison ${n.garrison}`);
       return true;
     }
     function orderMarch(host, to) {
       host.investing = void 0;
       const at = host.to ?? host.path[host.seg];
-      const path = pathBetween(at, to);
+      const route2 = routeFor(at, to);
+      const path = route2.path;
       if (path.length < 2) {
-        say("no road route to that castle");
+        say("no road route to that castle, and no dry line across country either");
         return false;
       }
       host.path = path;
@@ -32135,7 +32174,8 @@
       host.from = path[0];
       host.to = path[1];
       host.routed = false;
-      say(`${host.men} men marching to ${label(nodes2.get(to))}`);
+      host.offroad = route2.offroad;
+      say(route2.offroad ? `${host.men} men marching to ${label(nodes2.get(to))} ACROSS COUNTRY \xB7 slow, and no supply follows` : `${host.men} men marching to ${label(nodes2.get(to))}`);
       return true;
     }
     function label(n) {
@@ -34350,6 +34390,7 @@
       const fed = fedFor(0);
       const out = [];
       for (const e of edges.values()) {
+        if (e.field) continue;
         const a = nodes2.get(e.a);
         const b = nodes2.get(e.b);
         if (!a || !b) continue;
@@ -34362,6 +34403,7 @@
           tier: e.tier,
           cut: e.cut,
           fed: fed.has(e.key),
+          field: e.field,
           trade: tradeRoutes.has(e.key),
           mid: mid.clone().multiplyScalar(o.R + 1),
           seed: (a.tu * 7919 + a.tv * 104729 + b.tu * 1299709 + b.tv * 15485863) % 1e5,
@@ -34640,6 +34682,17 @@
         wall: () => siegeBattle ? { seg: siegeBattle.seg, segs: [...siegeBattle.segs], breached: siegeBattle.breached, phase: siegeBattle.phase } : null,
         invest: (k) => investOrder(k),
         musterAt: (k) => muster(k),
+        route: (a, b) => {
+          const r = routeFor(a, b);
+          return { hops: r.path.length, offroad: r.offroad };
+        },
+        roadAt: (k) => {
+          const n = nodes2.get(k);
+          return n ? hasRoad(n) : null;
+        },
+        supplyHas: () => [...fedFor(0)].filter((k) => !!edges.get(k)?.field).length,
+        fieldEdges: () => [...edges.values()].filter((e) => e.field).map((e) => e.key),
+        isField: (a, b) => !!edges.get(edgeKeyOf(a, b))?.field,
         commanders: () => hosts.filter((h) => h.commander && h.men > 0).map((h) => ({ id: h.id, owner: h.owner, men: h.men, ...h.commander })),
         setPips: (id, pips) => {
           const h = hosts.find((x) => x.id === id);
