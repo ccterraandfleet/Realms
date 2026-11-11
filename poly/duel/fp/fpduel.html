@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>REALMS — first person duel</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0d1116;color:#e6edf3;
+    font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;cursor:crosshair}
+  canvas{display:block}
+  #hud{position:fixed;inset:0;pointer-events:none}
+  .bar{position:fixed;height:9px;background:#000a;border:1px solid #2b3641;box-shadow:0 0 0 1px #0006}
+  .bar>i{display:block;height:100%;transition:width .08s linear}
+  #hpMe{left:26px;top:26px;width:260px}
+  #hpMe>i{background:linear-gradient(90deg,#8fd6a8,#4f9a72)}
+  #stMe{left:26px;top:40px;width:200px}
+  #stMe>i{background:linear-gradient(90deg,#e8d48a,#b79a45)}
+  #hpFoe{right:26px;top:26px;width:260px}
+  #hpFoe>i{background:linear-gradient(90deg,#e8a08a,#a5523c)}
+  .lbl{position:fixed;top:8px;font-size:10px;letter-spacing:.16em;color:#8fa0b0}
+  #lblMe{left:26px}#lblFoe{right:26px;text-align:right}
+  #zones{position:fixed;left:26px;top:60px;display:flex;gap:6px}
+  #zones b{font-weight:400;font-size:10px;letter-spacing:.1em;padding:2px 7px;border:1px solid #2b3641;
+    color:#6f8093;background:#0008}
+  #zones b.on{color:#0d1116;background:#9fd6ff;border-color:#9fd6ff}
+  #tel{position:fixed;left:50%;top:34%;transform:translate(-50%,0);font-size:34px;letter-spacing:.05em;
+    opacity:0;transition:opacity .06s;text-shadow:0 2px 12px #000}
+  #msg{position:fixed;left:50%;top:22%;transform:translate(-50%,0);font-size:15px;letter-spacing:.22em;
+    color:#cfe0ee;opacity:0;transition:opacity .2s;text-shadow:0 2px 10px #000}
+  #hint{position:fixed;left:50%;bottom:22px;transform:translate(-50%,0);font-size:11px;color:#7d8d9d;letter-spacing:.1em}
+  #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none}
+  #vig{position:fixed;inset:0;box-shadow:inset 0 0 140px 40px #7d1f1f;opacity:0;pointer-events:none}
+  #intro{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 40%,#1a232c,#080a0d 75%);cursor:pointer;text-align:center;padding:24px}
+  #intro h1{font-size:20px;letter-spacing:.4em;margin:0 0 6px;color:#cfe4f5}
+  #intro p{margin:4px 0;color:#8ba0b4;font-size:12px;letter-spacing:.06em}
+  #intro .k{color:#cfe4f5}
+  #dots{position:fixed;left:50%;top:12px;transform:translate(-50%,0);display:flex;gap:8px}
+  #dots i{width:8px;height:8px;border:1px solid #4a5a6a;display:block}
+  #dots i.win{background:#9fd6ff;border-color:#9fd6ff}
+  #dots i.loss{background:#a5523c;border-color:#a5523c}
+</style>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+</head>
+<body>
+<div id="hud">
+  <span class="lbl" id="lblMe">YOU</span><span class="lbl" id="lblFoe">OPPONENT</span>
+  <div class="bar" id="hpMe"><i style="width:100%"></i></div>
+  <div class="bar" id="stMe"><i style="width:100%"></i></div>
+  <div class="bar" id="hpFoe"><i style="width:100%"></i></div>
+  <div id="zones"><b data-z="L">LEFT</b><b data-z="T">TOP</b><b data-z="R">RIGHT</b></div>
+  <div id="tel"></div>
+  <div id="msg"></div>
+  <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
+  <div id="hint">A / W / D raise a guard &middot; J light &middot; K heavy &middot; L thrust &middot; F feint &middot; Shift dodge &middot; arrows close or open</div>
+</div>
+<div id="flash"></div><div id="vig"></div>
+<div id="intro">
+  <h1>REALMS</h1>
+  <p>first person duel &middot; click to take the sword</p>
+  <p class="k">A W D = guard left / top / right &nbsp; J K L = light / heavy / thrust</p>
+  <p class="k">F = feint &nbsp; Shift = dodge &nbsp; Up / Down = close or open the distance</p>
+  <p>a parry is a guard that lands in the last tenth of a second &middot; press 1&ndash;7 for a different opponent</p>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { CFG, Duel, Fighter } from './fpduel.core.js';
+import { STYLES, think, makeBrain } from './fpduel.ai.js';
+
+const $ = (s) => document.querySelector(s);
+
+/* ------------------------------------------------------------------ renderer */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x8fb4cf);
+scene.fog = new THREE.Fog(0x8fb4cf, 26, 120);
+
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 1.68, 0);
+
+scene.add(new THREE.HemisphereLight(0xbdd7ee, 0x5c6b45, 1.15));
+const sun = new THREE.DirectionalLight(0xffedd2, 2.2);
+sun.position.set(-14, 22, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -16; sun.shadow.camera.right = 16;
+sun.shadow.camera.top = 16; sun.shadow.camera.bottom = -16;
+sun.shadow.bias = -0.0009;
+scene.add(sun);
+
+/* ------------------------------------------------------------------ ground */
+function groundTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#6f7a4a'; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 5200; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256, r = Math.random() * 2.2;
+    const v = 0.72 + Math.random() * 0.5;
+    g.fillStyle = `rgba(${Math.round(110 * v)},${Math.round(122 * v)},${Math.round(70 * v)},0.55)`;
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(48, 48);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(300, 300),
+  new THREE.MeshStandardMaterial({ map: groundTexture(), roughness: 0.96 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* a ring of stone so the duel reads as a place, not a void */
+const stone = new THREE.MeshStandardMaterial({ color: 0x9aa0a2, roughness: 0.9 });
+for (let i = 0; i < 22; i++) {
+  const a = (i / 22) * Math.PI * 2;
+  if (Math.abs(Math.sin(a)) < 0.22 && Math.cos(a) < 0) continue;
+  const h = 0.5 + Math.random() * 0.35;
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.9 + Math.random() * 0.5, h, 0.6), stone);
+  b.position.set(Math.cos(a) * 9.2, h / 2, Math.sin(a) * 9.2);
+  b.rotation.y = -a; b.castShadow = true; b.receiveShadow = true;
+  scene.add(b);
+}
+/* treeline for depth */
+const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 1 });
+const leafMat = new THREE.MeshStandardMaterial({ color: 0x3f5b33, roughness: 1 });
+for (let i = 0; i < 46; i++) {
+  const a = Math.random() * Math.PI * 2, r = 16 + Math.random() * 46;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const t = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 1.6, 5), trunkMat);
+  t.position.set(x, 0.8, z); scene.add(t);
+  const c = new THREE.Mesh(new THREE.ConeGeometry(1.15 + Math.random() * 0.5, 2.8 + Math.random() * 1.6, 6), leafMat);
+  c.position.set(x, 2.2, z); c.castShadow = true; scene.add(c);
+}
+/* two braziers, warm light on the fighter's armour */
+for (const sx of [-4.4, 4.4]) {
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 1.5, 6), trunkMat);
+  post.position.set(sx, 0.75, -2.4); scene.add(post);
+  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.16, 0.22, 8),
+    new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.7, roughness: 0.5 }));
+  bowl.position.set(sx, 1.55, -2.4); scene.add(bowl);
+  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffb85c }));
+  flame.position.set(sx, 1.68, -2.4); scene.add(flame);
+  const pl = new THREE.PointLight(0xffa758, 2.6, 9, 2);
+  pl.position.set(sx, 1.7, -2.4); scene.add(pl);
+}
+
+/* ------------------------------------------------------------------ the sword in your hands */
+/* A METAL WITH NO ENVIRONMENT MAP RENDERS BLACK. metalness 0.95 with nothing to
+ * reflect gave a sword that was in frame and invisible. The viewmodel gets its own
+ * small light, and the blade is calmer metal so it reads as polished steel. */
+const steel = new THREE.MeshStandardMaterial({ color: 0xdfe7ef, metalness: 0.55, roughness: 0.34 });
+const vmLight = new THREE.PointLight(0xfff4e2, 2.4, 2.6, 2);
+vmLight.position.set(0.15, 0.05, 0.28);
+const gripMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.95 });
+const brass = new THREE.MeshStandardMaterial({ color: 0xb08d4a, metalness: 0.8, roughness: 0.35 });
+const skin = new THREE.MeshStandardMaterial({ color: 0xb98a63, roughness: 0.85 });
+const linen = new THREE.MeshStandardMaterial({ color: 0x4d5a66, roughness: 1 });
+
+const hand = new THREE.Group();          // everything the player holds
+camera.add(hand);
+camera.add(vmLight);
+scene.add(camera);
+
+const sword = new THREE.Group();
+const blade = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.94, 0.011), steel);
+blade.position.y = 0.55; blade.castShadow = true; sword.add(blade);
+const tip = new THREE.Mesh(new THREE.ConeGeometry(0.034, 0.13, 4), steel);
+tip.position.y = 1.08; sword.add(tip);
+const guard = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.028, 0.034), brass);
+sword.add(guard);
+const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.023, 0.17, 6), gripMat);
+grip.position.y = -0.09; sword.add(grip);
+const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.032, 8, 6), brass);
+pommel.position.y = -0.18; sword.add(pommel);
+/* VIEWMODEL PROPORTIONS, MEASURED NOT GUESSED. At fov 72 the first attempt put a
+ * 0.94-unit blade 0.6 from the eye, so the tip projected to NDC y=1.65 and the whole
+ * blade sat off the top of the screen; the frame showed a shield boss and nothing
+ * else. Scaled to 0.66 and seated at the hand, the tip lands near NDC (0.18, 0.65)
+ * and the fist near (0.39, -0.65), which is a weapon you can see yourself holding. */
+sword.scale.setScalar(0.66);
+sword.position.set(0.26, -0.32, -0.56);
+sword.rotation.set(-0.16, 0.16, 0.22);
+hand.add(sword);
+
+/* forearm + fist, so it reads as a body and not a floating weapon */
+const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.052, 0.062, 0.44, 6), linen);
+arm.position.set(0.10, -0.12, 0.30); arm.rotation.set(1.28, 0, 0.16); arm.castShadow = true; sword.add(arm);
+const fist = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.10, 0.09), skin);
+fist.position.set(0, -0.07, 0.005); sword.add(fist);
+
+const shield = new THREE.Group();
+const board = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.52, 0.045),
+  new THREE.MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.95 }));
+board.castShadow = true; shield.add(board);
+const rim = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.56, 0.02), brass);
+rim.position.z = -0.02; shield.add(rim);
+const boss = new THREE.Mesh(new THREE.SphereGeometry(0.075, 10, 8), steel);
+boss.position.z = 0.05; boss.scale.z = 0.6; shield.add(boss);
+shield.position.set(-0.30, -0.34, -0.60);
+shield.rotation.set(0.1, 0.42, -0.10);
+hand.add(shield);
+
+/* ------------------------------------------------------------------ the opponent */
+let foeModel = null, foeMixer = null, foeActions = {};
+const foeRoot = new THREE.Group();
+scene.add(foeRoot);
+
+function clipMap(clips) {
+  const find = (...pats) => {
+    for (const p of pats) {
+      const c = clips.find((cl) => p.test(cl.name));
+      if (c) return c;
+    }
+    return null;
+  };
+  return {
+    idle: find(/^Idle$/i, /Idle/i),
+    chop: find(/1H_Melee_Attack_Chop/i, /Attack_Chop/i),
+    sliceH: find(/1H_Melee_Attack_Slice_Horizontal/i, /Slice_Horizontal/i),
+    sliceD: find(/1H_Melee_Attack_Slice_Diagonal/i, /Slice_Diagonal/i),
+    stab: find(/1H_Melee_Attack_Stab/i, /Stab/i),
+    block: find(/^Blocking$/i, /Block$/i),
+    blockHit: find(/Block_Hit/i),
+    hit: find(/Hit_A/i),
+    death: find(/Death_A$/i, /Death_A/i),
+    dodgeL: find(/Dodge_Left/i), dodgeR: find(/Dodge_Right/i),
+    kick: find(/Kick/i),
+  };
+}
+
+const ROUND_MSG = $('#msg');
+const loader = new GLTFLoader();
+let ready = false;
+loader.load('./knight.glb', (gltf) => {
+  const src = gltf.scene;
+  const box = new THREE.Box3().setFromObject(src);
+  const h = box.max.y - box.min.y;
+  const k = 1.86 / h;
+  src.scale.setScalar(k);
+  src.traverse((n) => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; n.frustumCulled = false; } });
+  foeModel = src;
+  foeRoot.add(src);
+  foeMixer = new THREE.AnimationMixer(src);
+  foeActions = clipMap(gltf.animations);
+  for (const key in foeActions) {
+    const c = foeActions[key];
+    if (c) foeActions[key] = foeMixer.clipAction(c);
+  }
+  ready = true;
+  if (foeActions.idle) { foeActions.idle.play(); foeActions.idle.setEffectiveWeight(1); }
+}, undefined, (e) => {
+  ROUND_MSG.textContent = 'COULD NOT LOAD THE OPPONENT';
+  ROUND_MSG.style.opacity = 1;
+  console.error('glb', e);
+});
+
+/* ------------------------------------------------------------------ duel state */
+let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
+const keys = Object.create(null);
+let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = false, pendingDodge = null;
+let yaw = 0, pitch = 0, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
+let foePrev = 'idle';
+
+function newRound() {
+  /* a Duel is two Fighters plus the clock, never an empty shell */
+  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60 });
+  // a fresh duel starts with both fighters at full health and stamina
+  brain = makeBrain(STYLES[styleKey] || STYLES.sentinel);
+  foePrev = 'idle';
+  over = false;
+  if (foeActions.idle) { foeActions.idle.reset().play(); }
+  updateDots();
+}
+function updateDots() {
+  const d = document.querySelectorAll('#dots i');
+  let i = 0;
+  for (let r = 0; r < score[0]; r++) { d[i].className = 'win'; i++; }
+  for (let r = 0; r < score[1]; r++) { d[i].className = 'loss'; i++; }
+  while (i < d.length) { d[i].className = ''; i++; }
+}
+newRound();
+
+/* ------------------------------------------------------------------ input */
+const intro = $('#intro');
+intro.addEventListener('click', () => {
+  intro.style.display = 'none';
+  renderer.domElement.requestPointerLock?.();
+});
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement) { intro.style.display = 'flex'; }
+});
+document.addEventListener('mousemove', (e) => {
+  if (!document.pointerLockElement) return;
+  yaw -= e.movementX * 0.0022;
+  pitch = Math.max(-0.9, Math.min(0.9, pitch - e.movementY * 0.0022));
+});
+addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (keys[k]) return;
+  keys[k] = true;
+  if (k === 'a') { guardZone = 'L'; pressGuard = true; }
+  if (k === 'w') { guardZone = 'T'; pressGuard = true; }
+  if (k === 'd') { guardZone = 'R'; pressGuard = true; }
+  if (k === 'j') pendingAttack = { kind: 'light', zone: guardZone };
+  if (k === 'k') pendingAttack = { kind: 'heavy', zone: guardZone };
+  if (k === 'l') pendingAttack = { kind: 'thrust', zone: guardZone };
+  if (k === 'f') pendingFeint = true;
+  if (k === 'shift') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
+  if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
+  if (k >= '1' && k <= '7') {
+    const order = ['sentinel', 'turtle', 'flurry', 'breaker', 'feinter', 'blender', 'duelist'];
+    styleKey = order[Number(k) - 1] || styleKey;
+    score = [0, 0]; newRound();
+    say('OPPONENT: ' + (STYLES[styleKey]?.name || styleKey).toUpperCase());
+  }
+  if ([' ', 'arrowup', 'arrowdown'].includes(k)) e.preventDefault();
+}, { passive: false });
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function say(text, ms = 1200) {
+  ROUND_MSG.textContent = text;
+  ROUND_MSG.style.opacity = 1;
+  clearTimeout(say._t);
+  say._t = setTimeout(() => { ROUND_MSG.style.opacity = 0; }, ms);
+}
+
+/* ------------------------------------------------------------------ viewmodel poses */
+const P = {
+  rest: { pos: [0.26, -0.32, -0.56], rot: [-0.16, 0.16, 0.22] },
+  leftW: { pos: [0.10, -0.14, -0.50], rot: [-0.15, -0.45, 0.95] },
+  rightW: { pos: [0.44, -0.12, -0.50], rot: [-0.15, 0.70, -0.30] },
+  topW: { pos: [0.22, 0.10, -0.50], rot: [-1.05, 0.14, 0.10] },
+  thrustW: { pos: [0.22, -0.22, -0.30], rot: [-0.05, 0.10, 0.10] },
+  leftS: { pos: [-0.10, -0.24, -0.62], rot: [-0.30, -0.85, 1.25] },
+  rightS: { pos: [0.60, -0.26, -0.62], rot: [-0.30, 0.95, -0.30] },
+  topS: { pos: [0.18, -0.44, -0.66], rot: [0.15, 0.08, 0.18] },
+  thrustS: { pos: [0.16, -0.22, -0.96], rot: [0.02, 0.04, 0.04] },
+  blockSword: { pos: [0.32, -0.24, -0.52], rot: [-0.50, 0.08, 1.05] },
+};
+const pose = { pos: [...P.rest.pos], rot: [...P.rest.rot] };
+const shieldPose = { pos: [-0.30, -0.34, -0.60], rot: [0.1, 0.42, -0.10] };
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const easeIn = (t) => t * t;
+
+function targetPose(me, clock) {
+  const st = me.state;
+  const A = me.attack;
+  if (me.guard && st !== 'windup' && st !== 'active') {
+    return { p: P.blockSword, s: { pos: [-0.12, -0.22, -0.48], rot: [0.05, 0.12, -0.04] }, fast: 12 };
+  }
+  if (st === 'windup' && A) {
+    const w = CFG.ATTACKS[A.kind].windup;
+    const t = Math.min(1, A.t / w);
+    const key = A.zone === 'L' ? P.leftW : A.zone === 'R' ? P.rightW : A.kind === 'thrust' ? P.thrustW : P.topW;
+    return { p: key, s: { pos: [-0.26, -0.30, -0.54], rot: [0.05, 0.2, -0.03] }, fast: 8 + 10 * t, ease: t };
+  }
+  if (st === 'active' && A) {
+    const key = A.zone === 'L' ? P.leftS : A.zone === 'R' ? P.rightS : A.kind === 'thrust' ? P.thrustS : P.topS;
+    return { p: key, s: { pos: [-0.30, -0.26, -0.52], rot: [0.1, 0.22, -0.02] }, fast: 36 };
+  }
+  if (st === 'recover') {
+    return { p: P.rest, s: { pos: [-0.30, -0.34, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 9 };
+  }
+  if (st === 'stagger' || st === 'exhausted') {
+    return { p: { pos: [0.42, -0.52, -0.58], rot: [0.4, 0.55, 0.75] },
+      s: { pos: [-0.52, -0.50, -0.52], rot: [0.2, 0.5, 0.1] }, fast: 16 };
+  }
+  const bobY = Math.sin(clock * 1.6) * 0.008;
+  const bobX = Math.cos(clock * 1.1) * 0.006;
+  return { p: { pos: [P.rest.pos[0] + bobX, P.rest.pos[1] + bobY, P.rest.pos[2]], rot: P.rest.rot },
+    s: { pos: [-0.30 + bobX, -0.34 + bobY, -0.60], rot: [0.1, 0.42, -0.10] }, fast: 6 };
+}
+
+/* ------------------------------------------------------------------ opponent animation */
+function playFoe(clipKey, { timeScale = 1, once = true, fade = 0.09 } = {}) {
+  const a = foeActions[clipKey];
+  if (!a) return;
+  a.reset();
+  a.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, once ? 1 : Infinity);
+  a.clampWhenFinished = once;
+  a.timeScale = timeScale;
+  a.fadeIn(fade);
+  a.play();
+  /* quiet every other one-shot so the pose does not fight itself */
+  for (const k in foeActions) {
+    const o = foeActions[k];
+    if (o && o !== a && o.isRunning() && k !== 'idle') o.fadeOut(fade);
+  }
+}
+function foeAttackClip(kind, zone) {
+  if (kind === 'thrust') return foeActions.stab ? 'stab' : 'chop';
+  if (zone === 'L') return foeActions.sliceH ? 'sliceH' : 'chop';
+  if (zone === 'R') return foeActions.sliceH ? 'sliceH' : 'chop';
+  return foeActions.chop ? 'chop' : 'sliceD';
+}
+
+/* ------------------------------------------------------------------ HUD */
+const hpMe = $('#hpMe>i'), stMe = $('#stMe>i'), hpFoe = $('#hpFoe>i');
+const telEl = $('#tel'), flashEl = $('#flash'), vigEl = $('#vig');
+const zoneEls = { L: $('#zones b[data-z=L]'), T: $('#zones b[data-z=T]'), R: $('#zones b[data-z=R]') };
+const TEL_COLOR = { light: '#e9f4ff', heavy: '#ff8f6b', thrust: '#ffd479' };
+
+/* ------------------------------------------------------------------ loop */
+const DT = 1 / 120;
+let acc = 0, last = performance.now();
+
+function frame(now) {
+  const raw = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += raw;
+  let steps = 0;
+  while (acc >= DT && steps < 8) {
+    tick(DT);
+    acc -= DT;
+    steps++;
+  }
+  render(raw);
+  requestAnimationFrame(frame);
+}
+
+function tick(dt) {
+  if (!duel) return;
+  const me = duel.a, foe = duel.b;
+  const ia = {
+    move: keys['arrowup'] ? 1 : keys['arrowdown'] ? -1 : 0,
+    guard: keys['a'] ? 'L' : keys['w'] ? 'T' : keys['d'] ? 'R' : (keys[' '] ? guardZone : null),
+    press: pressGuard,
+    attack: pendingAttack ? pendingAttack.kind : null,
+    zone: pendingAttack ? pendingAttack.zone : guardZone,
+    feint: pendingFeint,
+    dodge: pendingDodge,
+  };
+  const ib = think(brain, foe, me, duel.clock, dt, duel.dist);
+  ib.move = ib.move ?? 0;
+  const events = duel.step(dt, ia, ib) || [];
+  pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
+
+  for (const e of events) {
+    if (e.type === 'hit' && e.who === me.id) { camShake = 0.5; hitFlash = 1; }
+    if (e.type === 'hit' && e.who === foe.id) { camShake = 0.22; }
+    if (e.type === 'parry') { parryFlash = 1; say('PARRY'); }
+    if (e.type === 'block') { camShake = Math.max(camShake, 0.16); }
+    if (e.type === 'guardbreak') { say('GUARD BROKEN'); camShake = 0.6; }
+    if (e.type === 'baited') { say('BAITED'); }
+    if (e.type === 'death') {
+      const winner = e.who === foe.id ? 0 : 1;
+      score[winner]++;
+      updateDots();
+      over = score[0] >= 2 || score[1] >= 2;
+      say(winner === 0 ? 'ROUND TO YOU' : 'YOU ARE DOWN', 1600);
+      if (foeActions.death) playFoe('death', { timeScale: 1 });
+      setTimeout(() => {
+        if (over) { say(score[0] > score[1] ? 'YOU TAKE THE DUEL  ·  R TO FIGHT AGAIN' : 'DEFEAT  ·  R TO FIGHT AGAIN', 6000); }
+        else newRound();
+      }, 1500);
+    }
+  }
+
+  /* opponent poses follow the rules, so what you see is what is being resolved */
+  const fst = foe.state;
+  if (fst === 'windup' && foe.attack && foePrev !== 'windup') {
+    const dur = foeActions[foeAttackClip(foe.attack.kind, foe.attack.zone)]?.getClip().duration || 1;
+    const span = CFG.ATTACKS[foe.attack.kind].windup + 0.1;
+    playFoe(foeAttackClip(foe.attack.kind, foe.attack.zone), { timeScale: Math.max(0.6, dur / span) });
+  } else if (fst === 'block' && foePrev !== 'block') {
+    playFoe('block', { once: false });
+  } else if (fst === 'stagger' && foePrev !== 'stagger') {
+    playFoe('hit');
+  } else if (fst === 'dodge' && foePrev !== 'dodge') {
+    playFoe(foe.dodgeDir === 'right' ? 'dodgeR' : 'dodgeL');
+  } else if (fst === 'idle' && foePrev !== 'idle' && foeActions.idle) {
+    foeActions.idle.reset().fadeIn(0.15).play();
+  }
+  foePrev = fst;
+}
+
+function render(dt) {
+  if (!duel) return;
+  const me = duel.a, foe = duel.b;
+
+  /* camera: eye height, first person, shake, dodge lean */
+  const shake = camShake > 0 ? camShake : 0;
+  camShake = Math.max(0, camShake - dt * 3.2);
+  const lean = dodgeRoll;
+  camera.position.set(
+    Math.sin(performance.now() / 1000 * 11) * shake * 0.035 + lean * -0.35,
+    1.68 + Math.cos(performance.now() / 1000 * 13) * shake * 0.03,
+    -Math.abs(lean) * -0.12);
+  camera.rotation.set(pitch, yaw, lean * 0.12 + (shake * 0.02), 'YXZ');
+  dodgeRoll *= 0.86;
+
+  /* the opponent stands at the duel's distance, always facing you */
+  const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
+  foeRoot.position.set(Math.sin(yaw) * -d, 0, Math.cos(yaw) * -d);
+  foeRoot.rotation.y = yaw + Math.PI;
+  if (foeMixer) foeMixer.update(dt);
+
+  /* viewmodel */
+  const target = targetPose(me, duel.clock);
+  const k = 1 - Math.pow(0.001, dt * (target.fast / 12));
+  for (let i = 0; i < 3; i++) {
+    pose.pos[i] = lerp(pose.pos[i], target.p.pos[i], k);
+    pose.rot[i] = lerp(pose.rot[i], target.p.rot[i], k);
+    shieldPose.pos[i] = lerp(shieldPose.pos[i], target.s.pos[i], k);
+    shieldPose.rot[i] = lerp(shieldPose.rot[i], target.s.rot[i], k);
+  }
+  sword.position.fromArray(pose.pos);
+  sword.rotation.fromArray(pose.rot);
+  shield.position.fromArray(shieldPose.pos);
+  shield.rotation.fromArray(shieldPose.rot);
+  /* the shield hides the upper body while guarding: a real cost to turtling */
+  shield.visible = true;
+
+  /* HUD */
+  hpMe.style.width = Math.max(0, me.hp) + '%';
+  stMe.style.width = Math.max(0, me.stam) + '%';
+  hpFoe.style.width = Math.max(0, foe.hp) + '%';
+  for (const z in zoneEls) zoneEls[z].classList.toggle('on', guardZone === z);
+
+  /* the read: what is coming, where, and how heavy */
+  if (foe.state === 'windup' && foe.attack) {
+    const zone = foe.attack.kind === 'thrust' ? 'T' : foe.attack.zone;
+    const arrow = zone === 'L' ? '◀' : zone === 'R' ? '▶' : '▲';
+    telEl.textContent = arrow;
+    telEl.style.color = TEL_COLOR[foe.attack.kind] || '#fff';
+    telEl.style.opacity = 0.85;
+    telEl.style.transform = `translate(-50%,0) translateX(${zone === 'L' ? -130 : zone === 'R' ? 130 : 0}px)`;
+  } else { telEl.style.opacity = 0; }
+
+  parryFlash = Math.max(0, parryFlash - dt * 4);
+  hitFlash = Math.max(0, hitFlash - dt * 2);
+  flashEl.style.opacity = parryFlash * 0.5;
+  vigEl.style.opacity = hitFlash * 0.8;
+
+  renderer.render(scene, camera);
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+requestAnimationFrame(frame);
+window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
+window.__vm = { sword, shield, blade, tip, camera, THREE };
+</script>
+</body>
+</html>
