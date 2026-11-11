@@ -212,7 +212,7 @@ export function buildSoldier(rig, mats, spec = {}) {
     /* an UPPER LID over the eyeball: a bare sphere reads as a doll's eye */
     P(box(0.028, 0.011, 0.014).translate(s * 0.031, 1.681, 0.084), mats.skin, 'head');
     P(box(0.028, 0.009, 0.010).translate(s * 0.031, 1.663, 0.084), mats.skin, 'head');
-    P(box(0.032, 0.012, 0.016).translate(s * 0.031, 1.690, 0.084), mats.hair, 'head');
+    P(box(0.032, 0.011, 0.016).translate(s * 0.031, 1.683, 0.084), mats.hair, 'head');
   }
   if (spec.beard !== false) {
     P(loft([
@@ -225,28 +225,22 @@ export function buildSoldier(rig, mats, spec = {}) {
   /* ---------------- helmet variants */
   if (helm === 'nasal') {
     P(loft([
-      { y: 1.660, rx: 0.085, rz: 0.104 },
-      { y: 1.700, rx: 0.086, rz: 0.105 },
-      { y: 1.745, rx: 0.073, rz: 0.090 },
-      { y: 1.782, rx: 0.043, rz: 0.054 },
-      { y: 1.800, rx: 0.012, rz: 0.015 },
+      { y: 1.696, rx: 0.086, rz: 0.106 },
+      { y: 1.726, rx: 0.087, rz: 0.107 },
+      { y: 1.758, rx: 0.072, rz: 0.089 },
+      { y: 1.785, rx: 0.042, rz: 0.052 },
+      { y: 1.801, rx: 0.011, rz: 0.014 },
     ], 18), mats.steel, 'head');
-    P(cyl(0.088, 0.090, 0.020, 18).translate(0, 1.662, 0), mats.steelDark, 'head');
-    P(box(0.018, 0.082, 0.020).translate(0, 1.644, 0.100), mats.steel, 'head');
+    P(cyl(0.092, 0.094, 0.018, 20).scale(1, 1, 1.20).translate(0, 1.698, 0), mats.steelDark, 'head');
+    P(box(0.017, 0.076, 0.018).translate(0, 1.659, 0.114), mats.steel, 'head');
   } else if (helm === 'kettle') {
     P(loft([
-      { y: 1.686, rx: 0.084, rz: 0.102 },
-      { y: 1.726, rx: 0.082, rz: 0.100 },
-      { y: 1.760, rx: 0.060, rz: 0.073 },
-      { y: 1.782, rx: 0.024, rz: 0.029 },
+      { y: 1.700, rx: 0.086, rz: 0.104 },
+      { y: 1.734, rx: 0.084, rz: 0.102 },
+      { y: 1.764, rx: 0.060, rz: 0.074 },
+      { y: 1.786, rx: 0.023, rz: 0.028 },
     ], 18), mats.steel, 'head');
-    P(cyl(0.130, 0.130, 0.010, 20).translate(0, 1.684, 0), mats.steelDark, 'head');
-    /* mail aventail hanging from the brim */
-    P(loft([
-      { y: 1.686, rx: 0.090, rz: 0.107 },
-      { y: 1.620, rx: 0.097, rz: 0.115 },
-      { y: 1.560, rx: 0.102, rz: 0.121 },
-    ], 16, false, false), mats.mail, 'head');
+    P(cyl(0.132, 0.132, 0.010, 20).scale(1, 1, 1.15).translate(0, 1.702, 0), mats.steelDark, 'head');
   } else {
     /* great helm: the knight's read, a cylinder with a faceplate and sight slit */
     P(loft([
@@ -258,7 +252,7 @@ export function buildSoldier(rig, mats, spec = {}) {
     ], 18), mats.steel, 'head');
     P(box(0.170, 0.016, 0.030).translate(0, 1.686, 0.104), mats.steelDark, 'head');
     for (const s of [-1, 1]) P(box(0.062, 0.012, 0.016).translate(s * 0.050, 1.664, 0.110), mats.hair, 'head');
-    P(cyl(0.108, 0.108, 0.012, 18).translate(0, 1.560, 0), mats.brass, 'head');
+    P(cyl(0.108, 0.108, 0.012, 18).scale(1, 1, 1.10).translate(0, 1.560, 0), mats.brass, 'head');
   }
 
   /* ---------------- arms: mail sleeve, bracer, glove */
@@ -271,14 +265,14 @@ export function buildSoldier(rig, mats, spec = {}) {
     /* elbow and wrist masses, owned by the CHILD bone so they turn with it and
      * always cover the joint face */
     P(sph(0.052, 10, 8).translate(sign * 0.206, 1.150, 0), mats.wool, 'fore.' + s);
-    P(sph(0.043, 10, 8).translate(sign * 0.211, 0.900, 0), mats.leather, 'hand.' + s);
+    P(sph(0.034, 10, 8).translate(sign * 0.215, 0.900, 0), mats.leather, 'hand.' + s);
     P(sph(0.048, 10, 8).translate(sign * 0.204, 1.098, 0), mats.wool, 'fore.' + s);
     P(limb(0.054, 0.048, 0.15).translate(sign * 0.206, 1.140, 0), mats.leather, 'fore.' + s);
     /* pauldron */
     P(loft([
-      { y: 1.452, rx: 0.074, rz: 0.070, x: sign * 0.190 },
-      { y: 1.410, rx: 0.088, rz: 0.080, x: sign * 0.200 },
-      { y: 1.368, rx: 0.082, rz: 0.074, x: sign * 0.208 },
+      { y: 1.452, rx: 0.077, rz: 0.071, x: sign * 0.220 },
+      { y: 1.410, rx: 0.091, rz: 0.081, x: sign * 0.229 },
+      { y: 1.368, rx: 0.085, rz: 0.075, x: sign * 0.236 },
     ], 14), mats.steel, 'arm.' + s);
     /* glove: a block with a thumb, enough at formation distance */
     P(box(0.050, 0.098, 0.090).translate(sign * 0.212, 0.862, 0.004), mats.leather, 'hand.' + s);
@@ -288,7 +282,7 @@ export function buildSoldier(rig, mats, spec = {}) {
       P(box(0.042, 0.072, 0.017).translate(sign * 0.212, 0.780, fz), mats.leather, 'hand.' + s);
       P(box(0.036, 0.020, 0.015).translate(sign * 0.214, 0.742, fz), mats.skin, 'hand.' + s);
     }
-    P(box(0.026, 0.062, 0.026).translate(sign * 0.176, 0.826, 0.040), mats.skin, 'hand.' + s);
+    P(box(0.026, 0.058, 0.026).translate(sign * 0.206, 0.828, 0.058), mats.skin, 'hand.' + s);
   }
 
   /* ---------------- legs: wool trousers, boots, knee cops */
@@ -297,7 +291,7 @@ export function buildSoldier(rig, mats, spec = {}) {
     P(limbO(0.094, 0.072, 0.44, 0.072, 0.078).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
     P(sph(0.097, 12, 10).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
     P(limbO(0.072, 0.052, 0.44, 0.078, 0.062).translate(sign * 0.098, 0.525, 0), mats.woolDark, 'shin.' + s);
-    P(sph(0.070, 12, 10).translate(sign * 0.096, 0.520, 0.010), mats.steel, 'shin.' + s);
+    P(sph(0.085, 12, 10).translate(sign * 0.096, 0.518, 0.022), mats.steel, 'shin.' + s);
     P(sph(0.062, 10, 8).translate(sign * 0.097, 0.395, -0.012), mats.woolDark, 'shin.' + s);
     P(sph(0.056, 10, 8).translate(sign * 0.098, 0.095, 0), mats.woolDark, 'foot.' + s);
     /* boot */
@@ -322,39 +316,56 @@ export function buildSoldier(rig, mats, spec = {}) {
     /* front and back panels, split so the legs can swing through it */
     for (const [zc, rz] of [[1, 0.130], [-1, -0.130]]) {
       P(loft([
-        { y: 1.42, rx: 0.150, rz: 0.020, z: zc * 0.086 },
-        { y: 1.10, rx: 0.166, rz: 0.022, z: zc * 0.104 },
-        { y: 0.92, rx: 0.168, rz: 0.022, z: zc * 0.112 },
-        { y: 0.74, rx: 0.150, rz: 0.020, z: zc * 0.112 },
+        { y: 1.42, rx: 0.160, rz: 0.022, z: zc * 0.113 },
+        { y: 1.10, rx: 0.170, rz: 0.022, z: zc * 0.119 },
+        { y: 0.92, rx: 0.172, rz: 0.022, z: zc * 0.121 },
+        { y: 0.74, rx: 0.152, rz: 0.020, z: zc * 0.119 },
       ], 16), mats.cloth, 'hips');
     }
     /* the device sits on the chest, where it reads from the front */
     const dev = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.15), mats.heraldry);
-    dev.position.set(0, 1.26, 0.128);
+    dev.position.set(0, 1.27, 0.148);
     parts.push({ mesh: dev, bone: 'chest' });
   }
   /* belt */
-  P(cyl(0.172, 0.172, 0.036, 20).translate(0, 0.995, 0), mats.leather, 'hips');
-  P(box(0.052, 0.044, 0.012).translate(0, 0.995, 0.118), mats.brass, 'hips');
-  P(box(0.070, 0.090, 0.046).translate(0.115, 0.955, 0.086), mats.leather, 'hips');
+  P(cyl(0.175, 0.175, 0.034, 20).scale(1, 1, 0.72).translate(0, 0.995, 0), mats.leather, 'hips');
+  P(box(0.052, 0.044, 0.012).translate(0, 0.995, 0.156), mats.brass, 'hips');
+  P(box(0.070, 0.090, 0.046).translate(0.130, 0.945, 0.122), mats.leather, 'hips');
 
-  /* ---------------- weapons */
-  if (kind === 'none') { /* bare body, for joint inspection */ }
-  else if (kind === 'spear') {
-    const shaft = cyl(0.011, 0.011, 2.05, 8).translate(0, 0.62, 0);
-    parts.push({ geo: shaft, mat: mats.leather, bone: 'hand.R' });
-    const head = new THREE.ConeGeometry(0.028, 0.20, 6).translate(0, 1.72, 0);
-    parts.push({ geo: head, mat: mats.steel, bone: 'hand.R' });
-    const cuff = cyl(0.016, 0.016, 0.05, 8).translate(0, 1.60, 0);
-    parts.push({ geo: cuff, mat: mats.brass, bone: 'hand.R' });
-  } else {
-    /* arming sword */
-    const blade = new THREE.CylinderGeometry(0.007, 0.0025, 0.78, 4, 4).translate(0, 0.62, 0);
-    blade.scale(1, 1, 2.6);
-    parts.push({ geo: blade, mat: mats.steel, bone: 'hand.R' });
-    parts.push({ geo: box(0.155, 0.014, 0.020).translate(0, 0.225, 0), mat: mats.brass, bone: 'hand.R' });
-    parts.push({ geo: cyl(0.012, 0.013, 0.115, 8).translate(0, 0.160, 0), mat: mats.leather, bone: 'hand.R' });
-    parts.push({ geo: sph(0.019, 8, 6).translate(0, 0.098, 0), mat: mats.brass, bone: 'hand.R' });
+  /* ---------------- weapons
+   * THESE ARE SKINNED TO hand.R BUT AUTHORED IN ABSOLUTE BIND SPACE, so they have
+   * to be built around the hand and angled clear of the arm. Authored at the world
+   * origin instead, the sword hung straight through the torso and down into the
+   * shin (10 of 43 verts inside the torso, up to 97mm deep) and the spear stood on
+   * the ground through the centre of the body. Each weapon is now built with its
+   * GRIP at the local origin and then transformed into the hand: tilted outboard
+   * so the blade clears the forearm and the pauldron, and forward so it clears the
+   * torso. */
+  const HAND = { x: 0.211, y: 0.900, z: 0.004 };
+  const putInHand = (m) => (geo) => geo.applyMatrix4(m);
+  if (kind === 'spear') {
+    const M = new THREE.Matrix4().makeTranslation(HAND.x + 0.050, HAND.y, HAND.z + 0.020)
+      .multiply(new THREE.Matrix4().makeRotationZ(-0.13));
+    const at = putInHand(M);
+    parts.push({ geo: at(cyl(0.011, 0.011, 2.05, 8).translate(0, 0.225, 0)), mat: mats.leather, bone: 'hand.R' });
+    parts.push({ geo: at(new THREE.ConeGeometry(0.028, 0.20, 6).translate(0, 1.35, 0)), mat: mats.steel, bone: 'hand.R' });
+    parts.push({ geo: at(cyl(0.016, 0.016, 0.05, 8).translate(0, 1.18, 0)), mat: mats.brass, bone: 'hand.R' });
+  } else if (kind !== 'none') {
+    /* the outboard tilt pivots about the GRIP, so the pommel (below the grip)
+     * swings back IN toward the thigh and ended up 50% buried in it. Easing the
+     * tilt and moving the whole weapon outboard keeps both ends clear: pommel
+     * 0.205-0.243 against a thigh that reaches 0.182, blade tip 0.34 against a
+     * pauldron that reaches 0.311. */
+    const M = new THREE.Matrix4().makeTranslation(HAND.x + 0.042, HAND.y, HAND.z)
+      .multiply(new THREE.Matrix4().makeRotationZ(-0.20))
+      .multiply(new THREE.Matrix4().makeRotationX(0.22));
+    const at = putInHand(M);
+    const blade = new THREE.CylinderGeometry(0.007, 0.0025, 0.78, 4, 4).translate(0, 0.45, 0);
+    blade.scale(2.4, 1, 1);                     /* width across the edge, thin through the flat */
+    parts.push({ geo: at(blade), mat: mats.steel, bone: 'hand.R' });
+    parts.push({ geo: at(box(0.130, 0.014, 0.020).translate(0, 0.055, 0)), mat: mats.brass, bone: 'hand.R' });
+    parts.push({ geo: at(cyl(0.012, 0.013, 0.115, 8).translate(0, -0.005, 0)), mat: mats.leather, bone: 'hand.R' });
+    parts.push({ geo: at(sph(0.019, 8, 6).translate(0, -0.085, 0)), mat: mats.brass, bone: 'hand.R' });
   }
   /* shield on the left forearm */
   const sh = spec.shield || 'kite';

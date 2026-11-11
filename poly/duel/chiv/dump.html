@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8">
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script></head>
+<body><script type="module">
+import * as THREE from 'three';
+import { Atlas } from './forge.js';
+import { buildSkeleton, buildSoldier, soldierMaterials } from './soldier.js';
+const Q = new URLSearchParams(location.search);
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+const rig = buildSkeleton();
+const mats = soldierMaterials(atlas.m, 0x2f6f9e);
+/* name the materials so the report can say "steel" instead of a uuid */
+for (const [k, m] of Object.entries(mats)) m.name = k;
+const parts = buildSoldier(rig, mats, { kind: Q.get('kind') || 'sword', helm: Q.get('helm') || 'nasal', shield: Q.get('shield') || 'kite' });
+const out = parts.map((p, i) => {
+  let g = p.geo;
+  if (!g && p.mesh) { p.mesh.updateMatrix(); g = p.mesh.geometry.clone().applyMatrix4(p.mesh.matrix); }
+  if (!g) return null;
+  if (!g.index) { const n = g.attributes.position.count; const idx = new Uint32Array(n); for (let k = 0; k < n; k++) idx[k] = k; g = g.clone(); g.setIndex(new THREE.BufferAttribute(idx, 1)); }
+  const pos = Array.from(g.attributes.position.array);
+  const idx = Array.from(g.index.array);
+  return { i, bone: p.bone, mat: (p.mat || (p.mesh && p.mesh.material) || {}).name || '?', pos, idx };
+}).filter(Boolean);
+window.__parts = out;
+window.__ready = true;
+</script></body></html>
