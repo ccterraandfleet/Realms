@@ -1,0 +1,169 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Realms duel core</title>
+<style>
+ html,body{margin:0;height:100%;background:#14181d;color:#dfe7ef;font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}
+ #wrap{position:relative;width:100%;height:100%}
+ canvas{display:block;width:100%;height:100%}
+ .hud{position:absolute;left:18px;top:16px;right:18px;display:flex;justify-content:space-between;pointer-events:none}
+ .bar{width:280px}
+ .name{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#9fb0c2;margin-bottom:5px}
+ .track{height:11px;background:#232a32;border:1px solid #333c46;position:relative;overflow:hidden}
+ .fill{position:absolute;inset:0;transform-origin:left}
+ .hp .fill{background:#b8432f}
+ .sp .fill{background:#c9a227}
+ .track+ .track{margin-top:4px}
+ .right{text-align:right}
+ .foot{position:absolute;left:18px;bottom:14px;right:18px;display:flex;justify-content:space-between;font-size:12px;color:#8b9aa8;pointer-events:none}
+ .log{position:absolute;left:18px;top:96px;font-size:12px;color:#a9b8c6;max-width:340px;white-space:pre-line;pointer-events:none}
+ kbd{background:#232a32;border:1px solid #39424d;border-radius:3px;padding:1px 5px;color:#cfd8e2}
+ .keys{position:absolute;right:18px;bottom:40px;font-size:12px;color:#7f8e9c;text-align:right;pointer-events:none}
+ #hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);text-align:center;color:#9fb0c2}
+</style></head><body><div id="wrap"><canvas id="c"></canvas>
+<div class="hud">
+  <div class="bar"><div class="name" id="n1">you</div><div class="track hp"><div class="fill" id="hp1"></div></div><div class="track sp"><div class="fill" id="sp1"></div></div></div>
+  <div class="bar right"><div class="name" id="n2">opponent</div><div class="track hp"><div class="fill" id="hp2" style="transform-origin:right"></div></div><div class="track sp"><div class="fill" id="sp2" style="transform-origin:right"></div></div></div>
+</div>
+<div class="log" id="log"></div>
+<div class="keys"><kbd>J</kbd> light <kbd>K</kbd> heavy <kbd>L</kbd> thrust <kbd>F</kbd> feint <kbd>Shift</kbd> dodge<br>
+<kbd>A</kbd><kbd>W</kbd><kbd>D</kbd> choose left / top / right · <kbd>Space</kbd> hold guard · <kbd>1</kbd>-<kbd>7</kbd> opponent style</div>
+<div class="foot"><span id="stamp">core v1</span><span id="state"></span></div>
+</div>
+<script type="module">
+import { CFG, Fighter, Duel } from './core.js';
+import { STYLES, makeBrain, think } from './ai.js';
+
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+let W = 0, H = 0, dpr = 1;
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+const styleNames = Object.keys(STYLES);
+let styleIdx = 0;
+const me = new Fighter('you', -1), foe = new Fighter('opponent', 1);
+let duel = new Duel(me, foe, { maxTime: 60 });
+duel.dist = 3.2;
+let foeBrain = makeBrain(STYLES[styleNames[styleIdx]], mulberry32(12345));
+let guardZone = 'L', guardHeld = false, pressThisFrame = false, pending = null;
+const log = [];
+
+function mulberry32(a){return function(){a|=0;a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return ((t^(t>>>14))>>>0)/4294967296;};}
+
+function reset(styleKey) {
+  me.hp = CFG.HP; me.stam = CFG.STAM_MAX; me.state = 'idle'; me.guard = null; me.attack = null;
+  me.riposteUntil = -1; me.guardLockUntil = 0; me.guardBreaks = 0; me.parries = 0; me.hits = 0; me.feints = 0; me.baited = 0;
+  foe.hp = CFG.HP; foe.stam = CFG.STAM_MAX; foe.state = 'idle'; foe.guard = null; foe.attack = null;
+  foe.riposteUntil = -1; foe.guardLockUntil = 0; foe.guardBreaks = 0; foe.parries = 0; foe.hits = 0; foe.feints = 0; foe.baited = 0;
+  duel = new Duel(me, foe, { maxTime: 60 }); duel.dist = 3.2;
+  foeBrain = makeBrain(STYLES[styleKey], mulberry32(12345));
+  log.length = 0; push('— ' + STYLES[styleKey].name + ' steps up —');
+  document.getElementById('n2').textContent = STYLES[styleKey].name;
+}
+function push(t) { log.push(t); if (log.length > 9) log.shift(); document.getElementById('log').textContent = log.join('\n'); }
+
+addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  if (k === ' ') { guardHeld = true; pressThisFrame = true; e.preventDefault(); }
+  if (k === 'a' || k === 'arrowleft') guardZone = 'L';
+  if (k === 'd' || k === 'arrowright') guardZone = 'R';
+  if (k === 'w' || k === 'arrowup') guardZone = 'T';
+  if (k === 'j') pending = { kind: 'light', zone: guardZone };
+  if (k === 'k') pending = { kind: 'heavy', zone: guardZone };
+  if (k === 'l') pending = { kind: 'thrust', zone: guardZone };
+  if (k === 'f') pending = { feint: true };
+  if (k === 'shift') pending = { dodge: 'L' };
+  if (k >= '1' && k <= '7') { const n = +k - 1; if (styleNames[n]) { styleIdx = n; reset(styleNames[n]); } }
+});
+addEventListener('keyup', (e) => { if (e.key === ' ') guardHeld = false; });
+
+const LABEL = { hit: 'lands a blow', block: 'blocks', parry: 'PARRIES', guardbreak: 'breaks the guard', exhausted: 'is winded', dodge: 'slips aside', baited: 'is baited', outofrange: 'swings at air' };
+function react(ev) {
+  for (const e of ev) {
+    const who = e.who === me.id ? 'you' : 'them', vs = e.vs === me.id ? 'you' : 'them';
+    if (e.type === 'hit') push((e.riposte ? 'RIPOSTE: ' : '') + who + ' ' + LABEL.hit + ' ' + vs + ' for ' + e.dmg);
+    else if (e.type === 'baited') push(who + ' ' + LABEL.baited + ' by ' + vs + "'s feint");
+    else if (e.type === 'parry') push(who + ' ' + LABEL.parry + ' ' + vs + ' high ' + e.zone);
+    else if (LABEL[e.type]) push(who + ' ' + LABEL[e.type] + (e.zone ? ' ' + e.zone : ''));
+    if (e.type === 'death') push('— ' + who + ' goes down — press 1-7 to face another —');
+  }
+}
+
+let acc = 0, last = performance.now();
+const STEP = 1 / 120;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000); last = now; acc += dt;
+  while (acc >= STEP) {
+    const mine = { guard: guardHeld ? guardZone : null, press: pressThisFrame,
+      attack: pending && pending.kind ? pending.kind : null, zone: guardZone,
+      feint: !!(pending && pending.feint), dodge: pending && pending.dodge ? pending.dodge : null,
+      move: (duel.dist > 2.0 ? 1 : 0) };
+    const theirs = think(foeBrain, foe, me, duel.clock, STEP, duel.dist);
+    react(duel.step(STEP, mine, theirs) || []);
+    pressThisFrame = false; pending = null;
+    acc -= STEP;
+    if (duel.over) { acc = 0; break; }
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+function figure(x, y, s, colour, st, facing) {
+  g.strokeStyle = colour; g.lineWidth = 3; g.lineCap = 'round';
+  g.beginPath(); g.arc(x, y - 46 * s, 8 * s, 0, 7); g.stroke();          // head
+  g.beginPath(); g.moveTo(x, y - 38 * s); g.lineTo(x, y - 12 * s); g.stroke();  // trunk
+  g.beginPath(); g.moveTo(x, y - 12 * s); g.lineTo(x - 9 * s, y); g.moveTo(x, y - 12 * s); g.lineTo(x + 9 * s, y); g.stroke();
+  if (st.guard) {
+    const gy = st === me ? y - 30 * s : y - 30 * s;
+    g.strokeStyle = st.pressIsParry ? '#7fd6a2' : '#8fa6bb';
+    g.lineWidth = 4;
+    if (st.guard === 'T') { g.beginPath(); g.moveTo(x - 12 * s, y - 62 * s); g.lineTo(x + 12 * s, y - 62 * s); g.stroke(); }
+    if (st.guard === 'L') { g.beginPath(); g.moveTo(x - 20 * s, y - 50 * s); g.lineTo(x - 20 * s, y - 16 * s); g.stroke(); }
+    if (st.guard === 'R') { g.beginPath(); g.moveTo(x + 20 * s, y - 50 * s); g.lineTo(x + 20 * s, y - 16 * s); g.stroke(); }
+  }
+  if (st.state === 'windup' || st.state === 'active') {
+    const prog = st.attack ? Math.min(1, st.attack.t / CFG.ATTACKS[st.attack.kind].windup) : 1;
+    g.strokeStyle = st.attack && st.attack.kind === 'heavy' ? '#e0763f' : st.attack && st.attack.kind === 'thrust' ? '#c96adf' : '#d8d2b0';
+    g.lineWidth = 4;
+    const reach = 30 + 26 * prog, lift = st.attack && st.attack.zone === 'T' ? -58 : -34;
+    g.beginPath(); g.moveTo(x + 6 * s * facing, y - 30 * s); g.lineTo(x + facing * reach * s, y + lift * s / 1.6 - 10 * s); g.stroke();
+  }
+  if (st.state === 'stagger') { g.fillStyle = 'rgba(200,80,60,.18)'; g.fillRect(x - 26 * s, y - 70 * s, 52 * s, 74 * s); }
+  g.fillStyle = colour; g.font = (11 * s).toFixed(0) + 'px ui-monospace'; g.textAlign = 'center';
+  g.fillText(st.state === 'exhausted' ? 'winded' : '', x, y + 18 * s);
+}
+
+function draw() {
+  g.fillStyle = '#14181d'; g.fillRect(0, 0, W, H);
+  const horizon = H * 0.66;
+  const grd = g.createLinearGradient(0, 0, 0, horizon);
+  grd.addColorStop(0, '#1b222a'); grd.addColorStop(1, '#242c33');
+  g.fillStyle = grd; g.fillRect(0, 0, W, horizon);
+  g.fillStyle = '#3a3128'; g.fillRect(0, horizon, W, H - horizon);
+  g.strokeStyle = '#4a3f33'; g.lineWidth = 2; g.beginPath(); g.moveTo(0, horizon); g.lineTo(W, horizon); g.stroke();
+
+  const mid = W / 2, gap = Math.min(300, 90 + (duel.dist ?? 3) * 58);
+  const s = Math.min(1.5, H / 420);
+  figure(mid - gap / 2, horizon + 26, s, '#177ba6', me, 1);
+  figure(mid + gap / 2, horizon + 26, s, '#b3532c', foe, -1);
+
+  document.getElementById('hp1').style.transform = 'scaleX(' + me.healthRatio + ')';
+  document.getElementById('hp2').style.transform = 'scaleX(' + foe.healthRatio + ')';
+  document.getElementById('sp1').style.transform = 'scaleX(' + me.staminaRatio + ')';
+  document.getElementById('sp2').style.transform = 'scaleX(' + foe.staminaRatio + ')';
+  document.getElementById('state').textContent =
+    'guard ' + (guardHeld ? guardZone : 'down') + ' · ' + me.state + ' · ' + foe.state +
+    ' · parries ' + me.parries + '/' + foe.parries + ' · baited ' + me.baited + '/' + foe.baited +
+    (me.riposteUntil > duel.clock ? ' · RIPOSTE OPEN' : '');
+  if (duel.over) { g.fillStyle = 'rgba(10,12,15,.6)'; g.fillRect(0, 0, W, H);
+    g.fillStyle = '#e6edf4'; g.textAlign = 'center'; g.font = '600 22px ui-sans-serif,system-ui';
+    g.fillText(duel.winner === me ? 'You hold the field' : duel.winner === foe ? 'You are beaten' : 'A drawn breath', W / 2, H / 2 - 6);
+    g.font = '13px ui-monospace'; g.fillStyle = '#9fb0c2';
+    g.fillText('press 1-7 for another opponent', W / 2, H / 2 + 22); }
+}
+
+reset(styleNames[styleIdx]);
+requestAnimationFrame(frame);
+window.__duel = { get duel() { return duel; }, me, foe, STYLES, reset, styleNames };
+</script></body></html>
