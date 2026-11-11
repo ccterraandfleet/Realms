@@ -39,13 +39,13 @@ export const RIG_DEF = [
   ['neck',     'chest',     0,         1.50,  0.006],
   ['head',     'neck',      0,         1.575, 0.008],
   ['clav.L',   'chest',    -0.055,     1.45,  0.004],
-  ['arm.L',    'clav.L',   -0.175,     1.435, 0],
-  ['fore.L',   'arm.L',    -0.185,     1.155, 0],
-  ['hand.L',   'fore.L',   -0.190,     0.900, 0],
+  ['arm.L',    'clav.L',   -0.196,     1.435, 0],
+  ['fore.L',   'arm.L',    -0.206,     1.155, 0],
+  ['hand.L',   'fore.L',   -0.211,     0.900, 0],
   ['clav.R',   'chest',     0.055,     1.45,  0.004],
-  ['arm.R',    'clav.R',    0.175,     1.435, 0],
-  ['fore.R',   'arm.R',     0.185,     1.155, 0],
-  ['hand.R',   'fore.R',    0.190,     0.900, 0],
+  ['arm.R',    'clav.R',    0.196,     1.435, 0],
+  ['fore.R',   'arm.R',     0.206,     1.155, 0],
+  ['hand.R',   'fore.R',    0.211,     0.900, 0],
   ['thigh.L',  'hips',     -0.092,     0.965, 0],
   ['shin.L',   'thigh.L',  -0.098,     0.525, 0],
   ['foot.L',   'shin.L',   -0.100,     0.095, 0],
@@ -172,62 +172,65 @@ export function buildSoldier(rig, mats, spec = {}) {
     { y: 0.94, rx: 0.150, rz: 0.100 },
     { y: 1.02, rx: 0.163, rz: 0.110 },
     { y: 1.13, rx: 0.146, rz: 0.098 },
-    { y: 1.24, rx: 0.160, rz: 0.108 },
-    { y: 1.34, rx: 0.181, rz: 0.120 },
-    { y: 1.42, rx: 0.176, rz: 0.117 },
-    { y: 1.47, rx: 0.140, rz: 0.100 },
+    { y: 1.24, rx: 0.173, rz: 0.112 },
+    { y: 1.34, rx: 0.203, rz: 0.128 },
+    { y: 1.42, rx: 0.199, rz: 0.124 },
+    { y: 1.47, rx: 0.152, rz: 0.104 },
   ], 20), mats[has('mail') ? 'mail' : 'wool'], 'chest');
 
   /* ---------------- neck and head */
   P(limb(0.052, 0.058, 0.09).translate(0, 1.55, 0.004), mats.skin, 'neck');
   P(loft([
-    { y: 1.545, rx: 0.062, rz: 0.066 },
-    { y: 1.585, rx: 0.080, rz: 0.090 },
-    { y: 1.625, rx: 0.090, rz: 0.098 },
-    { y: 1.665, rx: 0.093, rz: 0.101 },
-    { y: 1.705, rx: 0.086, rz: 0.094 },
-    { y: 1.745, rx: 0.062, rz: 0.068 },
-    { y: 1.775, rx: 0.028, rz: 0.032 },
+    { y: 1.545, rx: 0.056, rz: 0.064 },
+    { y: 1.585, rx: 0.070, rz: 0.089 },
+    { y: 1.625, rx: 0.077, rz: 0.096 },
+    { y: 1.665, rx: 0.0785, rz: 0.0975 },
+    { y: 1.705, rx: 0.074, rz: 0.093 },
+    { y: 1.745, rx: 0.055, rz: 0.067 },
+    { y: 1.775, rx: 0.026, rz: 0.032 },
   ], 18), mats.skin, 'head');
   /* nose, brow, eyes: tiny, but they are what stop a head reading as an egg */
-  P(box(0.026, 0.042, 0.030).translate(0, 1.648, 0.096), mats.skin, 'head');
-  P(box(0.096, 0.014, 0.024).translate(0, 1.682, 0.088), mats.skin, 'head');
+  P(box(0.023, 0.040, 0.028).translate(0, 1.648, 0.093), mats.skin, 'head');
+  P(box(0.082, 0.013, 0.022).translate(0, 1.682, 0.085), mats.skin, 'head');
   for (const s of [-1, 1]) {
-    P(sph(0.0115, 8, 6).translate(s * 0.036, 1.672, 0.083), mats.hair, 'head');
-    P(box(0.030, 0.012, 0.016).translate(s * 0.036, 1.690, 0.086), mats.hair, 'head');
+    P(sph(0.0105, 8, 6).translate(s * 0.031, 1.672, 0.081), mats.hair, 'head');
+    /* an UPPER LID over the eyeball: a bare sphere reads as a doll's eye */
+    P(box(0.028, 0.011, 0.014).translate(s * 0.031, 1.681, 0.084), mats.skin, 'head');
+    P(box(0.028, 0.009, 0.010).translate(s * 0.031, 1.663, 0.084), mats.skin, 'head');
+    P(box(0.032, 0.012, 0.016).translate(s * 0.031, 1.690, 0.084), mats.hair, 'head');
   }
   if (spec.beard !== false) {
     P(loft([
-      { y: 1.560, rx: 0.052, rz: 0.048, z: 0.030 },
-      { y: 1.592, rx: 0.070, rz: 0.066, z: 0.022 },
-      { y: 1.622, rx: 0.080, rz: 0.082, z: 0.016 },
+      { y: 1.560, rx: 0.044, rz: 0.045, z: 0.028 },
+      { y: 1.592, rx: 0.059, rz: 0.062, z: 0.021 },
+      { y: 1.622, rx: 0.067, rz: 0.077, z: 0.015 },
     ], 14), mats.hair, 'head');
   }
 
   /* ---------------- helmet variants */
   if (helm === 'nasal') {
     P(loft([
-      { y: 1.660, rx: 0.100, rz: 0.108 },
-      { y: 1.700, rx: 0.101, rz: 0.109 },
-      { y: 1.745, rx: 0.086, rz: 0.094 },
-      { y: 1.782, rx: 0.050, rz: 0.056 },
-      { y: 1.800, rx: 0.014, rz: 0.016 },
+      { y: 1.660, rx: 0.085, rz: 0.104 },
+      { y: 1.700, rx: 0.086, rz: 0.105 },
+      { y: 1.745, rx: 0.073, rz: 0.090 },
+      { y: 1.782, rx: 0.043, rz: 0.054 },
+      { y: 1.800, rx: 0.012, rz: 0.015 },
     ], 18), mats.steel, 'head');
-    P(cyl(0.104, 0.106, 0.020, 18).translate(0, 1.662, 0), mats.steelDark, 'head');
-    P(box(0.020, 0.086, 0.022).translate(0, 1.644, 0.104), mats.steel, 'head');
+    P(cyl(0.088, 0.090, 0.020, 18).translate(0, 1.662, 0), mats.steelDark, 'head');
+    P(box(0.018, 0.082, 0.020).translate(0, 1.644, 0.100), mats.steel, 'head');
   } else if (helm === 'kettle') {
     P(loft([
-      { y: 1.686, rx: 0.098, rz: 0.106 },
-      { y: 1.726, rx: 0.096, rz: 0.104 },
-      { y: 1.760, rx: 0.070, rz: 0.076 },
-      { y: 1.782, rx: 0.028, rz: 0.030 },
+      { y: 1.686, rx: 0.084, rz: 0.102 },
+      { y: 1.726, rx: 0.082, rz: 0.100 },
+      { y: 1.760, rx: 0.060, rz: 0.073 },
+      { y: 1.782, rx: 0.024, rz: 0.029 },
     ], 18), mats.steel, 'head');
-    P(cyl(0.150, 0.150, 0.010, 20).translate(0, 1.684, 0), mats.steelDark, 'head');
+    P(cyl(0.130, 0.130, 0.010, 20).translate(0, 1.684, 0), mats.steelDark, 'head');
     /* mail aventail hanging from the brim */
     P(loft([
-      { y: 1.686, rx: 0.104, rz: 0.112 },
-      { y: 1.620, rx: 0.112, rz: 0.120 },
-      { y: 1.560, rx: 0.118, rz: 0.126 },
+      { y: 1.686, rx: 0.090, rz: 0.107 },
+      { y: 1.620, rx: 0.097, rz: 0.115 },
+      { y: 1.560, rx: 0.102, rz: 0.121 },
     ], 16, false, false), mats.mail, 'head');
   } else {
     /* great helm: the knight's read, a cylinder with a faceplate and sight slit */
@@ -246,18 +249,27 @@ export function buildSoldier(rig, mats, spec = {}) {
   /* ---------------- arms: mail sleeve, bracer, glove */
   for (const s of ['L', 'R']) {
     const sign = s === 'L' ? -1 : 1;
-    P(limb(0.062, 0.050, 0.28).translate(sign * 0.176, 1.432, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
-    P(limb(0.050, 0.040, 0.25).translate(sign * 0.188, 1.150, 0), mats.wool, 'fore.' + s);
-    P(limb(0.054, 0.048, 0.15).translate(sign * 0.186, 1.140, 0), mats.leather, 'fore.' + s);
+    P(limb(0.062, 0.050, 0.28).translate(sign * 0.196, 1.432, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
+    /* deltoid mass: without it an arm is a pipe and the shoulder has no shape */
+    P(sph(0.076, 12, 10).translate(sign * 0.192, 1.408, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
+    P(limb(0.050, 0.040, 0.25).translate(sign * 0.206, 1.150, 0), mats.wool, 'fore.' + s);
+    P(sph(0.048, 10, 8).translate(sign * 0.204, 1.098, 0), mats.wool, 'fore.' + s);
+    P(limb(0.054, 0.048, 0.15).translate(sign * 0.206, 1.140, 0), mats.leather, 'fore.' + s);
     /* pauldron */
     P(loft([
-      { y: 1.452, rx: 0.072, rz: 0.070, x: sign * 0.168 },
-      { y: 1.410, rx: 0.086, rz: 0.080, x: sign * 0.178 },
-      { y: 1.368, rx: 0.080, rz: 0.074, x: sign * 0.186 },
+      { y: 1.452, rx: 0.074, rz: 0.070, x: sign * 0.190 },
+      { y: 1.410, rx: 0.088, rz: 0.080, x: sign * 0.200 },
+      { y: 1.368, rx: 0.082, rz: 0.074, x: sign * 0.208 },
     ], 14), mats.steel, 'arm.' + s);
     /* glove: a block with a thumb, enough at formation distance */
-    P(box(0.048, 0.105, 0.086).translate(sign * 0.194, 0.855, 0.004), mats.leather, 'hand.' + s);
-    P(box(0.030, 0.052, 0.030).translate(sign * 0.168, 0.878, 0.030), mats.leather, 'hand.' + s);
+    P(box(0.050, 0.098, 0.090).translate(sign * 0.212, 0.862, 0.004), mats.leather, 'hand.' + s);
+    /* four fingers with gaps, then a thumb across the palm */
+    for (let f = 0; f < 4; f++) {
+      const fz = -0.030 + f * 0.021;
+      P(box(0.042, 0.072, 0.017).translate(sign * 0.212, 0.780, fz), mats.leather, 'hand.' + s);
+      P(box(0.036, 0.020, 0.015).translate(sign * 0.214, 0.742, fz), mats.skin, 'hand.' + s);
+    }
+    P(box(0.026, 0.062, 0.026).translate(sign * 0.176, 0.826, 0.040), mats.skin, 'hand.' + s);
   }
 
   /* ---------------- legs: wool trousers, boots, knee cops */
@@ -266,13 +278,14 @@ export function buildSoldier(rig, mats, spec = {}) {
     P(limb(0.094, 0.072, 0.44).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
     P(limb(0.072, 0.052, 0.44).translate(sign * 0.098, 0.525, 0), mats.woolDark, 'shin.' + s);
     P(sph(0.070, 12, 10).translate(sign * 0.096, 0.520, 0.010), mats.steel, 'shin.' + s);
+    P(sph(0.062, 10, 8).translate(sign * 0.097, 0.395, -0.012), mats.woolDark, 'shin.' + s);
     /* boot */
     P(loft([
-      { y: 0.140, rx: 0.070, rz: 0.076, x: sign * 0.098 },
-      { y: 0.090, rx: 0.074, rz: 0.088, x: sign * 0.099 },
-      { y: 0.040, rx: 0.070, rz: 0.105, x: sign * 0.100, z: 0.020 },
+      { y: 0.140, rx: 0.050, rz: 0.068, x: sign * 0.098 },
+      { y: 0.090, rx: 0.053, rz: 0.080, x: sign * 0.099 },
+      { y: 0.040, rx: 0.050, rz: 0.098, x: sign * 0.100, z: 0.020 },
     ], 14), mats.leather, 'foot.' + s);
-    P(box(0.098, 0.048, 0.230).translate(sign * 0.100, 0.026, 0.052), mats.leather, 'foot.' + s);
+    P(box(0.092, 0.048, 0.262).translate(sign * 0.100, 0.026, 0.058), mats.leather, 'foot.' + s);
   }
 
   /* ---------------- the mail skirt and the surcoat: the layers that read */
@@ -323,7 +336,11 @@ export function buildSoldier(rig, mats, spec = {}) {
   }
   /* shield on the left forearm */
   const sh = spec.shield || 'kite';
-  if (sh === 'kite') {
+  /* 'none' has to mean none: the else branch below builds a SHIELD, so a spec of
+   * 'none' silently produced a 0.52m round shield and wrecked every silhouette
+   * measurement taken off it */
+  if (sh === 'none') { /* no shield */ }
+  else if (sh === 'kite') {
     const s = new THREE.Shape();
     s.moveTo(-0.20, 0.34); s.lineTo(0.20, 0.34);
     s.lineTo(0.185, -0.10); s.quadraticCurveTo(0.14, -0.34, 0, -0.44);
@@ -505,6 +522,17 @@ export function animate(rig, t, mode = 'march', extra = {}) {
     set('shin.R', 0.5, 0, 0);
     if (hips) hips.position.y = hips.userData.abs.y - 0.62;
   }
+  /* ASYMMETRY, applied last so every mode inherits it: real bodies are never
+   * mirrored. Slight head yaw, one shoulder dropped, hips off level. */
+  const B2 = rig.byName;
+  const tilt = (n, dx, dy, dz) => { const b = B2.get(n); if (b) { b.rotation.x += dx; b.rotation.y += dy; b.rotation.z += dz; } };
+  tilt('head', 0.012, 0.052, -0.014);
+  tilt('neck', 0.006, 0.018, -0.008);
+  tilt('chest', 0, 0.010, 0.011);
+  tilt('arm.R', 0.020, 0, -0.014);
+  tilt('arm.L', -0.010, 0, 0.008);
+  tilt('thigh.L', 0.018, 0.030, 0.010);
+  tilt('thigh.R', -0.008, -0.020, -0.008);
   rig.root.updateMatrixWorld(true);
   return rig;
 }

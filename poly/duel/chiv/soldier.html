@@ -94,11 +94,64 @@ if (VIEW === 'formation') {
     window.__march = { strideMeters: +stride.toFixed(3), footY: [+f0.y.toFixed(2), +f1.y.toFixed(2)],
                        manHeight: +(bb.max.y - bb.min.y).toFixed(2) };
   }
+} else if (VIEW === 'silhouette' || VIEW === 'side') {
+  /* a pure silhouette pass: flat white on black, no ground, no shadows, so the
+   * outline can be measured without the ground plane polluting the mask */
+  scene.background = new THREE.Color(0x000000);
+  ground.visible = false;
+  const man = makeMan({ kind: 'sword', helm: 'nasal', shield: 'none' }, 0x2f6f9e);
+  scene.add(man.root);
+  animate(man.rig, 0, 'idle');
+  man.root.traverse((o) => { if (o.isMesh) { o.material = new THREE.MeshBasicMaterial({ color: 0xffffff }); o.castShadow = false; o.receiveShadow = false; } });
+  if (VIEW === 'side') {
+    camera.position.set(4.0, 0.90, 0.0); camera.lookAt(0, 0.90, 0);
+  } else {
+    camera.position.set(0, 0.90, 4.0); camera.lookAt(0, 0.90, 0);
+  }
+  camera.fov = 30; camera.updateProjectionMatrix();
+  renderer.shadowMap.enabled = false;
+  renderer.render(scene, camera);
+  stats = soldierStats(man.parts, man);
+  /* ORTHOGRAPHIC-NUMBERS FROM A PERSPECTIVE SHOT ARE WRONG, so also report the
+   * true world-space extents of each body part group, which is what actually
+   * gets compared against anatomy */
+  /* MEASURE THE PARTS, not the scene graph: parts are merged by material, so no
+   * mesh belongs to a single bone and walking the graph tells you nothing. */
+  const perBone = {};
+  for (const pt of man.parts) {
+    const g = pt.geo || (pt.mesh && pt.mesh.geometry);
+    if (!g) continue;
+    g.computeBoundingBox();
+    const bb = g.boundingBox.clone();
+    if (pt.mesh) { pt.mesh.updateMatrix(); bb.applyMatrix4(pt.mesh.matrix); }
+    if (!perBone[pt.bone]) perBone[pt.bone] = { minY: 1e9, maxY: -1e9, minX: 1e9, maxX: -1e9 };
+    const r = perBone[pt.bone];
+    r.minY = Math.min(r.minY, bb.min.y); r.maxY = Math.max(r.maxY, bb.max.y);
+    r.minX = Math.min(r.minX, bb.min.x); r.maxX = Math.max(r.maxX, bb.max.x);
+  }
+  const round = (o) => o ? { y: [+o.minY.toFixed(3), +o.maxY.toFixed(3)], x: [+o.minX.toFixed(3), +o.maxX.toFixed(3)],
+                            w: +(o.maxX - o.minX).toFixed(3), h: +(o.maxY - o.minY).toFixed(3) } : null;
+  const all = Object.values(perBone);
+  const bodyMin = Math.min(...all.map(o => o.minY)), bodyMax = Math.max(...all.map(o => o.maxY));
+  const meshBoxes = man.meshes.map(m => {
+    m.geometry.computeBoundingBox();
+    const b = m.geometry.boundingBox;
+    return { mat: (m.material.name || m.material.uuid.slice(0, 4)), y: [+b.min.y.toFixed(2), +b.max.y.toFixed(2)] };
+  });
+  window.__measure = {
+    partsSpanY: [+bodyMin.toFixed(3), +bodyMax.toFixed(3)],
+    head: round(perBone['head']), chest: round(perBone['chest']), hips: round(perBone['hips']),
+    armL: round(perBone['arm.L']), foreL: round(perBone['fore.L']), handL: round(perBone['hand.L']),
+    thighL: round(perBone['thigh.L']), shinL: round(perBone['shin.L']), footL: round(perBone['foot.L']),
+    meshBoxes,
+  };
 } else if (VIEW === 'close') {
   const man = makeMan({ kind: 'sword', helm: 'nasal', shield: 'kite' }, 0x2f6f9e);
   scene.add(man.root);
   animate(man.rig, 0.0, 'idle');
-  camera.position.set(0.34, 1.42, 1.45); camera.lookAt(0, 1.40, 0);
+  /* frame the WHOLE man: the old camera sat 1.45m away at eye height, so the head
+     filled the top and the ground filled the bottom half of the photo */
+  camera.position.set(0.42, 1.32, 3.30); camera.lookAt(0, 0.98, 0);
   renderer.render(scene, camera);
   stats = soldierStats(man.parts, man);
   /* SKINNING TEST, done properly: find a vertex that is actually weighted to the
@@ -177,5 +230,5 @@ if (VIEW === 'formation') {
              height: +(bx.max.y - bx.min.y).toFixed(2), pos: [+m.root.position.x.toFixed(2), +m.root.position.z.toFixed(2)] };
   });
 }
-window.__soldier = { view: VIEW, stats, skinTest, march: window.__march || null, probe: window.__probe || null, draws: renderer.info.render.calls };
+window.__soldier = { view: VIEW, stats, skinTest, march: window.__march || null, measure: window.__measure || null, probe: window.__probe || null, draws: renderer.info.render.calls };
 </script></body></html>
