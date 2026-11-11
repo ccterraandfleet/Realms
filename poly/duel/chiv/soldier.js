@@ -1,0 +1,528 @@
+/* ===========================================================================
+ * SOLDIER — a purpose-built character, not a borrowed one
+ * ===========================================================================
+ * Mason: "i didnt want you to take the models we have and alter them slightly.
+ * use the models we have as a guide, and make a perfect middle man. something
+ * that looks good in formation, can be easily animated for the marching and
+ * other animations, im looking for characters that rival Mount and Blade
+ * Bannerlord 2. not super realistic but at the same time it kind of is."
+ *
+ * SO THIS IS BUILT FROM NOTHING: my own skeleton, my own lofted geometry, my own
+ * procedural animation. Nothing here is a modification of the KayKit knight.
+ *
+ * THE BANNERLORD READ, which is what makes it a "middle man":
+ *   - Heroic but not cartoon proportions, 7.5 heads tall, real shoulder width.
+ *   - LAYERS, in this order from the body out: flesh, wool, mail, surcoat, belt,
+ *     plate. Layers are what separate Bannerlord from either toy soldiers or
+ *     photoreal, because the silhouette breaks up in steps.
+ *   - The face is partly hidden by a helm with a nasal or an aventail, which is
+ *     how a game gets away with a simple face.
+ *   - Realm colour on the surcoat and shield, so a formation reads as one side.
+ *
+ * WHY IT IS EASY TO ANIMATE: the whole man is ONE skeleton and every part is
+ * skinned rigidly to the bone that owns it, with the joints covered by cops and
+ * mail so nothing gaps. No clips, no retargeting: marching, walking, charging,
+ * standing and dying are all generated from a phase number by animate().
+ * =========================================================================== */
+
+import * as THREE from 'three';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js';
+
+/* ------------------------------------------------------------------ skeleton
+ * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
+ * converted to parent-relative when the skeleton is built. */
+export const RIG_DEF = [
+  ['root',     null,        0,         0,     0],
+  ['hips',     'root',      0,         0.98,  0],
+  ['spine',    'hips',      0,         1.12,  0],
+  ['chest',    'spine',     0,         1.30,  0],
+  ['neck',     'chest',     0,         1.50,  0.006],
+  ['head',     'neck',      0,         1.575, 0.008],
+  ['clav.L',   'chest',    -0.055,     1.45,  0.004],
+  ['arm.L',    'clav.L',   -0.175,     1.435, 0],
+  ['fore.L',   'arm.L',    -0.185,     1.155, 0],
+  ['hand.L',   'fore.L',   -0.190,     0.900, 0],
+  ['clav.R',   'chest',     0.055,     1.45,  0.004],
+  ['arm.R',    'clav.R',    0.175,     1.435, 0],
+  ['fore.R',   'arm.R',     0.185,     1.155, 0],
+  ['hand.R',   'fore.R',    0.190,     0.900, 0],
+  ['thigh.L',  'hips',     -0.092,     0.965, 0],
+  ['shin.L',   'thigh.L',  -0.098,     0.525, 0],
+  ['foot.L',   'shin.L',   -0.100,     0.095, 0],
+  ['toe.L',    'foot.L',   -0.100,     0.030, 0.10],
+  ['thigh.R',  'hips',      0.092,     0.965, 0],
+  ['shin.R',   'thigh.R',   0.098,     0.525, 0],
+  ['foot.R',   'shin.R',    0.100,     0.095, 0],
+  ['toe.R',    'foot.R',    0.100,     0.030, 0.10],
+];
+
+export function buildSkeleton() {
+  const byName = new Map();
+  const bones = [];
+  for (const [name, parent, x, y, z] of RIG_DEF) {
+    const b = new THREE.Bone();
+    b.name = name;
+    const p = parent ? byName.get(parent) : null;
+    if (p) {
+      b.position.set(x - p.userData.abs.x, y - p.userData.abs.y, z - p.userData.abs.z);
+      p.add(b);
+    } else {
+      b.position.set(x, y, z);
+    }
+    b.userData.abs = { x, y, z };
+    byName.set(name, b);
+    bones.push(b);
+  }
+  return { bones, byName, root: byName.get('root') };
+}
+
+/* ------------------------------------------------------------------ geometry
+ * A lofted surface: rings of elliptical cross sections joined into a tube. This
+ * is what gives a real torso and head their shape, where a cylinder cannot. */
+function loft(sections, segs = 18, capTop = true, capBottom = true) {
+  const pos = [], idx = [];
+  for (const s of sections) {
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      pos.push((s.x || 0) + Math.cos(a) * s.rx, s.y, (s.z || 0) + Math.sin(a) * s.rz);
+    }
+  }
+  const n = sections.length;
+  for (let r = 0; r < n - 1; r++) {
+    for (let i = 0; i < segs; i++) {
+      const a = r * segs + i, b = r * segs + (i + 1) % segs;
+      const c = (r + 1) * segs + i, d = (r + 1) * segs + (i + 1) % segs;
+      idx.push(a, c, b, b, c, d);
+    }
+  }
+  if (capBottom) {
+    const base = pos.length / 3;
+    const s0 = sections[0];
+    pos.push(s0.x || 0, s0.y, s0.z || 0);
+    for (let i = 0; i < segs; i++) idx.push(base, i, (i + 1) % segs);
+  }
+  if (capTop) {
+    const base = pos.length / 3;
+    const sN = sections[n - 1];
+    pos.push(sN.x || 0, sN.y, sN.z || 0);
+    const off = (n - 1) * segs;
+    for (let i = 0; i < segs; i++) idx.push(base, off + (i + 1) % segs, off + i);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  /* a plain planar UV so tiling materials sit sensibly on a lofted surface */
+  const uv = [];
+  const bb = new THREE.Box3().setFromBufferAttribute(g.attributes.position);
+  const size = bb.getSize(new THREE.Vector3());
+  for (let i = 0; i < g.attributes.position.count; i++) {
+    const p = g.attributes.position;
+    uv.push((p.getX(i) - bb.min.x) / (size.x || 1), (p.getY(i) - bb.min.y) / (size.y || 1));
+  }
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  return g;
+}
+
+const limb = (rTop, rBot, len) => loft([
+  { y: 0, rx: rTop, rz: rTop * 0.92 },
+  { y: -len * 0.5, rx: (rTop + rBot) / 2, rz: (rTop + rBot) * 0.46 },
+  { y: -len, rx: rBot, rz: rBot * 0.92 },
+], 12, true, true);
+
+const sph = (r, w = 12, h = 10) => new THREE.SphereGeometry(r, w, h);
+const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const cyl = (rt, rb, h, s = 14) => new THREE.CylinderGeometry(rt, rb, h, s);
+
+/* ------------------------------------------------------------------ materials */
+export function soldierMaterials(M, realm = 0x2f6f9e) {
+  const cloth = M.cloth.clone();
+  cloth.color = new THREE.Color(realm);
+  const shieldWood = M.leather.clone();
+  shieldWood.color = new THREE.Color(0x8a6a44);
+  return {
+    skin: new THREE.MeshStandardMaterial({ color: 0xc2916b, roughness: 0.72, metalness: 0 }),
+    hair: new THREE.MeshStandardMaterial({ color: 0x2a1d15, roughness: 0.88 }),
+    wool: new THREE.MeshStandardMaterial({ color: 0x4b453a, roughness: 0.95 }),
+    woolDark: new THREE.MeshStandardMaterial({ color: 0x33302a, roughness: 0.95 }),
+    mail: M.mail.clone(),
+    steel: M.steel.clone(),
+    steelDark: M.steelDark.clone(),
+    leather: M.leather.clone(),
+    cloth,
+    shieldWood,
+    brass: M.brass.clone(),
+    heraldry: M.heraldry.clone(),
+  };
+}
+
+/* =========================================================================
+ * THE MAN. Every part is registered with the bone that owns it, so the whole
+ * body can be merged and skinned in one pass at the end.
+ * ========================================================================= */
+export function buildSoldier(rig, mats, spec = {}) {
+  const parts = [];              /* { geo, mat, bone } */
+  const P = (geo, mat, bone) => parts.push({ geo, mat, bone });
+  const kind = spec.kind || 'spear';       /* spear | sword | knight */
+  const helm = spec.helm || (kind === 'knight' ? 'great' : 'nasal');
+  const has = (k) => (spec.layers || 'flesh wool mail surcoat').includes(k);
+
+  /* ---------------- torso: one lofted body, the anchor of the silhouette */
+  P(loft([
+    { y: 0.94, rx: 0.150, rz: 0.100 },
+    { y: 1.02, rx: 0.163, rz: 0.110 },
+    { y: 1.13, rx: 0.146, rz: 0.098 },
+    { y: 1.24, rx: 0.160, rz: 0.108 },
+    { y: 1.34, rx: 0.181, rz: 0.120 },
+    { y: 1.42, rx: 0.176, rz: 0.117 },
+    { y: 1.47, rx: 0.140, rz: 0.100 },
+  ], 20), mats[has('mail') ? 'mail' : 'wool'], 'chest');
+
+  /* ---------------- neck and head */
+  P(limb(0.052, 0.058, 0.09).translate(0, 1.55, 0.004), mats.skin, 'neck');
+  P(loft([
+    { y: 1.545, rx: 0.062, rz: 0.066 },
+    { y: 1.585, rx: 0.080, rz: 0.090 },
+    { y: 1.625, rx: 0.090, rz: 0.098 },
+    { y: 1.665, rx: 0.093, rz: 0.101 },
+    { y: 1.705, rx: 0.086, rz: 0.094 },
+    { y: 1.745, rx: 0.062, rz: 0.068 },
+    { y: 1.775, rx: 0.028, rz: 0.032 },
+  ], 18), mats.skin, 'head');
+  /* nose, brow, eyes: tiny, but they are what stop a head reading as an egg */
+  P(box(0.026, 0.042, 0.030).translate(0, 1.648, 0.096), mats.skin, 'head');
+  P(box(0.096, 0.014, 0.024).translate(0, 1.682, 0.088), mats.skin, 'head');
+  for (const s of [-1, 1]) {
+    P(sph(0.0115, 8, 6).translate(s * 0.036, 1.672, 0.083), mats.hair, 'head');
+    P(box(0.030, 0.012, 0.016).translate(s * 0.036, 1.690, 0.086), mats.hair, 'head');
+  }
+  if (spec.beard !== false) {
+    P(loft([
+      { y: 1.560, rx: 0.052, rz: 0.048, z: 0.030 },
+      { y: 1.592, rx: 0.070, rz: 0.066, z: 0.022 },
+      { y: 1.622, rx: 0.080, rz: 0.082, z: 0.016 },
+    ], 14), mats.hair, 'head');
+  }
+
+  /* ---------------- helmet variants */
+  if (helm === 'nasal') {
+    P(loft([
+      { y: 1.660, rx: 0.100, rz: 0.108 },
+      { y: 1.700, rx: 0.101, rz: 0.109 },
+      { y: 1.745, rx: 0.086, rz: 0.094 },
+      { y: 1.782, rx: 0.050, rz: 0.056 },
+      { y: 1.800, rx: 0.014, rz: 0.016 },
+    ], 18), mats.steel, 'head');
+    P(cyl(0.104, 0.106, 0.020, 18).translate(0, 1.662, 0), mats.steelDark, 'head');
+    P(box(0.020, 0.086, 0.022).translate(0, 1.644, 0.104), mats.steel, 'head');
+  } else if (helm === 'kettle') {
+    P(loft([
+      { y: 1.686, rx: 0.098, rz: 0.106 },
+      { y: 1.726, rx: 0.096, rz: 0.104 },
+      { y: 1.760, rx: 0.070, rz: 0.076 },
+      { y: 1.782, rx: 0.028, rz: 0.030 },
+    ], 18), mats.steel, 'head');
+    P(cyl(0.150, 0.150, 0.010, 20).translate(0, 1.684, 0), mats.steelDark, 'head');
+    /* mail aventail hanging from the brim */
+    P(loft([
+      { y: 1.686, rx: 0.104, rz: 0.112 },
+      { y: 1.620, rx: 0.112, rz: 0.120 },
+      { y: 1.560, rx: 0.118, rz: 0.126 },
+    ], 16, false, false), mats.mail, 'head');
+  } else {
+    /* great helm: the knight's read, a cylinder with a faceplate and sight slit */
+    P(loft([
+      { y: 1.560, rx: 0.098, rz: 0.104 },
+      { y: 1.600, rx: 0.104, rz: 0.112 },
+      { y: 1.700, rx: 0.106, rz: 0.114 },
+      { y: 1.760, rx: 0.096, rz: 0.104 },
+      { y: 1.795, rx: 0.048, rz: 0.052 },
+    ], 18), mats.steel, 'head');
+    P(box(0.170, 0.016, 0.030).translate(0, 1.686, 0.104), mats.steelDark, 'head');
+    for (const s of [-1, 1]) P(box(0.062, 0.012, 0.016).translate(s * 0.050, 1.664, 0.110), mats.hair, 'head');
+    P(cyl(0.108, 0.108, 0.012, 18).translate(0, 1.560, 0), mats.brass, 'head');
+  }
+
+  /* ---------------- arms: mail sleeve, bracer, glove */
+  for (const s of ['L', 'R']) {
+    const sign = s === 'L' ? -1 : 1;
+    P(limb(0.062, 0.050, 0.28).translate(sign * 0.176, 1.432, 0), has('mail') ? mats.mail : mats.wool, 'arm.' + s);
+    P(limb(0.050, 0.040, 0.25).translate(sign * 0.188, 1.150, 0), mats.wool, 'fore.' + s);
+    P(limb(0.054, 0.048, 0.15).translate(sign * 0.186, 1.140, 0), mats.leather, 'fore.' + s);
+    /* pauldron */
+    P(loft([
+      { y: 1.452, rx: 0.072, rz: 0.070, x: sign * 0.168 },
+      { y: 1.410, rx: 0.086, rz: 0.080, x: sign * 0.178 },
+      { y: 1.368, rx: 0.080, rz: 0.074, x: sign * 0.186 },
+    ], 14), mats.steel, 'arm.' + s);
+    /* glove: a block with a thumb, enough at formation distance */
+    P(box(0.048, 0.105, 0.086).translate(sign * 0.194, 0.855, 0.004), mats.leather, 'hand.' + s);
+    P(box(0.030, 0.052, 0.030).translate(sign * 0.168, 0.878, 0.030), mats.leather, 'hand.' + s);
+  }
+
+  /* ---------------- legs: wool trousers, boots, knee cops */
+  for (const s of ['L', 'R']) {
+    const sign = s === 'L' ? -1 : 1;
+    P(limb(0.094, 0.072, 0.44).translate(sign * 0.094, 0.965, 0), mats.wool, 'thigh.' + s);
+    P(limb(0.072, 0.052, 0.44).translate(sign * 0.098, 0.525, 0), mats.woolDark, 'shin.' + s);
+    P(sph(0.070, 12, 10).translate(sign * 0.096, 0.520, 0.010), mats.steel, 'shin.' + s);
+    /* boot */
+    P(loft([
+      { y: 0.140, rx: 0.070, rz: 0.076, x: sign * 0.098 },
+      { y: 0.090, rx: 0.074, rz: 0.088, x: sign * 0.099 },
+      { y: 0.040, rx: 0.070, rz: 0.105, x: sign * 0.100, z: 0.020 },
+    ], 14), mats.leather, 'foot.' + s);
+    P(box(0.098, 0.048, 0.230).translate(sign * 0.100, 0.026, 0.052), mats.leather, 'foot.' + s);
+  }
+
+  /* ---------------- the mail skirt and the surcoat: the layers that read */
+  if (has('mail')) {
+    P(loft([
+      { y: 1.00, rx: 0.170, rz: 0.118 },
+      { y: 0.86, rx: 0.180, rz: 0.126 },
+      { y: 0.70, rx: 0.176, rz: 0.124 },
+      { y: 0.62, rx: 0.168, rz: 0.118 },
+    ], 20, false, false), mats.mail, 'hips');
+  }
+  if (has('surcoat')) {
+    /* front and back panels, split so the legs can swing through it */
+    for (const [zc, rz] of [[1, 0.130], [-1, -0.130]]) {
+      P(loft([
+        { y: 1.42, rx: 0.150, rz: 0.020, z: zc * 0.086 },
+        { y: 1.10, rx: 0.166, rz: 0.022, z: zc * 0.104 },
+        { y: 0.92, rx: 0.168, rz: 0.022, z: zc * 0.112 },
+        { y: 0.74, rx: 0.150, rz: 0.020, z: zc * 0.112 },
+      ], 16), mats.cloth, 'hips');
+    }
+    /* the device sits on the chest, where it reads from the front */
+    const dev = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.15), mats.heraldry);
+    dev.position.set(0, 1.26, 0.128);
+    parts.push({ mesh: dev, bone: 'chest' });
+  }
+  /* belt */
+  P(cyl(0.172, 0.172, 0.036, 20).translate(0, 0.995, 0), mats.leather, 'hips');
+  P(box(0.052, 0.044, 0.012).translate(0, 0.995, 0.118), mats.brass, 'hips');
+  P(box(0.070, 0.090, 0.046).translate(0.115, 0.955, 0.086), mats.leather, 'hips');
+
+  /* ---------------- weapons */
+  if (kind === 'spear') {
+    const shaft = cyl(0.011, 0.011, 2.05, 8).translate(0, 0.62, 0);
+    parts.push({ geo: shaft, mat: mats.leather, bone: 'hand.R' });
+    const head = new THREE.ConeGeometry(0.028, 0.20, 6).translate(0, 1.72, 0);
+    parts.push({ geo: head, mat: mats.steel, bone: 'hand.R' });
+    const cuff = cyl(0.016, 0.016, 0.05, 8).translate(0, 1.60, 0);
+    parts.push({ geo: cuff, mat: mats.brass, bone: 'hand.R' });
+  } else {
+    /* arming sword */
+    const blade = new THREE.CylinderGeometry(0.007, 0.0025, 0.78, 4, 4).translate(0, 0.62, 0);
+    blade.scale(1, 1, 2.6);
+    parts.push({ geo: blade, mat: mats.steel, bone: 'hand.R' });
+    parts.push({ geo: box(0.155, 0.014, 0.020).translate(0, 0.225, 0), mat: mats.brass, bone: 'hand.R' });
+    parts.push({ geo: cyl(0.012, 0.013, 0.115, 8).translate(0, 0.160, 0), mat: mats.leather, bone: 'hand.R' });
+    parts.push({ geo: sph(0.019, 8, 6).translate(0, 0.098, 0), mat: mats.brass, bone: 'hand.R' });
+  }
+  /* shield on the left forearm */
+  const sh = spec.shield || 'kite';
+  if (sh === 'kite') {
+    const s = new THREE.Shape();
+    s.moveTo(-0.20, 0.34); s.lineTo(0.20, 0.34);
+    s.lineTo(0.185, -0.10); s.quadraticCurveTo(0.14, -0.34, 0, -0.44);
+    s.quadraticCurveTo(-0.14, -0.34, -0.185, -0.10);
+    s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth: 0.022, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 1, curveSegments: 5 });
+    parts.push({ geo: g.translate(-0.30, 1.10, 0.02), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.032, 10, 8).translate(-0.30, 1.14, 0.035), mat: mats.steel, bone: 'fore.L' });
+  } else {
+    parts.push({ geo: cyl(0.26, 0.26, 0.022, 22).rotateX(Math.PI / 2).translate(-0.30, 1.10, 0.02), mat: mats.shieldWood, bone: 'fore.L' });
+    parts.push({ geo: sph(0.040, 10, 8).translate(-0.30, 1.10, 0.040), mat: mats.steel, bone: 'fore.L' });
+  }
+
+  return parts;
+}
+
+/* =========================================================================
+ * SKINNING. One mesh per material, all bound to the same skeleton, with each
+ * vertex weighted rigidly to the bone that owns its part and BLENDED at the
+ * joints so elbows and knees bend instead of snapping.
+ * ========================================================================= */
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+export function assemble(rig, parts, opts = {}) {
+  const { bones, byName } = rig;
+  const boneIndex = new Map(bones.map((b, i) => [b.name, i]));
+
+  /* group by material so a soldier costs a handful of draws, not eighty */
+  const byMat = new Map();
+  for (const p of parts) {
+    const mat = p.mat || (p.mesh && p.mesh.material);
+    if (!mat) continue;
+    const key = mat.uuid;
+    if (!byMat.has(key)) byMat.set(key, { mat, items: [] });
+    byMat.get(key).items.push(p);
+  }
+
+  const group = new THREE.Group();
+  const skinned = [];
+  const boneMatrices = bones.map((b) => b.matrixWorld);
+
+  for (const { mat, items } of byMat.values()) {
+    const geos = [];
+    const owner = [];
+    for (const p of items) {
+      let g;
+      if (p.mesh) {
+        /* a plain mesh contributes its geometry; its transform is baked in */
+        p.mesh.updateMatrix();
+        g = p.mesh.geometry.clone().applyMatrix4(p.mesh.matrix);
+      } else {
+        g = p.geo.clone();
+      }
+      if (!g.attributes.uv) {
+        const n = g.attributes.position.count;
+        g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(n * 2), 2));
+      }
+      for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+      const flat = g.index ? g.toNonIndexed() : g;
+      const count = flat.attributes.position.count;
+      owner.push({ bone: p.bone, start: geos.reduce((a, x) => a + x.attributes.position.count, 0), count });
+      geos.push(flat);
+    }
+    if (!geos.length) continue;
+    let geo;
+    try { geo = geos.length === 1 ? geos[0] : mergeGeometries(geos, false); }
+    catch (e) { geo = geos[0]; }
+    if (!geo) continue;
+
+    const count = geo.attributes.position.count;
+    const si = new Uint16Array(count * 4);
+    const sw = new Float32Array(count * 4);
+    /* rigid weights from the owning bone, then smooth across the joint planes */
+    const jointBlend = opts.jointBlend ?? 0.055;
+    const parentOf = new Map(bones.map((b) => [b.name, b.parent && boneIndex.has(b.parent.name) ? b.parent.name : null]));
+    for (const o of owner) {
+      const bi = boneIndex.get(o.bone) ?? 0;
+      const parentName = parentOf.get(o.bone);
+      const pi = parentName ? boneIndex.get(parentName) : null;
+      const boneAbs = byName.get(o.bone) ? byName.get(o.bone).userData.abs : null;
+      const parAbs = parentName ? byName.get(parentName).userData.abs : null;
+      for (let v = o.start; v < o.start + o.count; v++) {
+        let wSelf = 1, wPar = 0;
+        if (pi !== null && boneAbs && parAbs) {
+          /* distance above the bone's own origin, toward its parent */
+          const y = geo.attributes.position.getY(v);
+          const d = y - boneAbs.y;
+          if (d > -jointBlend && d < jointBlend) {
+            const t = (d + jointBlend) / (2 * jointBlend);   /* 0 at parent side */
+            wSelf = 0.5 + 0.5 * t;
+            wPar = 1 - wSelf;
+          }
+        }
+        si[v * 4] = bi; sw[v * 4] = wSelf;
+        if (wPar > 0.001) { si[v * 4 + 1] = pi; sw[v * 4 + 1] = wPar; }
+      }
+    }
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+
+    const mesh = new THREE.SkinnedMesh(geo, mat);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    group.add(mesh);
+    skinned.push(mesh);
+  }
+
+  const skeleton = new THREE.Skeleton(bones);
+  for (const m of skinned) { m.bind(skeleton); }
+
+  const root = new THREE.Group();
+  root.add(byName.get('root'));
+  group.add(root);
+  root.updateWorldMatrix(true, true);
+  for (const m of skinned) m.bindMode = THREE.DetachedBindMode, m.bind(skeleton, m.matrixWorld);
+
+  return { root: group, skeleton, meshes: skinned, rig };
+}
+
+/* =========================================================================
+ * ANIMATION, GENERATED. No clips: a phase number and a mode is the whole input.
+ * ========================================================================= */
+export function animate(rig, t, mode = 'march', extra = {}) {
+  const B = rig.byName;
+  const set = (n, x, y, z) => { const b = B.get(n); if (b) b.rotation.set(x, y, z); };
+  const TWO_PI = Math.PI * 2;
+
+  /* reset everything so modes never leak into each other */
+  for (const b of rig.bones) b.rotation.set(0, 0, 0);
+  const hips = B.get('hips');
+  if (hips) hips.position.y = hips.userData.abs.y;
+
+  if (mode === 'idle' || mode === 'stand') {
+    const s = Math.sin(t * 1.6), s2 = Math.sin(t * 1.6 + 0.7);
+    set('spine', 0.02 + s * 0.014, 0, s2 * 0.010);
+    set('chest', 0.01, s * 0.02, 0);
+    set('head', -0.01, Math.sin(t * 0.7) * 0.06, 0);
+    set('arm.L', 0.06, 0, 0.10);
+    set('arm.R', 0.04, 0, -0.08);
+    set('fore.L', -0.22, 0, 0);
+    set('fore.R', -0.16, 0, 0);
+    for (const s2n of ['L', 'R']) {
+      set('thigh.' + s2n, 0.01, 0, (s2n === 'L' ? -1 : 1) * 0.03);
+      set('shin.' + s2n, 0.02, 0, 0);
+    }
+  } else if (mode === 'march' || mode === 'walk' || mode === 'charge') {
+    const p = mode === 'charge' ? t * 6.4 : mode === 'walk' ? t * 4.4 : t * 5.2;
+    const amp = mode === 'charge' ? 1.15 : mode === 'walk' ? 0.62 : 0.82;
+    const lean = mode === 'charge' ? 0.14 : mode === 'walk' ? 0.03 : 0.06;
+    const sL = Math.sin(p), sR = Math.sin(p + Math.PI);
+    /* legs: hip swing with a knee that only bends forward */
+    set('thigh.L', sL * 0.72 * amp, 0, -0.02);
+    set('thigh.R', sR * 0.72 * amp, 0, 0.02);
+    set('shin.L', Math.max(0, -Math.sin(p + 0.9)) * 0.95 * amp + 0.05, 0, 0);
+    set('shin.R', Math.max(0, -Math.sin(p + Math.PI + 0.9)) * 0.95 * amp + 0.05, 0, 0);
+    set('foot.L', -0.12 - sL * 0.18, 0, 0);
+    set('foot.R', -0.12 - sR * 0.18, 0, 0);
+    /* arms counter-swing, spear arm held high and steadier */
+    set('arm.L', sR * 0.42 * amp + 0.10, 0, 0.14);
+    set('fore.L', -0.55 - Math.max(0, sR) * 0.30, 0, 0);
+    const spearArm = extra.spearArm !== false;
+    set('arm.R', spearArm ? 0.30 + sL * 0.10 : sL * 0.44 * amp + 0.08, 0, spearArm ? -0.16 : -0.10);
+    set('fore.R', spearArm ? -0.95 : -0.40, 0, 0);
+    /* torso lean and counter-rotation, the thing that sells weight */
+    set('hips', lean * 0.4, -sL * 0.10, 0);
+    set('spine', lean * 0.5, sL * 0.09, Math.sin(p * 2) * 0.018);
+    set('chest', lean * 0.3, sL * 0.06, 0);
+    set('head', -lean * 0.8, -sL * 0.05, 0);
+    /* vertical bob on the hips, twice per stride */
+    if (hips) hips.position.y = hips.userData.abs.y - 0.022 + Math.abs(Math.sin(p)) * 0.030 * amp;
+  } else if (mode === 'dead') {
+    set('hips', -1.2, 0, 0.3);
+    set('spine', 0.2, 0, 0);
+    set('head', 0.4, 0.3, 0);
+    set('arm.L', 0.4, 0, 0.5);
+    set('arm.R', 0.2, 0, -0.6);
+    set('thigh.L', -0.4, 0, 0);
+    set('thigh.R', -0.2, 0, 0);
+    set('shin.L', 0.9, 0, 0);
+    set('shin.R', 0.5, 0, 0);
+    if (hips) hips.position.y = hips.userData.abs.y - 0.62;
+  }
+  rig.root.updateMatrixWorld(true);
+  return rig;
+}
+
+/* a cloned soldier needs its own bone lookup for animate() */
+export function bindClone(root) {
+  const bones = [];
+  root.traverse((o) => { if (o.isBone) { o.userData.abs = o.userData.abs || { x: o.position.x, y: o.position.y, z: o.position.z }; bones.push(o); } });
+  const byName = new Map(bones.map((b) => [b.name, b]));
+  return { root, bones, byName };
+}
+
+export function soldierStats(parts, assembled) {
+  let tris = 0;
+  for (const p of parts) {
+    const g = p.geo || (p.mesh && p.mesh.geometry);
+    if (!g) continue;
+    tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+  }
+  return { parts: parts.length, tris: Math.round(tris), draws: assembled.meshes.length, bones: assembled.skeleton.bones.length };
+}

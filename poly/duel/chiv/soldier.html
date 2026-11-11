@@ -1,0 +1,181 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Soldier</title>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+<style>html,body{margin:0;background:#0b0f13;overflow:hidden;font:600 12px/1.4 ui-monospace,Menlo,monospace;color:#dfe8ef}
+canvas{display:block}.lab{position:absolute;transform:translateX(-50%);text-align:center;pointer-events:none}
+.name{font-size:14px;letter-spacing:.16em}.spec{font-size:10px;color:#8fa2b1;margin-top:2px;font-weight:400}</style>
+</head><body><script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from './lib/RGBELoader.js';
+import { clone as skeletonClone } from './lib/SkeletonUtils.js';
+import { Atlas } from './forge.js';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate, bindClone, soldierStats } from './soldier.js';
+
+const Q = new URLSearchParams(location.search);
+const VIEW = Q.get('view') || 'line';
+const W = Math.max(900, innerWidth), H = Math.max(500, innerHeight);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(VIEW === 'formation' ? 0x8fa6b8 : 0x0d1218);
+const camera = new THREE.PerspectiveCamera(34, W / H, 0.1, 400);
+new RGBELoader().load('./env/sky_1k.hdr', (hdr) => {
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromEquirectangular(hdr).texture;
+  scene.environmentIntensity = 0.75;
+});
+const key = new THREE.DirectionalLight(0xfff2df, 2.9); key.position.set(4, 7, 5);
+key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = .5; key.shadow.camera.far = 40;
+key.shadow.camera.left = -14; key.shadow.camera.right = 14; key.shadow.camera.top = 14; key.shadow.camera.bottom = -14;
+key.shadow.bias = -0.0012; scene.add(key);
+scene.add(new THREE.DirectionalLight(0xa8c8ff, 1.5).translateX(-6).translateY(4));
+scene.add(new THREE.AmbientLight(0x4a5a68, 1.3));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120).rotateX(-Math.PI/2),
+  new THREE.MeshStandardMaterial({ color: VIEW === 'formation' ? 0x6d7a55 : 0x2a3138, roughness: .95 }));
+ground.receiveShadow = true; scene.add(ground);
+
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+
+function makeMan(spec, realm) {
+  const rig = buildSkeleton();
+  const mats = soldierMaterials(atlas.m, realm);
+  const parts = buildSoldier(rig, mats, spec);
+  const built = assemble(rig, parts);
+  return { ...built, rig, parts, spec };
+}
+
+const VARIANTS = [
+  { kind: 'spear', helm: 'nasal', shield: 'round', label: 'SPEARMAN', note: 'nasal helm · mail · spear' },
+  { kind: 'sword', helm: 'kettle', shield: 'kite', label: 'MAN-AT-ARMS', note: 'kettle hat · sword · kite' },
+  { kind: 'knight', helm: 'great', shield: 'kite', label: 'KNIGHT', note: 'great helm · plate' },
+];
+
+let stats = null, skinTest = null;
+
+if (VIEW === 'formation') {
+  const files = 6, ranks = 5, gapX = 0.95, gapZ = 1.15;
+  const men = [];
+  for (let r = 0; r < ranks; r++) for (let f = 0; f < files; f++) {
+    const spec = VARIANTS[r === 0 ? 2 : (r === 1 ? 1 : 0)];
+    const realm = f < files / 2 ? 0x2f6f9e : 0x9c3b2a;
+    const man = makeMan(spec, realm);
+    const root = man.root;
+    root.position.set((f - (files - 1) / 2) * gapX, 0, -r * gapZ);
+    scene.add(root);
+    men.push({ handle: bindClone(root), phase: (r * 1.7 + f * 0.9) });
+  }
+  const t = 0.9;
+  for (const m of men) animate(m.handle, t + m.phase * 0.35, 'march', { spearArm: true });
+  camera.position.set(0, 2.3, 9.2); camera.lookAt(0, 1.0, -2.2);
+  renderer.render(scene, camera);
+  stats = { men: men.length, draws: renderer.info.render.calls, tris: renderer.info.render.triangles };
+  /* DOES THE MARCH ACTUALLY MOVE THE LEGS? measured on one man at two phases */
+  {
+    const m = men[0].handle;
+    const foot = () => {
+      m.root.updateMatrixWorld(true);
+      const b = m.byName.get('foot.L');
+      const toe = m.byName.get('toe.L');
+      return b.getWorldPosition(new THREE.Vector3()).add(toe.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    };
+    animate(m, 0.0, 'march'); const f0 = foot();
+    animate(m, Math.PI / 5.2, 'march'); const f1 = foot();
+    const stride = f0.distanceTo(f1);
+    const bb = new THREE.Box3().setFromObject(m.root);
+    window.__march = { strideMeters: +stride.toFixed(3), footY: [+f0.y.toFixed(2), +f1.y.toFixed(2)],
+                       manHeight: +(bb.max.y - bb.min.y).toFixed(2) };
+  }
+} else if (VIEW === 'close') {
+  const man = makeMan({ kind: 'sword', helm: 'nasal', shield: 'kite' }, 0x2f6f9e);
+  scene.add(man.root);
+  animate(man.rig, 0.0, 'idle');
+  camera.position.set(0.34, 1.42, 1.45); camera.lookAt(0, 1.40, 0);
+  renderer.render(scene, camera);
+  stats = soldierStats(man.parts, man);
+  /* SKINNING TEST, done properly: find a vertex that is actually weighted to the
+   * thigh and another weighted to the head, then rotate the thigh. Sampling the top
+   * and bottom vertices of one material mesh proved nothing, because those turned
+   * out to be the chest and the skirt, neither of which is on a leg. */
+  const boneIdx = new Map(man.skeleton.bones.map((b, i) => [b.name, i]));
+  const target = { thigh: boneIdx.get('thigh.L'), head: boneIdx.get('head') };
+  const found = { thigh: null, head: null };
+  for (const mesh of man.meshes) {
+    const si = mesh.geometry.attributes.skinIndex;
+    if (!si) continue;
+    for (let i = 0; i < si.count; i++) {
+      const b0 = si.getX(i);
+      if (found.thigh === null && b0 === target.thigh) found.thigh = { mesh, i };
+      if (found.head === null && b0 === target.head) found.head = { mesh, i };
+      if (found.thigh && found.head) break;
+    }
+    if (found.thigh && found.head) break;
+  }
+  const sample = (h) => {
+    if (!h) return null;
+    const pos = h.mesh.geometry.attributes.position;
+    const v = new THREE.Vector3().fromBufferAttribute(pos, h.i);
+    if (h.mesh.applyBoneTransform) h.mesh.applyBoneTransform(h.i, v);
+    return h.mesh.localToWorld(v);
+  };
+  man.rig.root.updateMatrixWorld(true);
+  for (const m of man.meshes) if (m.skeleton) m.skeleton.update();
+  const thighBefore = sample(found.thigh), headBefore = sample(found.head);
+  man.rig.byName.get('thigh.L').rotation.x = 0.6;
+  man.rig.root.updateMatrixWorld(true);
+  for (const m of man.meshes) if (m.skeleton) m.skeleton.update();
+  const thighAfter = sample(found.thigh), headAfter = sample(found.head);
+
+  let blended = 0, total = 0;
+  const used = new Set();
+  for (const mesh of man.meshes) {
+    const si = mesh.geometry.attributes.skinIndex, sw = mesh.geometry.attributes.skinWeight;
+    if (!si) continue;
+    for (let i = 0; i < si.count; i++) {
+      total++;
+      used.add(si.getX(i));
+      if (si.getY(i) !== 0 && sw.getY(i) > 0.001) blended++;
+    }
+  }
+  skinTest = {
+    foundThighVert: !!found.thigh, foundHeadVert: !!found.head,
+    thighMoved: thighBefore && thighAfter ? +thighBefore.distanceTo(thighAfter).toFixed(4) : null,
+    headMoved: headBefore && headAfter ? +headBefore.distanceTo(headAfter).toFixed(4) : null,
+    bonesUsed: used.size, bones: man.skeleton.bones.length,
+    blendedVerts: blended, verts: total,
+  };
+} else {
+  const men0 = [];
+  VARIANTS.forEach((v, i) => {
+    const man = makeMan(v, i === 2 ? 0x9c3b2a : 0x2f6f9e);
+    men0.push(man);
+    man.root.position.x = (i - 1) * 0.92;
+    scene.add(man.root);
+    animate(man.rig, 0.4 + i * 0.3, 'march', { spearArm: v.kind === 'spear' });
+    if (i === 0) stats = soldierStats(man.parts, man);
+    const d = document.createElement('div'); d.className = 'lab';
+    d.style.left = (W/2 + (i-1)*(W/3.4)) + 'px'; d.style.bottom = '18px';
+    d.innerHTML = `<div class="name">${v.label}</div><div class="spec">${v.note}</div>`;
+    document.body.appendChild(d);
+  });
+  camera.position.set(0, 1.30, 3.55); camera.lookAt(0, 1.02, 0);
+  renderer.render(scene, camera);
+  /* where did they actually land on screen? measured, not assumed */
+  window.__probe = men0.map((m) => {
+    const b = m.root.getObjectByName('head') || m.root;
+    const p = b.getWorldPosition(new THREE.Vector3()).project(camera);
+    const bx = new THREE.Box3().setFromObject(m.root);
+    return { ndc: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)],
+             height: +(bx.max.y - bx.min.y).toFixed(2), pos: [+m.root.position.x.toFixed(2), +m.root.position.z.toFixed(2)] };
+  });
+}
+window.__soldier = { view: VIEW, stats, skinTest, march: window.__march || null, probe: window.__probe || null, draws: renderer.info.render.calls };
+</script></body></html>
