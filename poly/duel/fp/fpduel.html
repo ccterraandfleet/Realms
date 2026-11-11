@@ -65,12 +65,10 @@
   <div id="tel"></div>
   <div id="msg"></div>
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
-  <div id="turn">NEUTRAL</div>
   <div id="drag">ACCEL</div>
-  <div id="build">BUILD 2026-11-11 11:11</div>
+  <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
+  <div id="build">BUILD 2026-11-11 11:20</div>
   <style>
-    #turn { position: fixed; left: 50%; transform: translateX(-50%); top: 34px; font: 700 11px/1 ui-monospace, monospace;
-      letter-spacing: .16em; color: #cbd5e1; z-index: 60; pointer-events: none; text-shadow: 0 1px 3px #000a; }
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
@@ -949,7 +947,7 @@ loader.load('./knight.glb', (gltf) => {
   console.error('glb', e);
 });
 
-console.log('REALMS FP BUILD 2026-11-11 11:11');
+console.log('REALMS FP BUILD 2026-11-11 11:20');
 
 /* ------------------------------------------------------------------ duel state */
 let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
@@ -1223,7 +1221,11 @@ function updateSwing(me, dt) {
   if (vmSwing.on) {
     /* the same multiplier the rules use, so a dragged cut LOOKS slow and an
      * accelerated one looks fast: the eye and the resolution always agree */
-    if (me?.attack?.durMul) vmSwing.mul = me.attack.durMul;
+    if (me?.attack?.durMul) {
+      vmSwing.mul = me.attack.durMul;
+      /* the faster the blade is actually travelling, the hotter the ribbon burns */
+      vmSwing.trail = Math.max(0.45, Math.min(1.35, 1.6 - me.attack.durMul * 0.62));
+    }
     vmSwing.t += dt / (vmSwing.mul || 1);
     if (vmSwing.t > vmSwing.windup + SWING.strike + SWING.follow + SWING.settle) vmSwing.on = false;
   }
@@ -1339,17 +1341,33 @@ const TEL_COLOR = { light: '#e9f4ff', heavy: '#ff8f6b', thrust: '#ffd479' };
 const DT = 1 / 120;
 let acc = 0, last = performance.now();
 
+let loopErrors = [];
+const errBox = typeof document !== 'undefined' ? document.getElementById('errbox') : null;
 function frame(now) {
   const raw = Math.min(0.1, (now - last) / 1000);
   last = now;
   acc += raw;
   let steps = 0;
-  while (acc >= DT && steps < 8) {
-    tick(DT);
-    acc -= DT;
-    steps++;
+  /* A THROWN FRAME MUST NOT KILL THE GAME. requestAnimationFrame is re-armed at the
+   * bottom of this function, so one exception used to stop it forever: the picture
+   * froze and nothing anywhere said why. Now a bad frame is caught, recorded, and the
+   * loop keeps going. */
+  try {
+    while (acc >= DT && steps < 8) {
+      tick(DT);
+      acc -= DT;
+      steps++;
+    }
+    render(raw);
+  } catch (err) {
+    loopErrors.push(String(err && err.message || err));
+    if (loopErrors.length > 40) loopErrors.shift();
+    window.__loopErrors = loopErrors;
+    if (!window.__firstLoopError) window.__firstLoopError = { msg: String(err && err.message || err), stack: String(err && err.stack || '') };
+    console.error('FRAME ERROR', err);
+    acc = 0;
+    if (errBox) { errBox.textContent = 'FRAME ERROR: ' + (err && err.message || err); errBox.style.display = 'block'; }
   }
-  render(raw);
   __frames++;
   const nowT = performance.now();
   if (nowT - __fpsT > 1000) { window.__fps = Math.round((__frames * 1000) / (nowT - __fpsT)); __frames = 0; __fpsT = nowT; }
@@ -1433,17 +1451,15 @@ function tick(dt) {
     if (me.attack.isCounter) { say('COUNTER', 800); parryFlash = Math.max(parryFlash, 0.5); }
     else if (me.attack.isRiposte) { say('RIPOSTE', 800); }
   }
-  const turnEl2 = document.getElementById('turn');
-  if (turnEl2) {
-    const t = duel.turn;
-    turnEl2.textContent = t === null ? 'NEUTRAL' : t === me.id ? 'YOUR TURN' : 'HIS TURN';
-    turnEl2.style.color = t === null ? '#cbd5e1' : t === me.id ? '#7dd3fc' : '#fca5a5';
-  }
   const dragEl = document.getElementById('drag');
   if (dragEl) {
-    if (me.state === 'windup' && swingTurn > 0.42) { dragEl.textContent = 'ACCEL'; dragEl.style.opacity = 1; }
-    else if (me.state === 'windup' && swingTurn < -0.42) { dragEl.textContent = 'DRAG'; dragEl.style.opacity = 1; }
-    else dragEl.style.opacity = 0;
+    if (me.state === 'windup' && swingTurn > 0.22) {
+      dragEl.textContent = 'ACCEL  x' + (1 - (1 - CFG.ACCEL_MIN) * Math.min(1, swingTurn)).toFixed(2);
+      dragEl.style.color = '#7dd3fc'; dragEl.style.opacity = 1;
+    } else if (me.state === 'windup' && swingTurn < -0.22) {
+      dragEl.textContent = 'DRAG  x' + (1 + (CFG.DRAG_MAX - 1) * Math.min(1, -swingTurn)).toFixed(2);
+      dragEl.style.color = '#fde68a'; dragEl.style.opacity = 1;
+    } else dragEl.style.opacity = 0;
   }
 
   /* opponent poses follow the rules, so what you see is what is being resolved */
@@ -1703,7 +1719,7 @@ function updateTrail() {
   }
   trailSamples[0].root.copy(rootW);
   trailSamples[0].tip.copy(tipW);
-  const strength = ph.phase === 'strike' ? 1 : 0.5;
+  const strength = (ph.phase === 'strike' ? 1 : 0.5) * (vmSwing.trail || 1);
   trailMesh.visible = true;
   for (let i = 0; i < TRAIL_N; i++) {
     const s = trailSamples[i], k = i * 6;
@@ -1890,6 +1906,18 @@ addEventListener('resize', () => {
 let __frames = 0, __fpsT = performance.now();
 window.__perf = () => ({ fps: window.__fps || 0, lowq: LOWQ });
 
+/* test harness: drive the real tick and render at full speed, because the software
+ * renderer in CI only manages 1-2 fps and a swing can never resolve at that rate */
+window.__tickN = (n) => {
+  for (let i = 0; i < n; i++) {
+    try { tick(1 / 60); } catch (err) {
+      if (!window.__firstLoopError) window.__firstLoopError = { msg: String(err && err.message || err), stack: String(err && err.stack || '') };
+      (window.__loopErrors = window.__loopErrors || []).push(String(err && err.message || err));
+    }
+  }
+  return { clock: +duel.clock.toFixed(2), hp: [duel.a.hp, duel.b.hp], state: duel.a.state };
+};
+window.__renderOnce = (d) => { render(d || 1 / 60); return true; };
 requestAnimationFrame(frame);
 window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
 window.__vm = { sword, shield, blade, tip, camera, THREE, swordFist, shieldFist };

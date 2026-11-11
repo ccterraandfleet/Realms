@@ -78,10 +78,13 @@ export const CFG = {
   COUNTER_SPEED: 0.74,     // a counter is far faster than a plain swing
   COUNTER_REFUND: 12,      // and it REGAINS stamina, which is why stamina wars are winnable
   RIPOSTE_SPEED: 0.82,
-  OFF_TURN_SLOW: 1.40,     // swinging when it is not your turn is this much slower
-  ACCEL_MIN: 0.68,         // turning INTO the arc can cut the windup to 68%
-  DRAG_MAX: 1.50,          // turning AGAINST the arc can stretch it to 150%
-  DRAG_REACH: 0.34,        // a drag carries the blade further, Chivalry's signature
+  /* NO OFF-TURN PENALTY. Mason, plainly: "its not turn based its live pvp - if i attack
+   * 20x and you attack 0 times then thats just how it is." He is right, and worse, the
+   * 1.40x penalty multiplied straight through the 0.68x accel and cancelled it, which is
+   * why accelerating did nothing. Initiative now only breaks a DEAD HEAT. */
+  ACCEL_MIN: 0.55,         // turning INTO the arc cuts the windup to 55%: felt, not theoretical
+  DRAG_MAX: 1.75,          // turning AGAINST the arc stretches it to 175%
+  DRAG_REACH: 0.40,        // a drag carries the blade further, Chivalry's signature
   TURN_FULL: 2.4,          // rad/s of body turn that counts as a full drag or accel
   TRADE_ABSORB: 0.55,      // what a guarding counter/riposte pays to eat a swing
   DISARM_TIME: 1.7,        // blocking at zero stamina costs you the weapon
@@ -181,13 +184,16 @@ export class Fighter {
 
   startAttack(kind, zone, clock, opts = {}) {
     if (!this.canAct()) return false;
+    /* YOU CANNOT START A SWING WHILE MID-SWING. canAct() only excludes stagger, exhausted
+     * and dodge, so a held button (or a repeated intent) used to restart the windup every
+     * frame and quietly drain stamina, which made a swing look like it never finished. */
+    if (this.state === 'windup' || this.state === 'active' || this.state === 'recover') return false;
     if (clock < this.disarmUntil) return false;
     if (this.guard) return false;
     if (this.feintLock > 0) return false;
     const a = CFG.ATTACKS[kind];
     if (!a) return false;
     if (this.stam < a.stam * 0.5) return false;   // too spent to swing properly
-    if (opts.offTurn && kind === 'heavy') return false;   // a heavy off turn never leaves
     this.spend(a.stam, clock);
 
     const line = a.line === 'thrust' ? 'T' : zone;
@@ -204,10 +210,6 @@ export class Fighter {
     let base = 1;
     if (countered) { base *= CFG.COUNTER_SPEED; this.stam = Math.min(CFG.STAM_MAX, this.stam + CFG.COUNTER_REFUND); this.counters++; }
     else if (riposte) base *= CFG.RIPOSTE_SPEED;
-    /* INITIATIVE. Swinging when the turn is not yours is slower, so trading into a
-     * man who already has it loses the race. This is the rule that stops mashing. */
-    if (opts.offTurn) base *= CFG.OFF_TURN_SLOW;
-
     this.state = 'windup';
     this.tState = 0;
     this.lastKind = kind;
@@ -215,7 +217,7 @@ export class Fighter {
     this.attack = { id: this.id * 10000 + this.attackSeq, kind, zone: line, t: 0,
       resolved: false, deflectedThisSwing: false,
       baseMul: base, durMul: base, isCounter: countered, isRiposte: riposte,
-      guarded: countered || riposte, reachBonus: 0, turn: 0, offTurn: !!opts.offTurn };
+      guarded: countered || riposte, reachBonus: 0, turn: 0 };
     return true;
   }
 
@@ -319,7 +321,11 @@ export class Duel {
   }
 
   resolveStrike(att, def) {
-    const A = CFG.ATTACKS[att.attack.kind];
+    /* CAPTURE THE LINE FIRST. A parry staggers the attacker, and staggering nulls his
+     * attack, so reading att.attack.kind afterwards threw on EVERY successful parry and
+     * killed the whole game loop. Anything read after a stagger has to be saved up front. */
+    const attKind = att.attack.kind;
+    const A = CFG.ATTACKS[attKind];
     const zone = att.attack.zone;
     const riposte = att.riposteUntil > this.clock;
     let dmg = A.dmg * (riposte ? CFG.RIPOSTE_MULT : 1);
@@ -330,7 +336,7 @@ export class Duel {
      * the counter has no reason to exist. */
     if (def.state === 'windup' && def.attack && def.attack.guarded &&
         (def.attack.zone === zone || A.line === 'thrust')) {
-      const chip = (CFG.BLOCK_ABSORB[att.attack.kind] ?? 8) * CFG.TRADE_ABSORB;
+      const chip = (CFG.BLOCK_ABSORB[attKind] ?? 8) * CFG.TRADE_ABSORB;
       def.stam = Math.max(0, def.stam - chip);
       def.lastAction = this.clock;
       this.turn = def.id;
@@ -357,7 +363,7 @@ export class Duel {
         att.stagger(CFG.DEFLECT_STAGGER);
         def.stam = Math.min(CFG.STAM_MAX, def.stam + CFG.PARRY_REFUND);
         def.riposteUntil = this.clock + CFG.RIPOSTE_WINDOW;
-        def.blockedAt = this.clock; def.blockedKind = att.attack.kind; def.blockedZone = zone;
+        def.blockedAt = this.clock; def.blockedKind = attKind; def.blockedZone = zone;
         this.turn = def.id;                     // the deflector takes the turn
         this.emit('parry', { who: def.id, vs: att.id, zone });
         return;
@@ -369,12 +375,12 @@ export class Duel {
         this.emit('guardbreak', { who: def.id, vs: att.id });
         return;
       }
-      const chip = CFG.BLOCK_ABSORB[att.attack.kind] ?? 12;
+      const chip = CFG.BLOCK_ABSORB[attKind] ?? 12;
       const broke = def.stam - chip <= 0;
       def.stam = Math.max(0, def.stam - chip);
       def.lastAction = this.clock;
       /* remember the line that was blocked: this is what a counter is built on */
-      def.blockedAt = this.clock; def.blockedKind = att.attack.kind; def.blockedZone = zone;
+      def.blockedAt = this.clock; def.blockedKind = attKind; def.blockedZone = zone;
       this.turn = def.id;                       // blocking takes the turn
       if (broke) {
         /* CHIVALRY'S CRUELEST RULE: block with nothing left and you DROP THE WEAPON */
@@ -416,6 +422,7 @@ export class Duel {
     const closing = (I[0].move ?? 0) + (I[1].move ?? 0);
     this.dist = Math.max(0.6, Math.min(6, (this.dist ?? 3.4) - closing * CFG.MOVE_SPEED * dt));
 
+    const pending = [];
     for (let i = 0; i < 2; i++) {
       const f = P[i], o = P[1 - i], inp = I[i];
       f.tState += dt;
@@ -450,14 +457,12 @@ export class Duel {
           f.state = 'active'; f.tState = 0;
           const A = CFG.ATTACKS[f.attack.kind];
           const reach = A.reach * (1 + (f.attack.reachBonus || 0));
-          if (!f.attack.resolved && this.dist <= reach) {
+          /* BOTH MEN CAN BE MID-SWING. Land the blades after both have been advanced,
+           * so neither side gets the first slot by array order and a simultaneous
+           * exchange resolves on speed rather than on who the loop happened to visit. */
+          if (!f.attack.resolved) {
             f.attack.resolved = true;
-            this.resolveStrike(f, o);
-            if (this.over) return this.events;
-          } else if (!f.attack.resolved) {
-            f.attack.resolved = true;   // out of reach, a whiff nobody gets to punish twice
-            f.whiffs++;
-            this.emit('outofrange', { who: f.id });
+            pending.push({ f, o, reach, over: f.attack.t - CFG.ATTACKS[f.attack.kind].windup, who: f.id });
           }
         }
       } else if (f.state === 'active') {
@@ -478,6 +483,25 @@ export class Duel {
         const scale = f.guard ? CFG.GUARD_REGEN_SCALE : 1;
         f.stam = Math.min(CFG.STAM_MAX, f.stam + CFG.STAM_REGEN * scale * dt);
       }
+    }
+
+    /* LIVE EXCHANGE. Nobody waits their turn: if both blades finish winding on the same
+     * frame, the one that ran out of windup FIRST lands first, and only an exact dead
+     * heat is broken by initiative. Attacking 20 times while the other man attacks zero
+     * is always legal - he just has to survive it. */
+    if (pending.length) {
+      if (pending.length > 1) {
+        pending.sort((x, y) => (x.over - y.over) ||
+          ((x.who === this.turn && y.who !== this.turn) ? -1 : (y.who === this.turn && x.who !== this.turn) ? 1 : 0));
+      }
+      for (const p of pending) {
+        if (this.over) break;
+        /* a man staggered by the blade that arrived first does not get to land his own */
+        if (!p.f.attack || p.f.state !== 'active') continue;
+        if (this.dist <= p.reach) this.resolveStrike(p.f, p.o);
+        else { p.f.whiffs++; this.emit('outofrange', { who: p.f.id }); }
+      }
+      if (this.over) return this.events;
     }
 
     if (this.clock >= this.maxTime && !this.over) {
