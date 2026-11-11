@@ -932,6 +932,12 @@ let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = fa
 /* the camera starts pointed slightly DOWN: a first-person duel should be mostly arena,
  * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
+/* motion weight state: the weapon is attached to a body, not to the lens */
+let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase = 0, walkAmp = 0;
+let lastMeHp = 100, lastFoeHp = 100;
+const prevLook = { x: 0, y: -0.13 };
+const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+window.__feel = () => ({ hitStop: +hitStop.toFixed(3), camPunch: +camPunch.toFixed(2), shieldRock: +shieldRock.toFixed(2), lag: [+vmLagX.toFixed(4), +vmLagY.toFixed(4)] });
 let foePrev = 'idle';
 
 function newRound() {
@@ -1339,11 +1345,33 @@ function render(dt) {
   const shake = camShake > 0 ? camShake : 0;
   camShake = Math.max(0, camShake - dt * 3.2);
   const lean = dodgeRoll;
+  /* WEIGHT: the hand trails the look and the camera takes the blow. A weapon that is
+   * welded to the lens reads as a sticker no matter how good the model is. */
+  const yawVel = (yaw - prevLook.x) / Math.max(dt, 0.001);
+  const pitchVel = (pitch - prevLook.y) / Math.max(dt, 0.001);
+  prevLook.x = yaw; prevLook.y = pitch;
+  vmLagX = lerp(vmLagX, clampNum(-yawVel * 0.011, -0.032, 0.032), 1 - Math.pow(0.0015, dt));
+  vmLagY = lerp(vmLagY, clampNum(-pitchVel * 0.007, -0.028, 0.028), 1 - Math.pow(0.0015, dt));
+  /* impact: a landed hit stops the swing dead, a taken hit rocks the shield back */
+  if (foe.hp < lastFoeHp - 0.01) { hitStop = 0.075; camPunch = 0.55; }
+  if (me.hp < lastMeHp - 0.01) { hitStop = 0.095; camPunch = -0.85; shieldRock = 0.65; }
+  lastFoeHp = foe.hp; lastMeHp = me.hp;
+  hitStop = Math.max(0, hitStop - dt);
+  camPunch = lerp(camPunch, 0, 1 - Math.pow(0.0000012, dt));
+  shieldRock = lerp(shieldRock, 0, 1 - Math.pow(0.0006, dt));
+  /* footfalls: the body rises and falls, so the whole view does too */
+  const walking = (keys['arrowup'] || keys['arrowdown']) ? 1 : 0;
+  walkAmp = lerp(walkAmp, walking, 1 - Math.pow(0.02, dt));
+  walkPhase += dt * 8.4;
+  const bob = Math.sin(walkPhase) * 0.012 * walkAmp;
+
   camera.position.set(
     Math.sin(performance.now() / 1000 * 11) * shake * 0.035 + lean * -0.35,
-    1.68 + Math.cos(performance.now() / 1000 * 13) * shake * 0.03,
+    1.68 + Math.cos(performance.now() / 1000 * 13) * shake * 0.03 + bob,
     -Math.abs(lean) * -0.12);
-  camera.rotation.set(pitch, yaw, lean * 0.12 + (shake * 0.02), 'YXZ');
+
+
+  camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + (shake * 0.02), 'YXZ');
   dodgeRoll *= 0.86;
 
   /* the opponent stands at the duel's distance, always facing you */
@@ -1354,7 +1382,7 @@ function render(dt) {
 
   /* viewmodel */
   const target = targetPose(me, duel.clock);
-  const k = 1 - Math.pow(0.001, dt * (target.fast / 12));
+  const k = 1 - Math.pow(0.001, (hitStop > 0 ? dt * 0.07 : dt) * (target.fast / 12));
   for (let i = 0; i < 3; i++) {
     pose.pos[i] = lerp(pose.pos[i], target.p.pos[i], k);
     pose.rot[i] = lerp(pose.rot[i], target.p.rot[i], k);
@@ -1369,10 +1397,20 @@ function render(dt) {
     const swayY = Math.cos(t * 0.9) * 0.0026 + Math.sin(t * 3.1) * 0.0007;
     sword.position.fromArray(pose.pos);
     sword.rotation.fromArray(pose.rot);
-    sword.position.x += swayX; sword.position.y += swayY;
-    sword.rotation.z += swayX * 1.6;
+    sword.position.x += swayX + vmLagX;
+    sword.position.y += swayY + vmLagY + bob * 0.6;
+    sword.rotation.z += swayX * 1.6 + vmLagX * 1.4;
+    sword.rotation.x += vmLagY * 1.1;
   }
-  if (!INSPECT) { shield.position.fromArray(shieldPose.pos); shield.rotation.fromArray(shieldPose.rot); }
+  if (!INSPECT) {
+    shield.position.fromArray(shieldPose.pos);
+    shield.rotation.fromArray(shieldPose.rot);
+    /* the shield is heavier than the sword, so it lags less and rocks on a block */
+    shield.position.x += vmLagX * 0.65;
+    shield.position.y += vmLagY * 0.65 + bob * 0.5;
+    shield.rotation.x += shieldRock * 0.15;
+    shield.rotation.z += shieldRock * 0.07;
+  }
   /* the shield hides the upper body while guarding: a real cost to turtling */
   shield.visible = true;
 
