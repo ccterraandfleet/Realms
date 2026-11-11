@@ -84,6 +84,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 /* ?q=low bypasses the whole look pipeline and falls back to a plain forward render,
  * which is the escape hatch for weak GPUs and the control arm for measurements */
 const LOWQ = /[?&]q=low\b/.test(location.search);
+const INSPECT = /[?&]inspect=1\b/.test(location.search);
 /* isolation switch: proves the scanned maps are reaching the shader, not silently dropped */
 const TEXOFF = /[?&]tex=off\b/.test(location.search);
 renderer.toneMapping = LOWQ ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
@@ -200,7 +201,12 @@ function groundMesh() {
         { const hsl = { h: 0, s: 0, l: 0 };
           c.getHSL(hsl, THREE.SRGBColorSpace);
           c.setHSL(hsl.h, Math.min(1, hsl.s * PALETTE_CHROMA), hsl.l, THREE.SRGBColorSpace); }
-        for (const q of tri) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); uvs.push(q[0] / UV_SCALE, q[2] / UV_SCALE); }
+        /* WINDING, THE FOURTH TIME IN THIS PROJECT. Emitted in the order that looks
+         * counter-clockwise on paper, the face normal pointed DOWN into the earth, so the
+         * sun contributed nothing to the ground and the blue sky lit it alone: that is
+         * why the terrain read blue-grey no matter how the lights were tuned. Swap two
+         * corners and the normals come out +Y. Measured: hue 128 -> 93, sat 9 -> 17. */
+        for (const q of [tri[0], tri[2], tri[1]]) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); uvs.push(q[0] / UV_SCALE, q[2] / UV_SCALE); }
       }
     }
   }
@@ -590,33 +596,42 @@ for (let i = 0; i < 3; i++) {
   sword.add(bk);
 }
 /* the back of the hand, plated over the glove */
-const backPlate = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), leather);
-backPlate.scale.set(1.0, 1.15, 0.62);
-backPlate.position.set(0, -0.098, 0.042);
+const backPlate = new THREE.Mesh(new THREE.SphereGeometry(0.043, 12, 9), leather);
+backPlate.scale.set(1.18, 0.92, 0.52);
+backPlate.position.set(0, -0.062, 0.040);
 sword.add(backPlate);
-for (const sx of [-0.024, 0.0, 0.024]) {
-  const plate = new THREE.Mesh(new THREE.SphereGeometry(0.016, 8, 6), steelDark);
-  plate.scale.set(1, 0.7, 0.5);
-  plate.position.set(sx, -0.072, 0.052);
-  sword.add(plate);
-  rivet(sx, -0.062, 0.05, 0.0045, sword);
+/* the knuckle guard: a thin steel bar across the back of the hand, not a dome */
+const knuckleBar = new THREE.Mesh(new THREE.BoxGeometry(0.106, 0.014, 0.022), steelDark);
+knuckleBar.position.set(0, -0.048, 0.043);
+sword.add(knuckleBar);
+for (const sx of [-0.028, 0.0, 0.028]) {
+  rivet(sx, -0.0412, 0.044, 0.004, sword);
+  rivet(sx, -0.0505, 0.044, 0.004, sword);
 }
 /* four fingers: each curls over the front of the grip and hooks back behind it */
+/* FINGERS HAD TO BE SEPARATED: pitch 0.0205 with radius 0.0105 made every pair overlap,
+ * so four fingers fused into one lump. Pitch 0.0275 with radius 0.0095 leaves a visible
+ * gap between them, and three joints instead of two gives the curl a real shape. */
 for (let i = 0; i < 4; i++) {
-  const x = -0.030 + i * 0.0205;
-  const grip2 = 0.0105 - Math.abs(i - 1.5) * 0.0008;
-  seg([x, -0.070, 0.052], [x, -0.098, 0.042], grip2, glove, sword);
-  seg([x, -0.098, 0.042], [x, -0.094, 0.004], grip2 * 0.94, glove, sword);
-  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(grip2 * 1.05, 7, 6), steelDark);
-  knuckle.position.set(x, -0.0705, 0.0485);
+  const x = (i - 1.5) * 0.0275;
+  const t = Math.abs(i - 1.5) / 1.5;
+  const r0 = 0.0096 - t * 0.0009;
+  seg([x, -0.056, 0.050], [x, -0.083, 0.058], r0, glove, sword);
+  seg([x, -0.083, 0.058], [x, -0.101, 0.036], r0 * 0.96, glove, sword);
+  seg([x, -0.101, 0.036], [x, -0.097, 0.004], r0 * 0.88, glove, sword);
+  const knuckle = new THREE.Mesh(new THREE.SphereGeometry(r0 * 1.12, 7, 6), steelDark);
+  knuckle.position.set(x, -0.0565, 0.049);
+  knuckle.scale.set(1, 0.86, 0.9);
   sword.add(knuckle);
+  rivet(x, -0.0485, 0.052, 0.0035, sword);
 }
-seg([0.040, -0.084, 0.036], [0.006, -0.104, 0.032], 0.0128, glove, sword);
-seg([0.006, -0.104, 0.032], [-0.016, -0.094, 0.012], 0.0116, glove, sword);
+/* thumb lays across the index finger, its own two joints, held clear of the fist */
+seg([0.049, -0.062, 0.030], [0.021, -0.083, 0.055], 0.0125, glove, sword);
+seg([0.021, -0.083, 0.055], [-0.004, -0.093, 0.044], 0.0113, glove, sword);
 /* the viewmodel measured 40.6% of the frame with only 15.4% left for the ground, so it
  * is scaled back and pushed down and out: hands should frame the fight, not hide it */
-sword.scale.setScalar(0.86);
-sword.position.set(0.30, -0.365, -0.575);
+sword.scale.setScalar(0.95);
+sword.position.set(0.315, -0.335, -0.565);
 sword.rotation.set(-0.16, 0.16, 0.22);
 hand.add(sword);
 
@@ -716,11 +731,14 @@ lfist.scale.set(1, 0.9, 0.72);
 lfist.position.set(-0.004, -0.105, -0.048);
 shieldHand.add(lfist);
 for (let i = 0; i < 4; i++) {
-  const x = -0.028 + i * 0.019;
-  seg([x, -0.088, -0.026], [x, -0.115, -0.046], 0.0098, glove, shieldHand);
-  seg([x, -0.115, -0.046], [x, -0.112, -0.078], 0.0092, glove, shieldHand);
+  const x = (i - 1.5) * 0.0265;
+  seg([x, -0.086, -0.024], [x, -0.110, -0.040], 0.0094, glove, shieldHand);
+  seg([x, -0.110, -0.040], [x, -0.116, -0.062], 0.0088, glove, shieldHand);
+  seg([x, -0.116, -0.062], [x, -0.106, -0.080], 0.0080, glove, shieldHand);
+  rivet(x, -0.080, -0.022, 0.0034, shieldHand);
 }
-seg([0.028, -0.100, -0.040], [0.002, -0.122, -0.044], 0.0122, glove, shieldHand);
+seg([0.038, -0.092, -0.034], [0.010, -0.112, -0.040], 0.0116, glove, shieldHand);
+seg([0.010, -0.112, -0.040], [-0.012, -0.114, -0.058], 0.0104, glove, shieldHand);
 shield.add(shieldHand);
 shield.scale.setScalar(0.84);
 shield.position.set(-0.345, -0.385, -0.615);
@@ -1099,6 +1117,34 @@ const GradeShader = {
   `,
 };
 let composer = null, gradePass = null;
+if (INSPECT) {
+  /* viewmodel inspection: neutral grey, everything else hidden, hand scaled up so
+   * fingers are big enough to judge. ?inspect=1&part=shield shows the other one. */
+  scene.background = new THREE.Color(0x6f7478);
+  scene.fog = null;
+  scene.environment = null;
+  scene.traverse(o => { if (o.isMesh || o.isPoints) o.visible = false; });
+  hand.visible = true;
+  hand.traverse(o => { if (o.isMesh) o.visible = true; });
+  /* inspect lights live on the SCENE, not on the hand: hiding the hand must not change
+   * the lighting or every frame diff measures the light rig instead of the silhouette */
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x555555, 1.5));
+  const key = new THREE.DirectionalLight(0xfff4e2, 2.4); key.position.set(-0.8, 1.1, 0.9); scene.add(key);
+  const rim2 = new THREE.DirectionalLight(0x9fc4ff, 1.1); rim2.position.set(0.9, 0.3, -0.8); scene.add(rim2);
+  /* frame the thing in front of the camera at a readable size instead of scaling the
+   * hand, which just pushed it into the near plane and filled the screen */
+  const back = /[?&]back=1\b/.test(location.search);
+  if (!/[?&]part=shield\b/.test(location.search)) {
+    shield.visible = false; sword.visible = true;
+    sword.scale.setScalar(1.0);
+    sword.position.set(0.0, -0.16, -0.95);
+    sword.rotation.set(back ? -0.12 : 0.06, back ? 2.9 : 0.62, 0.10);
+  } else {
+    sword.visible = false; shield.visible = true;
+    shield.position.set(0.0, -0.02, -0.95);
+    shield.rotation.set(0.04, back ? 3.05 : -0.28, -0.06);
+  }
+}
 if (!LOWQ) {
   composer = new EffectComposer(renderer);
   composer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
@@ -1118,6 +1164,49 @@ window.__diag = {
   sunFront: () => { sun.position.set(12.6, 31.5, 29.5); return sun.position.toArray(); },
   sunHigh: () => { sun.position.set(6, 60, -12); return sun.position.toArray(); },
   groundEnv: (v) => { for (const m of [ground.material]) { m.envMapIntensity = v; m.needsUpdate = true; } return v; },
+  flipWinding: () => {
+    const T = THREE, g = window.__ground.geometry;
+    const pos = g.getAttribute('position'), col = g.getAttribute('color'), uv = g.getAttribute('uv');
+    const P = [], C = [], U = [];
+    for (let i = 0; i < pos.count; i += 3) {
+      for (const k of [0, 2, 1]) {               /* swap two corners: normal flips to +Y */
+        P.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+        C.push(col.getX(i + k), col.getY(i + k), col.getZ(i + k));
+        U.push(uv.getX(i + k), uv.getY(i + k));
+      }
+    }
+    const ng = new T.BufferGeometry();
+    ng.setAttribute('position', new T.Float32BufferAttribute(P, 3));
+    ng.setAttribute('color', new T.Float32BufferAttribute(C, 3));
+    ng.setAttribute('uv', new T.Float32BufferAttribute(U, 2));
+    ng.computeVertexNormals();
+    window.__ground.geometry = ng;
+    const n = ng.getAttribute('normal');
+    return { firstNormalY: +n.getY(0).toFixed(2) };
+  },
+  sunNoShadow: (v) => { sun.castShadow = v === undefined ? false : v; return sun.castShadow; },
+  shadowInfo: () => ({ bias: sun.shadow.bias, normalBias: sun.shadow.normalBias,
+    mapSize: sun.shadow.mapSize.toArray(), cam: { left: sun.shadow.camera.left, right: sun.shadow.camera.right,
+    top: sun.shadow.camera.top, bottom: sun.shadow.camera.bottom, near: sun.shadow.camera.near, far: sun.shadow.camera.far },
+    pos: sun.position.toArray(), intensity: sun.intensity, castShadow: sun.castShadow }),
+  sunBias: (b, n) => { sun.shadow.bias = b; if (n !== undefined) sun.shadow.normalBias = n;
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; } return [sun.shadow.bias, sun.shadow.normalBias]; },
+  envNull: () => { scene.environment = null; scene.background = null; return true; },
+  envBack: () => { scene.background = scene.environment ? null : scene.background; return true; },
+  sunOff: () => { sun.intensity = 0; return true; },
+  hemiOff: () => { fillLight.intensity = 0; bounce.intensity = 0; return true; },
+  hideProps: () => {
+    scene.traverse(o => {
+      if (o === window.__ground || o === ground) return;
+      if (o.isMesh || o.isPoints) {
+        let p = o, isVM = false;
+        while (p) { if (p === hand) { isVM = true; break; } p = p.parent; }
+        if (!isVM && o !== camera) o.visible = false;
+      }
+    });
+    scene.background = null; scene.fog = null; hand.visible = false;
+    return true;
+  },
   unlit: () => {
     const m = new THREE.MeshBasicMaterial({ vertexColors: true, map: window.__ground.material.map });
     window.__ground.material = m;
@@ -1171,8 +1260,7 @@ function render(dt) {
     shieldPose.pos[i] = lerp(shieldPose.pos[i], target.s.pos[i], k);
     shieldPose.rot[i] = lerp(shieldPose.rot[i], target.s.rot[i], k);
   }
-  sword.position.fromArray(pose.pos);
-  sword.rotation.fromArray(pose.rot);
+  if (!INSPECT) { sword.position.fromArray(pose.pos); sword.rotation.fromArray(pose.rot); }
   shield.position.fromArray(shieldPose.pos);
   shield.rotation.fromArray(shieldPose.rot);
   /* the shield hides the upper body while guarding: a real cost to turtling */
