@@ -52,13 +52,14 @@
   <div id="tel"></div>
   <div id="msg"></div>
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
-  <div id="hint">A / W / D raise a guard &middot; J light &middot; K heavy &middot; L thrust &middot; F feint &middot; Shift dodge &middot; arrows close or open</div>
+  <div id="hint"><b>LMB</b> attack, aimed by the mouse: up overhead &middot; left / right cuts &middot; down thrust &nbsp;|&nbsp; <b>RMB</b> guard, follows the mouse &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>Q</b> feint &middot; <b>Shift</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
 <div id="intro">
   <h1>REALMS</h1>
   <p>first person duel &middot; click to take the sword</p>
-  <p class="k">A W D = guard left / top / right &nbsp; J K L = light / heavy / thrust</p>
+  <p class="k">LMB attack &middot; move the mouse UP for an overhead, LEFT or RIGHT for a cut, DOWN for a thrust</p>
+  <p class="k">RMB guard (it follows your mouse) &middot; MMB heavy &middot; Q feint &middot; Shift dodge &middot; W S close and open &middot; A D circle</p>
   <p class="k">F = feint &nbsp; Shift = dodge &nbsp; Up / Down = close or open the distance</p>
   <p>a parry is a guard that lands in the last tenth of a second &middot; press 1&ndash;7 for a different opponent</p>
 </div>
@@ -929,6 +930,31 @@ loader.load('./knight.glb', (gltf) => {
 let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
 const keys = Object.create(null);
 let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = false, pendingDodge = null;
+/* FOR HONOR / CHIVALRY CONTROLS. No letter keys for combat: every attack comes off a
+ * click, and the CLICK DIRECTION comes from how the mouse was just moved. Up = overhead,
+ * left and right = the two side cuts, down = thrust. The guard follows the mouse the same
+ * way, so the hand that aims the cut also aims the block. */
+let rmbDown = false, lastZone = 'T', orbit = 0;
+const mouseHist = [];          /* {t, dx, dy} so a click knows which way the mouse was going */
+function mouseDir() {
+  const now = performance.now();
+  let dx = 0, dy = 0, n = 0;
+  for (const s of mouseHist) {
+    if (now - s.t > 260) break;
+    dx += s.dx; dy += s.dy; n++;
+  }
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 14) return null;
+  if (Math.abs(dy) >= Math.abs(dx)) return dy < 0 ? 'up' : 'down';
+  return dx < 0 ? 'left' : 'right';
+}
+const ZONE_OF = { up: 'T', left: 'L', right: 'R', down: 'T' };
+/* one click, one attack; the mouse tells us which one */
+function attackFromClick(kind) {
+  const dir = mouseDir();
+  if (dir === 'down' || kind === 'thrust') return { kind: 'thrust', zone: 'T' };
+  if (dir) { lastZone = ZONE_OF[dir]; return { kind, zone: lastZone }; }
+  return { kind, zone: lastZone };
+}
 /* the camera starts pointed slightly DOWN: a first-person duel should be mostly arena,
  * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
@@ -937,7 +963,11 @@ let vmLagX = 0, vmLagY = 0, hitStop = 0, camPunch = 0, shieldRock = 0, walkPhase
 let lastMeHp = 100, lastFoeHp = 100;
 const prevLook = { x: 0, y: -0.13 };
 const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
-window.__feel = () => ({ hitStop: +hitStop.toFixed(3), camPunch: +camPunch.toFixed(2), shieldRock: +shieldRock.toFixed(2), lag: [+vmLagX.toFixed(4), +vmLagY.toFixed(4)] });
+window.__feel = () => {
+  const n = (v) => (typeof v === 'number' && isFinite(v) ? +v.toFixed(2) : null);
+  return { orbit: n(orbit), dist: duel ? n(duel.dist) : null, guard: rmbDown ? guardZone : null,
+    hitStop: n(hitStop), camPunch: n(camPunch), shieldRock: n(shieldRock), lag: [n(vmLagX), n(vmLagY)] };
+};
 let foePrev = 'idle';
 
 function newRound() {
@@ -969,22 +999,43 @@ document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement) { intro.style.display = 'flex'; }
 });
 document.addEventListener('mousemove', (e) => {
-  if (!document.pointerLockElement) return;
+  if (!document.pointerLockElement && !window.__forceInput) return;
   yaw -= e.movementX * 0.0022;
   pitch = Math.max(-0.9, Math.min(0.9, pitch - e.movementY * 0.0022));
+  /* keep the last quarter second of mouse travel: the click reads its direction from
+   * here, so a cut is aimed by moving the mouse and then pressing, exactly as it is in
+   * Chivalry, rather than by remembering which key stands for which cut */
+  mouseHist.unshift({ t: performance.now(), dx: e.movementX, dy: e.movementY });
+  if (mouseHist.length > 22) mouseHist.length = 22;
+  /* a held guard follows the mouse, so you can move the block to the incoming line */
+  if (rmbDown) {
+    const d = mouseDir();
+    if (d) guardZone = ZONE_OF[d];
+  }
 });
+
+/* ---------------------------------------------------------------- mouse combat */
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+addEventListener('mousedown', (e) => {
+  if (!document.pointerLockElement && !window.__forceInput) return;
+  if (e.button === 0) { pendingAttack = attackFromClick('light'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
+  if (e.button === 2) { rmbDown = true; pressGuard = true; guardZone = lastZone; e.preventDefault(); }
+  if (e.button === 1) { pendingAttack = attackFromClick('heavy'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
+}, { passive: false });
+addEventListener('mouseup', (e) => {
+  if (e.button === 2) rmbDown = false;
+});
+/* a click that leaves the window must not leave the guard stuck up */
+addEventListener('blur', () => { rmbDown = false; for (const k in keys) keys[k] = false; });
 addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (keys[k]) return;
   keys[k] = true;
-  if (k === 'a') { guardZone = 'L'; pressGuard = true; }
-  if (k === 'w') { guardZone = 'T'; pressGuard = true; }
-  if (k === 'd') { guardZone = 'R'; pressGuard = true; }
-  if (k === 'j') pendingAttack = { kind: 'light', zone: guardZone };
-  if (k === 'k') pendingAttack = { kind: 'heavy', zone: guardZone };
-  if (k === 'l') pendingAttack = { kind: 'thrust', zone: guardZone };
-  if (k === 'f') pendingFeint = true;
+  /* WASD is MOVEMENT now, the way it is in every first-person game: W and S close and
+   * open the distance, A and D circle the opponent. Combat never touches the keyboard. */
+  if (k === 'q' || k === 'f') pendingFeint = true;
   if (k === 'shift') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
+  if (k === ' ') pendingDodge = 'back';
   if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
   if (k >= '1' && k <= '7') {
     const order = ['sentinel', 'turtle', 'flurry', 'breaker', 'feinter', 'blender', 'duelist'];
@@ -1108,8 +1159,8 @@ function tick(dt) {
   if (!duel) return;
   const me = duel.a, foe = duel.b;
   const ia = {
-    move: keys['arrowup'] ? 1 : keys['arrowdown'] ? -1 : 0,
-    guard: keys['a'] ? 'L' : keys['w'] ? 'T' : keys['d'] ? 'R' : (keys[' '] ? guardZone : null),
+    move: (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0),
+    guard: rmbDown || keys[' '] ? guardZone : null,
     press: pressGuard,
     attack: pendingAttack ? pendingAttack.kind : null,
     zone: pendingAttack ? pendingAttack.zone : guardZone,
@@ -1341,6 +1392,11 @@ function render(dt) {
   if (!duel) return;
   const me = duel.a, foe = duel.b;
 
+  /* A and D circle the man instead of shuffling sideways: the bearing to him swings,
+   * which is what a lock-on duel feels like in For Honor. W and S still set the gap. */
+  const strafe = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
+  orbit += strafe * 1.9 * dt;
+
   /* camera: eye height, first person, shake, dodge lean */
   const shake = camShake > 0 ? camShake : 0;
   camShake = Math.max(0, camShake - dt * 3.2);
@@ -1371,13 +1427,15 @@ function render(dt) {
     -Math.abs(lean) * -0.12);
 
 
-  camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + (shake * 0.02), 'YXZ');
+  camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + (shake * 0.02) - strafe * 0.022, 'YXZ');
   dodgeRoll *= 0.86;
 
   /* the opponent stands at the duel's distance, always facing you */
   const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
-  foeRoot.position.set(Math.sin(yaw) * -d, 0, Math.cos(yaw) * -d);
-  foeRoot.rotation.y = yaw + Math.PI;
+  /* (circling is computed above, before the camera needs it) */
+  const bearing = yaw + orbit;
+  foeRoot.position.set(Math.sin(bearing) * -d, 0, Math.cos(bearing) * -d);
+  foeRoot.rotation.y = bearing + Math.PI;
   if (foeMixer) foeMixer.update(dt);
 
   /* viewmodel */
