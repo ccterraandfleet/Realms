@@ -1,0 +1,192 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Realms models</title>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+<style>
+  html,body{margin:0;background:#0b0f13;overflow:hidden;font:600 13px/1.4 ui-monospace,Menlo,monospace;color:#dfe8ef}
+  canvas{display:block}
+  .lab{position:absolute;transform:translateX(-50%);text-align:center;pointer-events:none}
+  .name{font-size:16px;letter-spacing:.16em;color:#eef5fb}
+  .spec{font-size:11px;letter-spacing:.05em;color:#8fa2b1;margin-top:3px;font-weight:400}
+  .bad{color:#c9873f}
+</style></head><body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from './lib/GLTFLoader.js';
+import { RGBELoader } from './lib/RGBELoader.js';
+import { autoFit, bindRig, applySwing, forwardSign } from './rigpose.js';
+
+const Q = new URLSearchParams(location.search);
+const VIEW = Q.get('view') || 'lineup';
+
+const W = Math.max(900, innerWidth), H = Math.max(500, innerHeight);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.02;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1218);
+scene.fog = new THREE.Fog(0x0d1218, 14, 30);
+
+const camera = new THREE.PerspectiveCamera(34, W / H, 0.1, 120);
+
+/* studio lighting: sky for reflections, a key with shadows, two rims to cut the silhouette */
+new RGBELoader().load('./env/sky_1k.hdr', (hdr) => {
+  hdr.mapping = THREE.EquirectangularReflectionMapping;
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromEquirectangular(hdr).texture;
+  scene.environmentIntensity = 0.55;
+});
+const key = new THREE.DirectionalLight(0xfff2df, 2.6);
+key.position.set(3.2, 6.0, 4.4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 0.5; key.shadow.camera.far = 24;
+key.shadow.camera.left = -6; key.shadow.camera.right = 6;
+key.shadow.camera.top = 6; key.shadow.camera.bottom = -6;
+key.shadow.bias = -0.0012;
+scene.add(key);
+const rimA = new THREE.DirectionalLight(0x9fc4ff, 1.9); rimA.position.set(-5, 3.2, -4.2); scene.add(rimA);
+const rimB = new THREE.DirectionalLight(0xffd9a8, 0.9); rimB.position.set(5.2, 2.0, -3.0); scene.add(rimB);
+scene.add(new THREE.AmbientLight(0x30404f, 1.1));
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(9, 64).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x2a3138, roughness: 0.92, metalness: 0.02 })
+);
+ground.position.y = -0.005;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* the three we have been comparing, or the whole KayKit family we already own */
+const THREE_SET = [
+  { id: 'knight', file: './knight.glb', name: '1 · KAYKIT KNIGHT',
+    spec: 'stylized · 6,952 tris · one 1024² atlas in <span class="bad">13 KB</span> · 76 clips incl 4 melee' },
+  { id: 'soldier', file: './Soldier.glb', name: '2 · MIXAMO SOLDIER',
+    spec: 'realistic · 11,376 tris · jpeg diffuse · 4 clips, <span class="bad">no combat</span>' },
+  { id: 'xbot', file: './Xbot.glb', name: '3 · MIXAMO MANNEQUIN',
+    spec: 'neutral · 49,112 tris · untextured · 7 clips, <span class="bad">no combat</span>' },
+];
+const FAMILY_SET = [
+  { id: 'knight', file: './knight.glb', name: 'KNIGHT', spec: 'heavy · plate and tabard' },
+  { id: 'barbarian', file: './Barbarian.glb', name: 'BARBARIAN', spec: 'line breaker · furs' },
+  { id: 'rogue', file: './Rogue.glb', name: 'ROGUE', spec: 'skirmisher · light armour' },
+  { id: 'mage', file: './Mage.glb', name: 'MAGE', spec: 'ranged · robes' },
+  { id: 'soldier', file: './Soldier.glb', name: 'SOLDIER', spec: 'reference · realistic' },
+  { id: 'xbot', file: './Xbot.glb', name: 'MANNEQUIN', spec: 'reference · neutral' },
+];
+const MODELS = VIEW === 'family' ? FAMILY_SET : THREE_SET;
+
+const loader = new GLTFLoader();
+const load = (u) => new Promise((res, rej) => loader.load(u, res, undefined, rej));
+const loaded = [];
+
+for (let i = 0; i < MODELS.length; i++) {
+  const m = MODELS[i];
+  const g = await load(m.file);
+  const root = g.scene;
+  scene.add(root);
+  const fit = autoFit(root, 1.86);
+  root.traverse((o) => {
+    if (o.isMesh || o.isSkinnedMesh) {
+      o.castShadow = true; o.receiveShadow = true;
+      o.frustumCulled = false;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mm of mats) {
+        if (!mm) continue;
+        if (!mm.map) { mm.color = new THREE.Color(0xb8c2cb); mm.roughness = 0.62; }
+        mm.envMapIntensity = 0.75;
+      }
+    }
+  });
+  const rig = bindRig(root);
+  loaded.push({ ...m, root, rig, fit });
+}
+
+/* put every model into the same mid-swing pose, so the sheet compares the rigs and
+ * not just the idle stance */
+function poseSwing(entry, line, u) {
+  if (!entry.rig || !entry.rig.ok) return false;
+  const fake = { attack: { name: line === 'thrust' ? 'Stab' : 'Slash',
+    dir: line === 'L' ? 'Left' : line === 'R' ? 'Right' : 'Down' }, state: 'release',
+    stateT: u, stateDur: 1, guard: false };
+  applySwing(entry.rig, fake, { faceSign: 1 });
+  entry.root.updateWorldMatrix(true, true);
+  return true;
+}
+
+if (VIEW === 'panels') {
+  /* three tight panels, one per rig, each with its own camera. Rendering each panel
+   * with a scissor rect is what makes a true close-up possible without a 3-wide lens. */
+  const panelW = Math.floor(W / 3), panelH = H;
+  const px = [];
+  for (let i = 0; i < loaded.length; i++) {
+    const e = loaded[i];
+    e.root.position.set(0, 0, 0);
+    e.root.rotation.y = 0.55;                 /* three-quarter, so hands and face both read */
+    poseSwing(e, 'L', 0.46);
+    const cam = new THREE.PerspectiveCamera(30, panelW / panelH, 0.05, 60);
+    cam.position.set(1.35, 1.62, 1.85);
+    cam.lookAt(0.02, 1.30, 0.05);
+    px.push(cam);
+    const lab = document.createElement('div');
+    lab.className = 'lab';
+    lab.style.left = ((i + 0.5) * panelW) + 'px';
+    lab.style.bottom = '18px';
+    lab.innerHTML = `<div class="name">${e.name}</div><div class="spec">${e.spec}</div>`;
+    document.body.appendChild(lab);
+  }
+  renderer.setScissorTest(true);
+  for (let i = 0; i < loaded.length; i++) {
+    loaded.forEach((e, j) => { e.root.visible = (j === i); });
+    renderer.setViewport(i * panelW, 0, panelW, panelH);
+    renderer.setScissor(i * panelW, 0, panelW, panelH);
+    renderer.render(scene, px[i]);
+  }
+  window.__sheetReady = { view: VIEW, models: loaded.map(e => ({ id: e.id, fit: e.fit, rig: e.rig && e.rig.kind })) };
+} else if (VIEW === 'family') {
+  /* ONE ROW, TIGHT. Two rows separated by 1.6m of depth at nine metres sit almost on
+   * top of each other on screen, so the back row was hidden behind the front one and
+   * the top half of the frame came out empty. Six across, lens chosen to just fit. */
+  const spacing = 1.42;
+  loaded.forEach((e, i) => {
+    const x = (i - (loaded.length - 1) / 2) * spacing;
+    e.root.position.set(x, 0, 0);
+    e.root.rotation.y = -x * 0.12;
+    if (e.rig && e.rig.ok) poseSwing(e, i % 2 ? 'R' : 'L', 0.46);
+    const lab = document.createElement('div');
+    lab.className = 'lab';
+    lab.style.left = (W / 2 + x * (W / 7.55)) + 'px';
+    lab.style.bottom = '14px';
+    lab.innerHTML = `<div class="name" style="font-size:12px">${e.name}</div><div class="spec" style="font-size:9.5px">${e.spec}</div>`;
+    document.body.appendChild(lab);
+  });
+  camera.position.set(0, 1.30, 5.95);
+  camera.lookAt(0, 1.00, 0);
+  renderer.render(scene, camera);
+  window.__sheetReady = { view: VIEW, models: loaded.map(e => ({ id: e.id, rig: e.rig && e.rig.kind })) };
+} else {
+  /* the lineup: all three at one scale, one lens, so proportions and material are
+   * directly comparable */
+  const gap = 1.62;
+  loaded.forEach((e, i) => {
+    e.root.position.set((i - 1) * gap, 0, 0);
+    e.root.rotation.y = i === 1 ? 0.34 : i === 2 ? -0.34 : 0;
+    if (i !== 1) poseSwing(e, 'L', 0.46);
+    const lab = document.createElement('div');
+    lab.className = 'lab';
+    lab.style.left = (W / 2 + (i - 1) * (W / 3.05)) + 'px';
+    lab.style.bottom = '20px';
+    lab.innerHTML = `<div class="name">${e.name}</div><div class="spec">${e.spec}</div>`;
+    document.body.appendChild(lab);
+  });
+  camera.position.set(0, 1.42, 6.35);
+  camera.lookAt(0, 1.02, 0);
+  renderer.render(scene, camera);
+  window.__sheetReady = { view: VIEW, models: loaded.map(e => ({ id: e.id, fit: e.fit, rig: e.rig && e.rig.kind })) };
+}
+</script></body></html>
