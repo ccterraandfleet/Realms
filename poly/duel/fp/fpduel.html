@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-11 11:20</div>
+  <div id="build">BUILD 2026-11-11 11:22</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -947,7 +947,7 @@ loader.load('./knight.glb', (gltf) => {
   console.error('glb', e);
 });
 
-console.log('REALMS FP BUILD 2026-11-11 11:20');
+console.log('REALMS FP BUILD 2026-11-11 11:22');
 
 /* ------------------------------------------------------------------ duel state */
 let duel = null, brain = null, styleKey = 'sentinel', round = 0, score = [0, 0], over = false;
@@ -1110,10 +1110,16 @@ function newRound() {
   updateDots();
 }
 function updateDots() {
+  /* THERE ARE ONLY FIVE DOTS. This used to loop up to the raw score, so once the tally
+   * passed five it wrote className on undefined and threw on EVERY tick - the picture
+   * froze and nothing said why. That is a real "the duel crashed", and it was here the
+   * whole time. Clamp to the dots that exist. */
   const d = document.querySelectorAll('#dots i');
   let i = 0;
-  for (let r = 0; r < score[0]; r++) { d[i].className = 'win'; i++; }
-  for (let r = 0; r < score[1]; r++) { d[i].className = 'loss'; i++; }
+  const wins = Math.min(score[0], d.length);
+  const losses = Math.min(score[1], d.length - wins);
+  for (let r = 0; r < wins; r++) { d[i].className = 'win'; i++; }
+  for (let r = 0; r < losses; r++) { d[i].className = 'loss'; i++; }
   while (i < d.length) { d[i].className = ''; i++; }
 }
 newRound();
@@ -1366,7 +1372,8 @@ function frame(now) {
     if (!window.__firstLoopError) window.__firstLoopError = { msg: String(err && err.message || err), stack: String(err && err.stack || '') };
     console.error('FRAME ERROR', err);
     acc = 0;
-    if (errBox) { errBox.textContent = 'FRAME ERROR: ' + (err && err.message || err); errBox.style.display = 'block'; }
+    const box = errBox || (typeof document !== 'undefined' ? document.getElementById('errbox') : null);
+    if (box) { box.textContent = 'FRAME ERROR: ' + (err && err.message || err); box.style.display = 'block'; }
   }
   __frames++;
   const nowT = performance.now();
