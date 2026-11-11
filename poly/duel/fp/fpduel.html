@@ -67,6 +67,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { RGBELoader } from './lib/RGBELoader.js';
+import { EffectComposer } from './lib/EffectComposer.js';
+import { RenderPass } from './lib/RenderPass.js';
+import { ShaderPass } from './lib/ShaderPass.js';
+import { UnrealBloomPass } from './lib/UnrealBloomPass.js';
+import { SMAAPass } from './lib/SMAAPass.js';
 import { CFG, Duel, Fighter } from './fpduel.core.js';
 import { STYLES, think, makeBrain } from './fpduel.ai.js';
 
@@ -76,7 +81,12 @@ const $ = (s) => document.querySelector(s);
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+/* ?q=low bypasses the whole look pipeline and falls back to a plain forward render,
+ * which is the escape hatch for weak GPUs and the control arm for measurements */
+const LOWQ = /[?&]q=low\b/.test(location.search);
+/* isolation switch: proves the scanned maps are reaching the shader, not silently dropped */
+const TEXOFF = /[?&]tex=off\b/.test(location.search);
+renderer.toneMapping = LOWQ ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
 renderer.toneMappingExposure = 1.1;
 renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
 renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
@@ -158,7 +168,9 @@ const PAL = {
   stone: [0x85888c, 0x76797d],
 };
 function groundMesh() {
-  const pos = [], col = [], c = new THREE.Color();
+  const pos = [], col = [], uvs = [], c = new THREE.Color();
+  const UV_SCALE = 4.0;   /* one texture tile every 4 world units: coarse enough that
+                             the grain survives mip filtering at grazing angles */
   const step = FIELD / SEGS;
   const at = (i, j) => { const x = -FIELD / 2 + i * step, z = -FIELD / 2 + j * step; return [x, heightAt(x, z), z]; };
   for (let j = 0; j < SEGS; j++) {
@@ -174,19 +186,58 @@ function groundMesh() {
         else if (r > 40 && n > 0.58) fam = PAL.dry;
         else if (r < 13) fam = PAL.worn;
         c.setHex(fam[Math.floor(n * fam.length) % fam.length]).multiplyScalar(0.9 + n * 0.18);
-        for (const q of tri) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); }
+        for (const q of tri) { pos.push(q[0], q[1], q[2]); col.push(c.r, c.g, c.b); uvs.push(q[0] / UV_SCALE, q[2] / UV_SCALE); }
       }
     }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   g.computeVertexNormals();
   return new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.97, metalness: 0, flatShading: true }));
 }
 const ground = groundMesh();
 ground.receiveShadow = true;
 scene.add(ground);
+
+/* SCANNED SURFACES. Photogrammetry (Poly Haven CC0) is what makes a surface read as
+ * material rather than paint: a normal map carries micro relief the geometry does not
+ * have, and a roughness map decides which patches catch the sun. The colour scan is
+ * reduced to a NEUTRAL detail map on purpose (luminance only, mean lifted to 0.85) so it
+ * modulates this project's palette instead of replacing it with photographic green. */
+const texLoader = new THREE.TextureLoader();
+function scanned(base, repeat, aniso) {
+  const set = {};
+  for (const kind of ['detail', 'nor', 'rough']) {
+    const t = texLoader.load('./tex/' + base + '_' + kind + '.jpg');
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = Math.min(aniso, renderer.capabilities.getMaxAnisotropy());
+    if (kind !== 'detail') t.colorSpace = THREE.NoColorSpace;
+    set[kind] = t;
+  }
+  return set;
+}
+function applyScannedSurfaces() {
+  if (LOWQ || TEXOFF) return;
+  const gtex = scanned('grass', 1, 8);
+  ground.material.map = gtex.detail;
+  ground.material.normalMap = gtex.nor;
+  ground.material.normalScale.set(0.75, 0.75);
+  ground.material.roughnessMap = gtex.rough;
+  ground.material.roughness = 1.0;
+  ground.material.needsUpdate = true;
+  const stex = scanned('stone', 1, 4);
+  for (const m of [stoneMat, stoneDark]) {
+    m.map = stex.detail;
+    m.normalMap = stex.nor;
+    m.normalScale.set(0.6, 0.6);
+    m.roughnessMap = stex.rough;
+    m.needsUpdate = true;
+  }
+}
+/* called once the stone materials exist further down the file */
+setTimeout(applyScannedSurfaces, 0);
 
 /* ---------------------------------------------------------------- the field dressing */
 const swayers = [];   /* banners and flames, stepped every frame */
@@ -784,6 +835,9 @@ function frame(now) {
     steps++;
   }
   render(raw);
+  __frames++;
+  const nowT = performance.now();
+  if (nowT - __fpsT > 1000) { window.__fps = Math.round((__frames * 1000) / (nowT - __fpsT)); __frames = 0; __fpsT = nowT; }
   requestAnimationFrame(frame);
 }
 
@@ -852,6 +906,63 @@ function tick(dt) {
   foePrev = fst;
 }
 
+
+/* ---------------------------------------------------------------- the look pipeline
+ * Tone mapping, glare, grade and antialiasing all happen in one ordered chain, because
+ * "For Honor level" is not one feature: it is correct tone response, a lens that blooms
+ * where light is genuinely bright, film-esque grade, and clean edges. Order matters.
+ * Render pass writes LINEAR HDR (the renderer is set to NoToneMapping), so bloom sees
+ * real light values and only the genuinely bright things glow: the sun, fire, polished
+ * steel. Tone mapping then happens once, in the grade pass, and never twice.
+ */
+const VERT_QUAD = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+const GradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    exposure: { value: 1.12 },
+    contrast: { value: 1.05 },
+    sat: { value: 1.06 },
+    vig: { value: 0.52 },
+    grain: { value: 0.012 },
+    time: { value: 0 },
+  },
+  vertexShader: VERT_QUAD,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float exposure, contrast, sat, vig, grain, time;
+    varying vec2 vUv;
+    /* Narkowicz ACES fit: filmic shoulder so highlights roll off instead of clipping */
+    vec3 aces(vec3 x) {
+      return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb * exposure;
+      c = aces(c);
+      c = clamp((c - 0.5) * contrast + 0.5, 0.0, 1.0);
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, sat);
+      vec2 d = vUv - 0.5;
+      c *= clamp(1.0 - dot(d, d) * vig, 0.0, 1.0);
+      c = pow(c, vec3(1.0 / 2.2));
+      c += (hash(vUv * 1024.0 + time) - 0.5) * grain;
+      gl_FragColor = vec4(c, 1.0);
+    }
+  `,
+};
+let composer = null, gradePass = null;
+if (!LOWQ) {
+  composer = new EffectComposer(renderer);
+  composer.setPixelRatio(Math.min(1.5, window.devicePixelRatio || 1));
+  composer.setSize(innerWidth, innerHeight);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.36, 0.6, 0.92);
+  composer.addPass(bloom);
+  gradePass = new ShaderPass(GradeShader);
+  composer.addPass(gradePass);
+  composer.addPass(new SMAAPass(innerWidth, innerHeight));
+}
+
 /* frame hooks, used by the test rigs to aim the camera and read the sky */
 window.__setPitch = (v) => { pitch = v; };
 window.__setYaw = (v) => { yaw = v; };
@@ -917,18 +1028,26 @@ function render(dt) {
 
   stepBits(dt);
   stepWorld(performance.now() / 1000);
-  renderer.render(scene, camera);
+  if (gradePass) gradePass.uniforms.time.value = performance.now() / 1000;
+  if (composer) composer.render(dt);
+  else renderer.render(scene, camera);
 }
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (composer) composer.setSize(innerWidth, innerHeight);
 });
+
+/* honest frame timing, so quality decisions are made on numbers and not on vibes */
+let __frames = 0, __fpsT = performance.now();
+window.__perf = () => ({ fps: window.__fps || 0, lowq: LOWQ });
 
 requestAnimationFrame(frame);
 window.__duel = { get duel() { return duel; }, get ready() { return ready; } };
 window.__vm = { sword, shield, blade, tip, camera, THREE };
+window.__ground = ground;
 </script>
 </body>
 </html>
