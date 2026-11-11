@@ -30706,6 +30706,9 @@
   var TRAIT_KEYS = Object.keys(COMMANDER_TRAITS);
   var FIELD_SPEED = 6;
   var FIELD_COST = { grain: 60, gold: 20 };
+  var DAY_SECONDS = 45;
+  var FIELD_SUPPLY_SECONDS = 3 * DAY_SECONDS;
+  var FIELD_ATTRITION = 0.03;
   var INTERCEPT_HOPS = 3;
   var INVEST_DRAIN = 55e-4;
   var SIEGE_DRAIN = 0.02;
@@ -32155,6 +32158,7 @@
         tier: realms[n.owner].hearth ? 2 : 1
       };
       host.offroad = route2.offroad;
+      if (route2.offroad) host.fieldSupply = FIELD_SUPPLY_SECONDS;
       hosts.push(host);
       say(route2.offroad ? `${take} men march from ${label(n)} ACROSS COUNTRY \xB7 no supply follows them out there` : `${take} men march from ${label(n)} \xB7 garrison ${n.garrison}`);
       return true;
@@ -32175,6 +32179,7 @@
       host.to = path[1];
       host.routed = false;
       host.offroad = route2.offroad;
+      host.fieldSupply = route2.offroad ? FIELD_SUPPLY_SECONDS : void 0;
       say(route2.offroad ? `${host.men} men marching to ${label(nodes2.get(to))} ACROSS COUNTRY \xB7 slow, and no supply follows` : `${host.men} men marching to ${label(nodes2.get(to))}`);
       return true;
     }
@@ -32207,6 +32212,36 @@
         dirtyTerritory = true;
         say(`${label(n)} taken by your column`);
         claimByHost.delete(hostId);
+      }
+    }
+    function tickFieldSupply(dt) {
+      for (const h of hosts) {
+        if (!h.offroad) continue;
+        if (h.to === null || h.investing) {
+          h.offroad = false;
+          h.fieldSupply = void 0;
+          continue;
+        }
+        const left = (h.fieldSupply ?? FIELD_SUPPLY_SECONDS) - dt;
+        h.fieldSupply = left;
+        if (left > 0) continue;
+        h.hunger = (h.hunger ?? 0) + h.men * FIELD_ATTRITION * dt;
+        const lost = Math.floor(h.hunger);
+        if (lost > 0) {
+          h.hunger -= lost;
+          h.men = Math.max(0, h.men - lost);
+        }
+        if (!h.starvingSaid) {
+          h.starvingSaid = true;
+          say(`a column is starving out in the field \xB7 ${h.men} men left of ${h.startMen}`);
+        }
+      }
+      for (let i = hosts.length - 1; i >= 0; i--) {
+        const h = hosts[i];
+        if (h.men <= 0) {
+          hosts.splice(i, 1);
+          say("a column withered in the field and was lost");
+        }
       }
     }
     function tickHosts(dt) {
@@ -32444,6 +32479,10 @@
       const h = ownHostAt(key2);
       if (!h) {
         say("no column at the walls \xB7 march an army to that keep first");
+        return;
+      }
+      if (h.offroad) {
+        say("no siege engines: this column crossed country \xB7 invest here, or bring it by road to storm");
         return;
       }
       if (n.garrison <= 0) {
@@ -34360,6 +34399,7 @@
       warmSupply();
       tickCarts(dt);
       ensureCommanders();
+      tickFieldSupply(dt);
       timeIt("hosts", () => tickHosts(dt));
       timeIt("claims", () => resolveClaims());
       timeIt("combat", () => tickCombat(dt));
@@ -34681,6 +34721,17 @@
         siegeProg: () => siegeFormations()[0]?.prog ?? null,
         wall: () => siegeBattle ? { seg: siegeBattle.seg, segs: [...siegeBattle.segs], breached: siegeBattle.breached, phase: siegeBattle.phase } : null,
         invest: (k) => investOrder(k),
+        offroadAt: (k) => ownHostAt(k)?.offroad ?? null,
+        /* these look at ANY owned column, marching or standing, because the field clock only runs on a
+         * column that is mid-march and ownHostAt deliberately only finds one sitting at a keep */
+        supplyLeft: (k) => (k ? ownHostAt(k) : null)?.fieldSupply ?? hosts.find((h) => h.owner === 0 && h.men > 0)?.fieldSupply ?? null,
+        drainFieldSupply: (secs = 1, k) => {
+          const h = (k ? ownHostAt(k) : null) ?? hosts.find((x) => x.owner === 0 && x.men > 0);
+          if (h) h.fieldSupply = secs;
+          return h?.fieldSupply ?? null;
+        },
+        fieldRule: () => ({ daySeconds: DAY_SECONDS, supplySeconds: FIELD_SUPPLY_SECONDS, attrition: FIELD_ATTRITION }),
+        clock: () => worldTime,
         musterAt: (k) => muster(k),
         route: (a, b) => {
           const r = routeFor(a, b);
