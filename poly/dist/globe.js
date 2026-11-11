@@ -30663,7 +30663,8 @@
   var TRUNK_SPEED = 26;
   var LANE_SPEED = 15;
   var BEAT = 1;
-  var SIEGE_DRAIN = 0.05;
+  var INVEST_DRAIN = 55e-4;
+  var SIEGE_DRAIN = 0.02;
   var SIEGE_RECOVER = 0.02;
   var REALM_NAMES = [
     "You",
@@ -31317,6 +31318,12 @@
           hint: at ? `deploy the assault \xB7 you have ${at.men} at the walls` : "march a column to the walls first",
           blocked: at ? void 0 : "no column here yet"
         });
+        verbs.push({
+          verb: "invest",
+          label: at?.investing === key2 ? "Break off investment" : "Invest",
+          hint: at?.investing === key2 ? `their nerve ${Math.round(n.morale * 100)}% \xB7 a relief column would catch you in the open` : "sit down in front of it \xB7 their nerve drains, yours is pinned",
+          blocked: at ? void 0 : "no column here yet"
+        });
       }
       const me0 = realms[0];
       const afford = (c) => me0.res.grain >= (c.grain ?? 0) && me0.res.timber >= (c.timber ?? 0) && me0.res.ore >= (c.ore ?? 0) && me0.res.gold >= (c.gold ?? 0);
@@ -31434,6 +31441,10 @@
       }
       if (verb === "storm") {
         enterSiege(key2);
+        return;
+      }
+      if (verb === "invest") {
+        investOrder(key2);
         return;
       }
       if (verb === "muster") {
@@ -32057,6 +32068,7 @@
       return true;
     }
     function orderMarch(host, to) {
+      host.investing = void 0;
       const at = host.to ?? host.path[host.seg];
       const path = pathBetween(at, to);
       if (path.length < 2) {
@@ -32198,6 +32210,7 @@
     function tickAssaults(dt) {
       for (const h of hosts) {
         if (h.routed || h.men <= 0 || h.to !== null) continue;
+        if (h.investing) continue;
         const key2 = h.path[h.path.length - 1];
         const n = nodes2.get(key2);
         if (!n || n.owner < 0 || n.owner === h.owner) continue;
@@ -32207,7 +32220,7 @@
           h.assaultGar0 = n.garrison;
           h.assaultKey = key2;
         }
-        if (h.men < garrisonStrength * 0.6) {
+        if (h.men < garrisonStrength * 1.5) {
           h.assaultBeat = (h.assaultBeat ?? 0) + dt;
           if (h.assaultBeat < BEAT) continue;
           h.assaultBeat = 0;
@@ -32234,7 +32247,7 @@
         );
         const dmgToColumn = Math.min(
           Math.round(h.men * 0.22) + 1,
-          Math.round(n.garrison * 0.075 * wallNow / Math.max(0.35, ratio))
+          Math.round(n.garrison * 0.075 * WALL_BONUS / Math.max(0.35, ratio))
         );
         n.garrison = Math.max(0, n.garrison - dmgToGarrison);
         h.men = Math.max(0, h.men - dmgToColumn);
@@ -32256,6 +32269,21 @@
     let siegeBattle = null;
     function ownHostAt(key2) {
       return hosts.find((h) => h.owner === 0 && !h.routed && h.men > 0 && h.to === null && h.path[h.path.length - 1] === key2) ?? null;
+    }
+    function investOrder(key2) {
+      const n = nodes2.get(key2);
+      const h = ownHostAt(key2);
+      if (!n || !h) {
+        say("no column at those walls to invest with");
+        return;
+      }
+      if (h.investing === key2) {
+        h.investing = void 0;
+        say(`broke off the investment at ${label(n)}`);
+        return;
+      }
+      h.investing = key2;
+      say(`investing ${label(n)} \xB7 their nerve will drain, but a relief column catches you in the open`);
     }
     function enterSiege(key2) {
       const n = nodes2.get(key2);
@@ -32470,12 +32498,12 @@
       }
       const men = s.party;
       const atBreach = s.segs[s.seg] <= 0;
-      const wallNow2 = atBreach ? BREACH_BONUS : WALL_BONUS;
-      const gs = Math.max(1, n.garrison) * wallNow2;
+      const wallNow = atBreach ? BREACH_BONUS : WALL_BONUS;
+      const gs = Math.max(1, n.garrison) * wallNow;
       const p = power(h) * (men / Math.max(1, s.men0));
       const ratio = p / gs;
       const dmgGar = Math.min(Math.round(Math.max(0, n.garrison) * 0.9) + 1, Math.round(men * 0.11 * Math.min(2.2, ratio)));
-      const dmgMen = Math.min(Math.round(men * 0.22) + 1, Math.round(n.garrison * 0.075 * wallNow2 / Math.max(0.35, ratio)));
+      const dmgMen = Math.min(Math.round(men * 0.22) + 1, Math.round(n.garrison * 0.075 * wallNow / Math.max(0.35, ratio)));
       const lost = Math.min(dmgMen, s.party);
       n.garrison = Math.max(0, n.garrison - dmgGar);
       s.party = Math.max(0, s.party - lost);
@@ -32563,7 +32591,7 @@
         h.prog = 0;
         h.from = back[0];
         h.to = back[1];
-        say(`${realms[h.owner].name} host broke and is falling back`);
+        say(h.owner === 0 ? "your host broke and is falling back" : `${realms[h.owner].name} host broke and is falling back`);
       } else {
         h.to = null;
       }
@@ -32578,6 +32606,30 @@
         );
         if (!besiegers.length) {
           n.morale = Math.min(1, n.morale + SIEGE_RECOVER * dt);
+          continue;
+        }
+        const investers = besiegers.filter((h) => h.investing === n.key);
+        if (investers.length) {
+          const relief = hosts.find(
+            (r2) => !r2.routed && r2.to === null && r2.owner !== investers[0].owner && r2.path[r2.path.length - 1] === n.key && !investers.includes(r2)
+          );
+          if (relief) {
+            for (const iv of investers) {
+              iv.investing = void 0;
+              const caught = Math.max(1, Math.round(iv.men * 0.12));
+              iv.men = Math.max(1, iv.men - caught);
+            }
+            say(`RELIEVED \xB7 ${relief.men} men hold ${label(n)} \xB7 your investment is broken, ${investers[0].men} caught in the open`);
+            n.morale = Math.min(1, n.morale + 0.15);
+            return;
+          }
+          n.morale -= INVEST_DRAIN * dt;
+          if (n.morale <= 0) {
+            const taker = investers[0].owner;
+            takeCastle(n, taker);
+            for (const iv of investers) iv.investing = void 0;
+            say(`${label(n)} starved out and fell to ${realms[taker].name}`);
+          }
           continue;
         }
         const fed = fedFor(n.owner);
@@ -33490,8 +33542,11 @@
       key("h");
     });
     document.body.appendChild(homeBtn);
+    const newsRing = [];
     const say = (s) => {
       lastLog = s;
+      newsRing.push(s);
+      if (newsRing.length > 40) newsRing.shift();
       o.log(s);
       if (panelUpdateAt === 0) paint();
     };
@@ -34406,8 +34461,12 @@
           const c = nodes2.get(cap);
           const tx = new Vector3(0, 1, 0).cross(c.dir).normalize();
           const ty = c.dir.clone().cross(tx).normalize();
-          const dir = c.dir.clone().addScaledVector(tx, 0.1).addScaledVector(ty, 0.02).normalize();
-          const res = foundKeep(dir, 0);
+          let res = { ok: false };
+          for (const [ax, ay] of [[0.1, 0.02], [0.1, -0.1], [-0.1, 0.1], [0.02, 0.12], [0.12, 0.1], [-0.12, -0.1], [0.06, -0.14], [-0.06, 0.14]]) {
+            const dir = c.dir.clone().addScaledVector(tx, ax).addScaledVector(ty, ay).normalize();
+            res = foundKeep(dir, 0);
+            if (res.ok && res.key) break;
+          }
           if (!res.ok || !res.key) return { ok: false, reason: res.reason };
           const foe = res.key;
           const n = nodes2.get(foe);
@@ -34439,6 +34498,28 @@
         siegeDrawn: () => siegeFormations().length,
         siegeProg: () => siegeFormations()[0]?.prog ?? null,
         wall: () => siegeBattle ? { seg: siegeBattle.seg, segs: [...siegeBattle.segs], breached: siegeBattle.breached, phase: siegeBattle.phase } : null,
+        invest: (k) => investOrder(k),
+        relief: (k, men = 60) => {
+          const n = nodes2.get(k);
+          if (!n) return false;
+          hosts.push({
+            id: nextHostId++,
+            owner: n.owner,
+            men,
+            startMen: men,
+            path: [k],
+            seg: 0,
+            prog: 1,
+            from: null,
+            to: null,
+            routed: false,
+            lastBeat: 0,
+            tier: 1
+          });
+          return true;
+        },
+        nerve: (k) => nodes2.get(k)?.morale ?? null,
+        news: () => [...newsRing],
         siegeRoute: () => siegeFormations()[0]?.path?.[1] ?? null,
         routes: (k) => (incident.get(k) ?? []).map((r) => {
           const e = edges.get(r);
