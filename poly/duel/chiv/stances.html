@@ -20,7 +20,7 @@
 <body>
 <div id="stage">
   <div id="label"><div id="name">—</div><div id="phase">—</div><div id="time"></div></div>
-  <div id="hud">BUILD 20261114-ik1</div>
+  <div id="hud">BUILD 20261114-ik2</div>
   <div id="panel">
     <select id="pick"></select>
     <button data-view="front" class="on">Front</button>
@@ -38,7 +38,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
-import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH } from './stances.js?v=20261114-ik1';
+import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH, buildMotionDB, matchMotion, poseFeatures, tipOfPose } from './stances.js?v=20261114-ik2';
 import { DEFAULTS } from './chiv.data.js';
 
 const Q = new URLSearchParams(location.search);
@@ -163,6 +163,9 @@ window.locomotion = () => LOCOMOTION;
  * an arc is right, plus the lowest foot so a pose that sinks can be caught */
 const V = new THREE.Vector3();
 const wpos = (n) => { const b = rig.byName.get(n); if (!b) return null; b.getWorldPosition(V); return [+V.x.toFixed(4), +V.y.toFixed(4), +V.z.toFixed(4)]; };
+window.__db = () => buildMotionDB().length;
+window.__match = (f, only) => { const m = matchMotion(f, only); return m ? { stance: m.stance, u: m.u, phase: m.phase } : null; };
+window.__feat = (id, ph, u) => { setStance(id, ph, u); return poseFeatures(currentPose()); };
 window.__cur = () => ({ stance: stanceId, phase, u, pose: currentPose() });
 window.__bones = (n) => { const b = rig.byName.get(n); return b ? [+b.rotation.x.toFixed(3), +b.rotation.y.toFixed(3), +b.rotation.z.toFixed(3)] : null; };
 window.measure = () => {

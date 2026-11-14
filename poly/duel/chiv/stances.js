@@ -885,18 +885,138 @@ export function blendPose(a, b, t) {
   return { bones, ik, hips: lerp(a.hips || 0, b.hips || 0, t) };
 }
 
+/* ===========================================================================
+ * ARCS, NOT KEYS. This is the part that makes a swing stop looking mechanical.
+ * ===========================================================================
+ * Three poses lerped in a straight line is what a 1998 game did. Every modern
+ * engine (Unreal's motion matching included) instead treats motion as a CURVE
+ * through pose space and evaluates it continuously. So:
+ *
+ *   - the hand, the elbow pole and every torso angle follow a Catmull-Rom spline
+ *     through chamber -> mid -> strike, which means the MID key genuinely bends
+ *     the path instead of just halving two straight lines;
+ *   - the BLADE TIP gets its own spline, and the blade direction at any instant
+ *     is derived from it. That is how you author a readable arc: you draw the
+ *     path the tip travels, not three wrist rotations that hopefully pass near it;
+ *   - the release is eased (accelerates off the chamber, decelerates through the
+ *     follow-through) and the recovery rides the same arc back rather than
+ *     teleporting to a guard pose.
+ * =========================================================================== */
+const clamp01 = (v) => clamp(v, 0, 1);
+const easeInOut = (u) => (u < 0.5 ? 2 * u * u : 1 - 2 * (1 - u) * (1 - u));
+const easeOut = (u) => 1 - (1 - u) * (1 - u);
+
+/* Catmull-Rom between p1 and p2, with p0/p3 as the neighbouring keys */
+function cr(p0, p1, p2, p3, t) {
+  const t2 = t * t, t3 = t2 * t;
+  return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+/* three keys, s in [0,1] from A through B to C */
+function cr3(A, B, C, s) {
+  return s <= 0.5 ? cr(2 * A - B, A, B, C, s * 2) : cr(A, B, C, 2 * C - B, (s - 0.5) * 2);
+}
+const norm3 = (v) => {
+  const L = Math.hypot(v[0], v[1], v[2]);
+  return L < 1e-6 ? [0, 0, 0] : [v[0] / L, v[1] / L, v[2] / L];
+};
+function tipOfPose(P, side) {
+  const k = P && P.ik ? P.ik[side] : null;
+  if (!k) return [0, 0, 0];
+  const b = norm3(k.blade);
+  return [
+    k.hand[0] + b[0] * BLADE_LENGTH,
+    k.hand[1] + b[1] * BLADE_LENGTH,
+    k.hand[2] + b[2] * BLADE_LENGTH,
+  ];
+}
+export { tipOfPose };
+
+/* a continuous pose anywhere along the swing, s = 0 chamber ... 1 strike */
+export function attackPoseAt(stance, s) {
+  const A = stance.poses.chamber, B = stance.poses.mid, C = stance.poses.strike;
+  if (!A || !B || !C) return stance.poses.strike || stance.poses.chamber || GUARD_POSE;
+  const pose = { bones: {}, ik: {}, hips: cr3(A.hips || 0, B.hips || 0, C.hips || 0, s) };
+  const names = new Set([...Object.keys(A.bones || {}), ...Object.keys(B.bones || {}), ...Object.keys(C.bones || {})]);
+  for (const n of names) {
+    const a = (A.bones || {})[n] || [0, 0, 0];
+    const b = (B.bones || {})[n] || a;
+    const c = (C.bones || {})[n] || b;
+    pose.bones[n] = [cr3(a[0], b[0], c[0], s), cr3(a[1], b[1], c[1], s), cr3(a[2], b[2], c[2], s)];
+  }
+  for (const side of ['R', 'L']) {
+    const ka = A.ik && A.ik[side], kb = B.ik && B.ik[side], kc = C.ik && C.ik[side];
+    if (!ka || !kb || !kc) { pose.ik[side] = kc || kb || ka; continue; }
+    const mix = (key) => [0, 1, 2].map((i) => cr3(ka[key][i], kb[key][i], kc[key][i], s));
+    const hand = mix('hand');
+    const pole = mix('pole');
+    /* the tip is the curve that matters, so it is what gets interpolated */
+    const tA = tipOfPose(A, side), tB = tipOfPose(B, side), tC = tipOfPose(C, side);
+    const tip = [0, 1, 2].map((i) => cr3(tA[i], tB[i], tC[i], s));
+    const dir = norm3([tip[0] - hand[0], tip[1] - hand[1], tip[2] - hand[2]]);
+    pose.ik[side] = { hand, pole, blade: dir[0] || dir[1] || dir[2] ? dir : kc.blade };
+  }
+  return pose;
+}
+
 export function poseAt(stance, phase, u = 1) {
   if (!stance) return null;
   const ps = stance.poses;
   if (ps.hold) return ps.hold;
   if (phase === 'holding' || phase === 'hold' || phase === 'windup' || phase === 'wind' || phase === 'chamber') return ps.chamber;
-  if (phase === 'release' || phase === 'rel') {
-    return u < 0.5 ? blendPose(ps.chamber, ps.mid, u / 0.5) : blendPose(ps.mid, ps.strike, (u - 0.5) / 0.5);
-  }
-  if (phase === 'recovery' || phase === 'rec') {
-    return blendPose(ps.strike, GUARD_POSE, Math.min(1, u) * 0.85);
-  }
+  if (phase === 'release' || phase === 'rel') return attackPoseAt(stance, easeInOut(clamp01(u)));
+  if (phase === 'recovery' || phase === 'rec') return attackPoseAt(stance, 1 - easeOut(clamp01(u)) * 0.92);
   return ps.strike || ps.hold || ps.chamber;
+}
+
+/* ===========================================================================
+ * THE MOTION DATABASE. Unreal's motion matching is, at bottom, this: sample a
+ * library into frames, describe each frame with a small feature vector, and at
+ * run time pick the frame whose features are nearest what you want and blend to
+ * it. We have no mocap, so the library is our authored stances sampled along
+ * their arcs, but the mechanism is the same one the engine uses.
+ * =========================================================================== */
+export const MOTION_DB = [];
+export function poseFeatures(pose) {
+  const R = pose.ik && pose.ik.R, L = pose.ik && pose.ik.L;
+  if (!R) return null;
+  const tip = tipOfPose(pose, 'R');
+  const b = norm3(R.blade);
+  return [
+    R.hand[0], R.hand[1], R.hand[2],
+    tip[0], tip[1], tip[2],
+    b[0], b[1], b[2],
+    L ? L.hand[0] : 0, L ? L.hand[1] : 0, L ? L.hand[2] : 0,
+    pose.hips || 0,
+    (pose.bones && pose.bones.chest) ? pose.bones.chest[1] : 0,
+  ];
+}
+export function buildMotionDB(step = 0.1) {
+  MOTION_DB.length = 0;
+  for (const st of STANCES) {
+    if (st.poses.hold) {
+      MOTION_DB.push({ stance: st.id, u: 0, phase: 'hold', pose: st.poses.hold, feat: poseFeatures(st.poses.hold) });
+      continue;
+    }
+    for (let i = 0; i <= Math.round(1 / step); i++) {
+      const s = +(i * step).toFixed(3);
+      const pose = attackPoseAt(st, s);
+      MOTION_DB.push({ stance: st.id, u: s, phase: s === 0 ? 'chamber' : s === 1 ? 'strike' : 'release', pose, feat: poseFeatures(pose) });
+    }
+  }
+  return MOTION_DB;
+}
+/* nearest frame in pose space; `only` restricts the search to one stance */
+export function matchMotion(target, only) {
+  if (!MOTION_DB.length) buildMotionDB();
+  let best = null, bd = Infinity;
+  for (const e of MOTION_DB) {
+    if (only && e.stance !== only) continue;
+    if (!e.feat) continue;
+    let d = 0;
+    for (let i = 0; i < target.length; i++) { const k = target[i] - e.feat[i]; d += k * k; }
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
 }
 
 export function stanceForAttack(att) {
