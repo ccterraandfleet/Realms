@@ -38,7 +38,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
-import { applyMocapFrame, groundMocap } from './mocap.js?v=20261114-mc2';
+import { applyMocapFrame, groundMocap, Locomotion } from './mocap.js?v=20261114-mc3';
 import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH, buildMotionDB, matchMotion, poseFeatures, tipOfPose } from './stances.js?v=20261114-ik2';
 import { DEFAULTS } from './chiv.data.js';
 
@@ -270,6 +270,32 @@ window.__rigDebug = () => {
     out[n] = [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)];
   }
   return out;
+};
+window.__locoProbe = async (clip = 'walk') => {
+  const data = await (await fetch('./mocap/locomotion.json')).json();
+  const L = new Locomotion(data);
+  const LOWER = ['hips','thigh.L','shin.L','foot.L','toe.L','thigh.R','shin.R','foot.R','toe.R'];
+  const P = (n) => { const b = rig.byName.get(n); if (!b) return null; const m = b.matrixWorld.elements; return [m[12], m[13], m[14]]; };
+  const track = { toeL: [], toeR: [], hips: [], kneeL: [] };
+  const secs = L.d[clip].seconds;
+  for (let i = 0; i <= 12; i++) {
+    const t = (i / 12) * secs;
+    animate(rig, 0.4, 'stand');
+    rig.root.updateMatrixWorld(true);
+    const jt = L.sample(clip, t);
+    applyMocapFrame(rig, jt, { mask: LOWER });
+    rig.root.updateMatrixWorld(true);
+    track.toeL.push(P('toe.L')); track.toeR.push(P('toe.R'));
+    track.hips.push(P('hips')); track.kneeL.push(P('shin.L'));
+  }
+  const span = (arr, k) => +(Math.max(...arr.map(p => p[k])) - Math.min(...arr.map(p => p[k]))).toFixed(3);
+  return {
+    clip, seconds: secs,
+    toeL_forward: span(track.toeL, 2), toeL_height: span(track.toeL, 1),
+    toeR_forward: span(track.toeR, 2), hipY: [+Math.min(...track.hips.map(p=>p[1])).toFixed(2), +Math.max(...track.hips.map(p=>p[1])).toFixed(2)],
+    kneeForward: span(track.kneeL, 2),
+    lowestToe: Math.min(...track.toeL.map(p=>p[1]), ...track.toeR.map(p=>p[1])).toFixed(3),
+  };
 };
 window.__ready = true;
 </script>
