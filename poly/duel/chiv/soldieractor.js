@@ -17,10 +17,19 @@ import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
 import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById } from './stances.js?v=20261114-ik2';
+import { applyMocapFrame, Locomotion } from './mocap.js?v=20261114-mc3';
 
 let ATLAS = null;
+let LOCO = null;
+export const locomotion = () => LOCO;
 export async function initActors(loader) {
   if (!ATLAS) ATLAS = await new Atlas(loader).ready();
+  if (!LOCO) {
+    try {
+      const r = await fetch('./mocap/locomotion.json');
+      if (r.ok) LOCO = new Locomotion(await r.json());
+    } catch (e) { LOCO = null; }
+  }
   return ATLAS;
 }
 export const actorsReady = () => !!ATLAS;
@@ -139,6 +148,14 @@ export class Actor {
       /* he carries a guard rather than standing with his arms down, but the
        * weight drops while walking so the stride still reads */
       w = (f.guard ? 0.85 : 0.5) * (moving > 0.05 ? 0.7 : 1);
+    }
+    /* LOCOMOTION comes from captured motion, legs only: the walk you see is a
+     * real person's walk, not my sine waves. It is masked to the lower body so
+     * the stance library still owns the torso and arms above it. */
+    if (LOCO && moving > 0.05) {
+      const clip = moving > 0.8 ? 'run' : 'walk';
+      const jt = LOCO.sample(clip, this.t * (moving > 0.8 ? 1.15 : 1.0));
+      if (jt) applyMocapFrame(this.rig, jt, { mask: Actor.LOWER });
     }
     if (pose) applyPose(this.rig, pose, w, { skip: Actor.LOWER });
     this.root.updateMatrixWorld(true);

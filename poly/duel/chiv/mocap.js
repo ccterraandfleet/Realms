@@ -97,13 +97,16 @@ function aim(rig, boneName, desiredWorldDir, rightWorld) {
   b.updateMatrixWorld(true);
 }
 
-export function applyMocapFrame(rig, joints) {
+export function applyMocapFrame(rig, joints, opts = {}) {
   if (!rig || !joints) return rig;
   const RIGHT = new THREE.Vector3(1, 0, 0);
+  /* a mask lets mocap own the legs while the stance library owns the arms */
+  const mask = opts.mask ? new Set(opts.mask) : null;
+  const allow = (n) => !mask || mask.has(n);
 
   /* hips ride at whatever height the actor's hips were at */
   const hips = rig.byName.get('hips');
-  if (hips && joints.Hips) {
+  if (hips && joints.Hips && allow('hips')) {
     hips.position.y = Math.max(0.32, joints.Hips[1]);
     hips.position.x = 0;
     hips.position.z = 0;
@@ -111,6 +114,7 @@ export function applyMocapFrame(rig, joints) {
   rig.root.updateMatrixWorld(true);
 
   for (const [our, a, b] of MAP) {
+    if (!allow(our)) continue;
     const ja = joints[a], jb = joints[b];
     if (!ja || !jb) continue;
     const dir = V(jb).sub(V(ja));
@@ -119,7 +123,7 @@ export function applyMocapFrame(rig, joints) {
 
   /* the blade continues the forearm */
   const fore = rig.byName.get('fore.R'), hand = rig.byName.get('hand.R');
-  if (fore && hand) {
+  if (fore && hand && allow('hand.R') && allow('fore.R')) {
     const fa = joints.RightForeArm, ha = joints.RightHand;
     if (fa && ha) {
       const dir = V(ha).sub(V(fa)).normalize();
@@ -150,4 +154,28 @@ export function groundMocap(rig, group) {
   g.position.y = lift;
   g.updateMatrixWorld(true);
   return lift;
+}
+
+/* ===========================================================================
+ * LOCOMOTION PLAYER — the baked walk / run / sprint loops from real capture.
+ * Loops seamlessly because the window was cut at a matching frame, and the hips
+ * keep their vertical bounce, which is most of what makes a march read.
+ * =========================================================================== */
+export class Locomotion {
+  constructor(data) { this.d = data || {}; }
+  names() { return Object.keys(this.d); }
+  stats() { const o = {}; for (const k of Object.keys(this.d)) o[k] = { frames: this.d[k].frames.length, seconds: this.d[k].seconds, stride: this.d[k].stride }; return o; }
+  sample(name, t) {
+    const c = this.d[name];
+    if (!c || !c.frames || !c.frames.length) return null;
+    const P = c.frames.length;
+    const f = (((t * (c.fps || 30)) % P) + P) % P;
+    const i0 = Math.floor(f), i1 = (i0 + 1) % P, u = f - i0;
+    const a = c.frames[i0], b = c.frames[i1], out = {};
+    for (const j of Object.keys(a)) {
+      const p = a[j], q = b[j] || p;
+      out[j] = [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u];
+    }
+    return out;
+  }
 }
