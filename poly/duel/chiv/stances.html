@@ -38,7 +38,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
-import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix } from './stances.js';
+import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH } from './stances.js';
 import { DEFAULTS } from './chiv.data.js';
 
 const Q = new URLSearchParams(location.search);
@@ -86,7 +86,7 @@ if (Q.get('bare') === '1') {
   ground.visible = false;
 }
 
-const VIEW_H = 2.32, ASPECT = W / H;
+const VIEW_H = (Q.get('sheet') === '1' ? 2.66 : 2.32), ASPECT = W / H;   /* sheet tiles carry wide lunges and overheads, so the framing is looser */
 const cam = new THREE.OrthographicCamera(-VIEW_H * ASPECT / 2, VIEW_H * ASPECT / 2, VIEW_H * 0.86, VIEW_H * 0.86 - VIEW_H, 0.1, 40);
 const CAMS = {
   front: [0, 1.02, 7], side: [7, 1.02, 0], three: [4.2, 1.5, 5.2],
@@ -165,11 +165,35 @@ const V = new THREE.Vector3();
 const wpos = (n) => { const b = rig.byName.get(n); if (!b) return null; b.getWorldPosition(V); return [+V.x.toFixed(4), +V.y.toFixed(4), +V.z.toFixed(4)]; };
 window.__cur = () => ({ stance: stanceId, phase, u, pose: currentPose() });
 window.__bones = (n) => { const b = rig.byName.get(n); return b ? [+b.rotation.x.toFixed(3), +b.rotation.y.toFixed(3), +b.rotation.z.toFixed(3)] : null; };
-window.measure = () => ({
-  stance: stanceId, phase, u,
-  hand: wpos('hand.R'), handL: wpos('hand.L'), head: wpos('head'), hips: wpos('hips'),
-  footL: wpos('foot.L'), footR: wpos('foot.R'), toeL: wpos('toe.L'), toeR: wpos('toe.R'),
-});
+window.measure = () => {
+  const h = rig.byName.get('hand.R');
+  let tip = null, blade = null;
+  if (h) {
+    const qw = h.getWorldQuaternion(new THREE.Quaternion());
+    const bw = BLADE_LOCAL.clone().applyQuaternion(qw).normalize();
+    const hp = h.getWorldPosition(new THREE.Vector3());
+    const t = hp.clone().addScaledVector(bw, BLADE_LENGTH);
+    tip = [+t.x.toFixed(4), +t.y.toFixed(4), +t.z.toFixed(4)];
+    blade = [+bw.x.toFixed(3), +bw.y.toFixed(3), +bw.z.toFixed(3)];
+  }
+  /* the shield is skinned to fore.L at a fixed bind offset, so its position is a
+   * pure function of that bone: shield = boneDelta * bindPoint */
+  const shield = null;
+  const fl = rig.byName.get('fore.L');
+  let shieldPts = null;
+  if (fl) {
+    const rest = new THREE.Matrix4().makeTranslation(fl.userData.abs.x, fl.userData.abs.y, fl.userData.abs.z);
+    const delta = fl.matrixWorld.clone().multiply(rest.invert());
+    const pts = [[-0.160, 1.16, 0.335], [-0.160, 0.56, 0.335], [-0.345, 0.86, 0.335], [0.02, 0.86, 0.335], [-0.160, 0.86, 0.355]];
+    shieldPts = pts.map((p) => { const v = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(delta); return [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)]; });
+  }
+  return {
+    stance: stanceId, phase, u, tip, blade, shieldPts,
+    hand: wpos('hand.R'), handL: wpos('hand.L'), elbow: wpos('fore.R'), elbowL: wpos('fore.L'),
+    head: wpos('head'), hips: wpos('hips'),
+    footL: wpos('foot.L'), footR: wpos('foot.R'), toeL: wpos('toe.L'), toeR: wpos('toe.R'),
+  };
+};
 
 /* ------------------------------------------------------------------ UI */
 const pick = el('pick');
