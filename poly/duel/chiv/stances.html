@@ -38,6 +38,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
+import { applyMocapFrame, groundMocap } from './mocap.js?v=20261114-mc2';
 import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH, buildMotionDB, matchMotion, poseFeatures, tipOfPose } from './stances.js?v=20261114-ik2';
 import { DEFAULTS } from './chiv.data.js';
 
@@ -73,6 +74,7 @@ ground.position.y = 0;
 scene.add(ground);
 
 const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+let mocapFrame = null, mocapLabel = '';
 const rig = buildSkeleton();
 const mats = soldierMaterials(atlas.m, 0x2f6f9e);
 const parts = buildSoldier(rig, mats, { kind: 'sword', helm: 'nasal', shield: 'kite' });
@@ -129,6 +131,12 @@ function currentPose() {
 }
 
 function pose() {
+  if (mocapFrame) {
+    applyMocapFrame(rig, mocapFrame);
+    groundMocap(rig, built.root);
+    for (const m of built.meshes) if (m.skeleton) m.skeleton.update();
+    return;
+  }
   if (live) { animate(rig, live === 'idle' ? 0.4 : 1.0, live); }
   else { animate(rig, 0.4, 'stand'); }
   applyPose(rig, currentPose(), 1);
@@ -141,7 +149,7 @@ function draw() {
   pose();
   renderer.render(scene, cam);
   const st = stanceById(stanceId);
-  el('name').textContent = st ? st.label : '—';
+  el('name').textContent = mocapLabel || (st ? st.label : '—');
   el('phase').textContent = live ? ('locomotion · ' + live)
     : (st && st.poses.hold ? 'held pose' : phase + '  ' + u.toFixed(2));
   el('time').textContent = st ? timingText(st) : '';
@@ -238,6 +246,31 @@ el('scrub').oninput = (e) => {
 };
 setView(view);
 draw();
+window.clips = async () => {
+  if (!window.__mp) window.__mp = await (await fetch('./mocap/clips.json')).json();
+  return Object.keys(window.__mp);
+};
+window.setMocap = async (name, i = 0) => {
+  if (!window.__mp) window.__mp = await (await fetch('./mocap/clips.json')).json();
+  const c = window.__mp[name];
+  if (!c) return null;
+  const idx = Math.max(0, Math.min(c.frames.length - 1, i));
+  mocapFrame = c.frames[idx];
+  mocapLabel = name + '  frame ' + idx + '/' + (c.frames.length - 1);
+  live = null; stanceId = null;
+  const v = view; setView(v); draw();
+  return { name, i: idx, frames: c.frames.length, height: c.height };
+};
+window.__rigDebug = () => {
+  const out = {};
+  for (const n of ['hips','spine','chest','neck','head','thigh.L','shin.L','foot.L','toe.L','arm.R','fore.R','hand.R']) {
+    const b = rig.byName.get(n);
+    if (!b) continue;
+    const v = b.getWorldPosition(new THREE.Vector3());
+    out[n] = [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)];
+  }
+  return out;
+};
 window.__ready = true;
 </script>
 </body></html>
