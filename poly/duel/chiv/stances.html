@@ -1,0 +1,216 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Realms · stance library</title>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
+<style>
+  html,body{margin:0;background:#0b0d10;overflow:hidden;font:13px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#e8e6e3}
+  #stage{position:relative;float:left}
+  canvas{display:block}
+  #label{position:absolute;left:18px;top:14px;pointer-events:none;text-shadow:0 1px 3px #000}
+  #name{font-size:19px;font-weight:600;letter-spacing:.02em}
+  #phase{font-size:13px;color:#8fd0ff;letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+  #time{font-size:12px;color:#9aa3ad;margin-top:4px;font-variant-numeric:tabular-nums}
+  #hud{position:absolute;right:16px;top:14px;text-align:right;font-size:11px;color:#7c8590;line-height:1.5}
+  #panel{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(#0b0d1000,#0b0d10ee 30%);padding:10px 18px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  select,button{background:#1a1f26;color:#e8e6e3;border:1px solid #2c343d;border-radius:6px;padding:6px 9px;font:inherit;cursor:pointer}
+  button.on{background:#2f6f9e;border-color:#4a9ad4}
+  #scrub{accent-color:#4a9ad4;width:180px}
+  body.sheet #panel{display:none}
+  body.sheet #hud{display:none}
+</style></head>
+<body>
+<div id="stage">
+  <div id="label"><div id="name">—</div><div id="phase">—</div><div id="time"></div></div>
+  <div id="hud"></div>
+  <div id="panel">
+    <select id="pick"></select>
+    <button data-view="front" class="on">Front</button>
+    <button data-view="side">Side</button>
+    <button data-view="three">3/4</button>
+    <span style="width:14px"></span>
+    <button data-phase="chamber">Chamber</button>
+    <button data-phase="mid">Mid</button>
+    <button data-phase="strike">Strike</button>
+    <input id="scrub" type="range" min="0" max="1000" value="1000">
+    <span id="utxt" style="color:#8a929c;font-variant-numeric:tabular-nums"></span>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { Atlas } from './forge.js';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
+import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix } from './stances.js';
+import { DEFAULTS } from './chiv.data.js';
+
+const Q = new URLSearchParams(location.search);
+if (Q.get('sheet') === '1') document.body.classList.add('sheet');
+
+const W = +(Q.get('w') || 560), H = +(Q.get('h') || 700);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.getElementById('stage').appendChild(renderer.domElement);
+renderer.domElement.style.width = W + 'px'; renderer.domElement.style.height = H + 'px';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14181d);
+
+/* three-point light so the pose reads: key from front-left-high, warm fill,
+ * cool rim from behind, which is what separates a silhouette from a wall */
+const key = new THREE.DirectionalLight(0xfff1dd, 3.0); key.position.set(-2.4, 4.2, 3.6); scene.add(key);
+const fill = new THREE.DirectionalLight(0x9fc4e8, 0.9); fill.position.set(3.0, 1.6, 2.2); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xcfe4ff, 1.6); rim.position.set(1.4, 2.6, -4.0); scene.add(rim);
+scene.add(new THREE.HemisphereLight(0x8fb2d6, 0x2a2622, 0.85));
+
+/* ground: a man who sinks through the floor is a bug, so show the floor */
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(2.6, 48),
+  new THREE.MeshStandardMaterial({ color: 0x2b3037, roughness: 0.95, metalness: 0 }),
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+scene.add(ground);
+
+const atlas = await new Atlas(new THREE.TextureLoader()).ready();
+const rig = buildSkeleton();
+const mats = soldierMaterials(atlas.m, 0x2f6f9e);
+const parts = buildSoldier(rig, mats, { kind: 'sword', helm: 'nasal', shield: 'kite' });
+const built = assemble(rig, parts);
+scene.add(built.root);
+built.root.traverse((o) => { if (o.isSkinnedMesh || o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
+if (Q.get('bare') === '1') {
+  const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  built.root.traverse((o) => { if (o.isSkinnedMesh || o.isMesh) o.material = white; });
+  scene.background = new THREE.Color(0x000000);
+  ground.visible = false;
+}
+
+const VIEW_H = 2.32, ASPECT = W / H;
+const cam = new THREE.OrthographicCamera(-VIEW_H * ASPECT / 2, VIEW_H * ASPECT / 2, VIEW_H * 0.86, VIEW_H * 0.86 - VIEW_H, 0.1, 40);
+const CAMS = {
+  front: [0, 1.02, 7], side: [7, 1.02, 0], three: [4.2, 1.5, 5.2],
+};
+function setView(v) {
+  const c = CAMS[v] || CAMS.front;
+  cam.position.set(c[0], c[1], c[2]);
+  cam.lookAt(0, 0.98, 0);
+  cam.updateProjectionMatrix();
+}
+
+/* ------------------------------------------------------------------ state */
+let stanceId = Q.get('one') || 'Slash:Left';
+let phase = Q.get('phase') || 'chamber';
+let u = Q.get('u') != null ? +Q.get('u') : 1;
+let view = Q.get('view') || 'front';
+let live = Q.get('live') || null;          /* locomotion mode, if any */
+
+const el = (id) => document.getElementById(id);
+function timingText(st) {
+  const d = DEFAULTS[st.verb] || {};
+  const ms = (v) => (v == null ? '–' : Math.round(v * 1000));
+  const bits = [];
+  if (d.Holding) bits.push('hold ' + ms(d.Holding));
+  if (d.Windup) bits.push('wind ' + ms(d.Windup));
+  if (d.Release) bits.push('rel ' + ms(d.Release));
+  if (d.Recovery) bits.push('rec ' + ms(d.Recovery));
+  if (d.Damage) bits.push('dmg ' + d.Damage);
+  if (d.StaminaCost) bits.push('stam ' + d.StaminaCost);
+  return bits.join('  ·  ');
+}
+
+function currentPose() {
+  const st = stanceById(stanceId);
+  if (!st) return GUARD_POSE;
+  const has = st.poses;
+  if (has.hold) return has.hold;
+  if (phase === 'release' || phase === 'mid') return poseAt(st, 'release', u);
+  return poseAt(st, phase, 1);
+}
+
+function pose() {
+  if (live) { animate(rig, live === 'idle' ? 0.4 : 1.0, live); }
+  else { animate(rig, 0.4, 'stand'); }
+  applyPose(rig, currentPose(), 1);
+  rig.root.updateMatrixWorld(true);
+  groundFix(rig, built.root);   /* feet on the floor, never through it */
+  for (const m of built.meshes) if (m.skeleton) m.skeleton.update();
+}
+
+function draw() {
+  pose();
+  renderer.render(scene, cam);
+  const st = stanceById(stanceId);
+  el('name').textContent = st ? st.label : '—';
+  el('phase').textContent = live ? ('locomotion · ' + live)
+    : (st && st.poses.hold ? 'held pose' : phase + '  ' + u.toFixed(2));
+  el('time').textContent = st ? timingText(st) : '';
+  el('utxt').textContent = u.toFixed(2);
+  renderer.render(scene, cam);
+}
+
+/* the automation surface: puppeteer drives these, exactly as Mason's hand would */
+window.setStance = (id, ph = 'chamber', uu = 1) => {
+  stanceId = id; phase = ph; u = uu; live = null; draw(); return true;
+};
+window.setView = (v) => { view = v; setView(v); draw(); return view; };
+window.setLive = (m) => { live = m; draw(); return m; };
+window.setSize = (w, h) => { renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); draw(); return [w, h]; };
+window.stances = () => STANCES.map((s) => ({ id: s.id, label: s.label, group: s.group, phases: Object.keys(s.poses) }));
+window.locomotion = () => LOCOMOTION;
+
+/* measurement for the verifier: world positions of the bones that decide whether
+ * an arc is right, plus the lowest foot so a pose that sinks can be caught */
+const V = new THREE.Vector3();
+const wpos = (n) => { const b = rig.byName.get(n); if (!b) return null; b.getWorldPosition(V); return [+V.x.toFixed(4), +V.y.toFixed(4), +V.z.toFixed(4)]; };
+window.__cur = () => ({ stance: stanceId, phase, u, pose: currentPose() });
+window.__bones = (n) => { const b = rig.byName.get(n); return b ? [+b.rotation.x.toFixed(3), +b.rotation.y.toFixed(3), +b.rotation.z.toFixed(3)] : null; };
+window.measure = () => ({
+  stance: stanceId, phase, u,
+  hand: wpos('hand.R'), handL: wpos('hand.L'), head: wpos('head'), hips: wpos('hips'),
+  footL: wpos('foot.L'), footR: wpos('foot.R'), toeL: wpos('toe.L'), toeR: wpos('toe.R'),
+});
+
+/* ------------------------------------------------------------------ UI */
+const pick = el('pick');
+for (const grp of ['attack', 'state']) {
+  const og = document.createElement('optgroup');
+  og.label = grp === 'attack' ? 'Attacks' : 'States';
+  for (const s of STANCES.filter((x) => x.group === grp)) {
+    const o = document.createElement('option'); o.value = s.id; o.textContent = s.label; og.appendChild(o);
+  }
+  pick.appendChild(og);
+}
+const og2 = document.createElement('optgroup'); og2.label = 'Locomotion';
+for (const l of LOCOMOTION) { const o = document.createElement('option'); o.value = 'live:' + l.id; o.textContent = l.label; og2.appendChild(o); }
+pick.appendChild(og2);
+if (Q.get('live')) pick.value = 'live:' + Q.get('live'); else pick.value = stanceId;
+pick.onchange = () => {
+  const v = pick.value;
+  if (v.startsWith('live:')) { live = v.slice(5); } else { live = null; stanceId = v; }
+  draw();
+};
+for (const b of document.querySelectorAll('[data-view]')) {
+  b.onclick = () => {
+    view = b.dataset.view; setView(view);
+    document.querySelectorAll('[data-view]').forEach((x) => x.classList.toggle('on', x === b));
+    draw();
+  };
+}
+for (const b of document.querySelectorAll('[data-phase]')) {
+  b.onclick = () => {
+    phase = b.dataset.phase === 'chamber' ? 'chamber' : b.dataset.phase === 'mid' ? 'release' : 'release';
+    u = b.dataset.phase === 'chamber' ? 1 : b.dataset.phase === 'mid' ? 0.5 : 1;
+    live = null; draw();
+  };
+}
+el('scrub').oninput = (e) => {
+  u = +e.target.value / 1000;
+  if (phase === 'chamber') phase = 'release';
+  draw();
+};
+setView(view);
+draw();
+window.__ready = true;
+</script>
+</body></html>
