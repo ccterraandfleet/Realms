@@ -798,19 +798,25 @@ export const stanceById = (id) => STANCES.find((s) => s.id === id);
  * =========================================================================== */
 const MOVED = ['arm.R', 'fore.R', 'hand.R', 'arm.L', 'fore.L', 'hand.L'];
 
-export function applyPose(rig, pose, w = 1) {
+export function applyPose(rig, pose, w = 1, opts = {}) {
   if (!rig || !pose) return rig;
   const B = rig.byName;
+  const skip = opts.skip || null;
+  const skipSet = skip ? new Set(skip) : null;
   const base = new Map();
   for (const n of MOVED) { const b = B.get(n); if (b) base.set(n, b.quaternion.clone()); }
+  /* the bones the mask protects, so a walk cycle and a swing can share a body */
+  const keep = new Map();
+  if (skipSet) for (const b of B.values()) if (b.isBone && skipSet.has(b.name)) keep.set(b.name, b.quaternion.clone());
 
   for (const [name, v] of Object.entries(pose.bones || {})) {
+    if (skipSet && skipSet.has(name)) continue;
     const b = B.get(name);
     if (!b) continue;
     b.rotation.set(v[0], v[1], v[2]);
   }
   const hips = B.get('hips');
-  if (hips && pose.hips != null) hips.position.y = hips.userData.abs.y + pose.hips;
+  if (hips && pose.hips != null && !(skipSet && skipSet.has('hips'))) hips.position.y = hips.userData.abs.y + pose.hips;
 
   rig.root.updateMatrixWorld(true);
   if (pose.ik) {
@@ -828,6 +834,11 @@ export function applyPose(rig, pose, w = 1) {
       const target = b.quaternion.clone();
       b.quaternion.copy(q).slerp(target, w);
     }
+    rig.root.updateMatrixWorld(true);
+  }
+  /* restore the masked bones untouched, so locomotion keeps owning the legs */
+  if (keep.size) {
+    for (const [n, q] of keep) { const b = B.get(n); if (b) b.quaternion.copy(q); }
     rig.root.updateMatrixWorld(true);
   }
   return rig;
@@ -1021,10 +1032,17 @@ export function matchMotion(target, only) {
 
 export function stanceForAttack(att) {
   if (!att) return stanceById('Guard');
-  const name = att.name || 'Slash';
-  const dir = att.dir || 'None';
-  const heavy = name.endsWith('Heavy');
+  /* the combat core names attacks `type` ('overhead', 'stab'...) while the table
+   * uses `name` ('Overhead'), so accept either rather than silently defaulting
+   * every overhead to a left slash. */
+  const raw = String(att.name || att.type || 'Slash');
+  const name = raw.charAt(0).toUpperCase() + raw.slice(1);
+  const dir = String(att.dir || 'None');
+  const heavy = name.endsWith('Heavy') || att.heavy === true;
   const base = name.replace(/Heavy$/, '');
+  if (/^(slash|swing)$/i.test(base)) return stanceById('Slash' + (heavy ? 'Heavy' : '') + ':' + (/right/i.test(dir) ? 'Right' : 'Left'));
+  if (/^overhead$/i.test(base)) return stanceById('Overhead' + (heavy ? 'Heavy' : '') + ':Down');
+  if (/^(stab|thrust)$/i.test(base)) return stanceById('Stab' + (heavy ? 'Heavy' : '') + ':T');
   if (base === 'Slash') return stanceById((heavy ? 'SlashHeavy' : 'Slash') + ':' + (dir === 'Right' ? 'Right' : 'Left'));
   if (base === 'Overhead') return stanceById((heavy ? 'OverheadHeavy' : 'Overhead') + ':Down');
   if (base === 'Stab') return stanceById((heavy ? 'StabHeavy' : 'Stab') + ':T');

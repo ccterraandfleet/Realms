@@ -16,6 +16,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById } from './stances.js?v=20261114-ik2';
 
 let ATLAS = null;
 export async function initActors(loader) {
@@ -107,6 +108,11 @@ export class Actor {
     );
   }
 
+  /* UPPER BODY MASK. The legs, hips and feet belong to locomotion; the torso and
+   * arms belong to the stance. Every engine layers a melee attack over a walk
+   * cycle exactly this way, and without it a swinging man stops walking. */
+  static LOWER = ['hips', 'thigh.L', 'shin.L', 'foot.L', 'toe.L', 'thigh.R', 'shin.R', 'foot.R', 'toe.R'];
+
   update(dt, f, moving = 0) {
     if (!f) return;
     this.t += dt;
@@ -114,48 +120,27 @@ export class Actor {
     const busy = !!f.attack;
     const mode = dead ? 'dead' : busy ? 'stand' : (moving > 0.05 ? 'walk' : 'idle');
     animate(this.rig, this.t, mode);
-
     if (dead) return;
+    this.root.updateMatrixWorld(true);
 
-    /* the arm rotations animate() just wrote are the base the swing blends FROM */
-    const base = {};
-    for (const n of ['arm.R', 'fore.R', 'chest', 'arm.L', 'fore.L']) {
-      const b = this.bone(n);
-      base[n] = b ? [b.rotation.x, b.rotation.y, b.rotation.z] : [0, 0, 0];
-    }
-
-    /* GUARD: bring the shield across the body. */
-    if (f.guard && !busy) {
-      this._blend('arm.L', base['arm.L'], [-0.95, 0.10, 0.34], 0.85);
-      this._blend('fore.L', base['fore.L'], [-1.25, 0, 0], 0.85);
-      this._blend('chest', base['chest'], [0, 0.16, 0], 0.5);
-    }
-
-    /* SWING: the arm rides the core's own phase clock. */
+    /* The pose comes from the SAME stance library the review page shows, so the
+     * swings in the game are the IK-authored, spline-interpolated ones rather
+     * than a second set of numbers that drift. */
+    let pose = null, w = 0;
     if (busy) {
-      const S = LINE[lineOf(f.attack)];
+      const st = stanceForAttack(f.attack) || stanceById('Slash:Left');
       const { phase, u } = f.phaseInfo ? f.phaseInfo() : { phase: 'release', u: 0 };
-      let target = S.chamber, w = 1;
-      if (phase === 'holding') { target = S.chamber; w = clamp01(u / 0.5); }
-      else if (phase === 'windup') { target = S.chamber; w = 1; }
-      else if (phase === 'release') {
-        const e = u * u * (3 - 2 * u);            /* smoothstep: readable midpoint */
-        target = {
-          arm: [lerp(S.chamber.arm[0], S.strike.arm[0], e), lerp(S.chamber.arm[1], S.strike.arm[1], e), lerp(S.chamber.arm[2], S.strike.arm[2], e)],
-          fore: [lerp(S.chamber.fore[0], S.strike.fore[0], e), 0, 0],
-          chest: lerp(S.chamber.chest, S.strike.chest, e),
-        };
-        w = 1;
-      } else if (phase === 'recovery') { target = S.strike; w = 1 - u; }
-      else { target = S.strike; w = 0.15; }
-
-      const pre = (v, b) => [lerp(b[0], v[0], w), lerp(b[1], v[1], w), lerp(b[2], v[2], w)];
-      this._set('arm.R', pre(target.arm, base['arm.R']));
-      this._set('fore.R', pre(target.fore, base['fore.R']));
-      const c = pre([0, target.chest, 0], base['chest']);
-      this._set('chest', c);
+      pose = poseAt(st, phase, u) || st.poses.chamber || GUARD_POSE;
+      w = 1;
+      if (phase === 'holding') w = clamp01(u / 0.5);
+      else if (phase === 'recovery') w = clamp01(1 - u * 0.85);
+    } else {
+      pose = GUARD_POSE;
+      /* he carries a guard rather than standing with his arms down, but the
+       * weight drops while walking so the stride still reads */
+      w = (f.guard ? 0.85 : 0.5) * (moving > 0.05 ? 0.7 : 1);
     }
-
+    if (pose) applyPose(this.rig, pose, w, { skip: Actor.LOWER });
     this.root.updateMatrixWorld(true);
   }
 
