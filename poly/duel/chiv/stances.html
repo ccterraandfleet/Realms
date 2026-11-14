@@ -20,7 +20,7 @@
 <body>
 <div id="stage">
   <div id="label"><div id="name">—</div><div id="phase">—</div><div id="time"></div></div>
-  <div id="hud"></div>
+  <div id="hud">BUILD 20261114-ik1</div>
   <div id="panel">
     <select id="pick"></select>
     <button data-view="front" class="on">Front</button>
@@ -38,7 +38,7 @@
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
-import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH } from './stances.js';
+import { STANCES, LOCOMOTION, applyPose, poseAt, blendPose, stanceById, GUARD_POSE, groundFix, BLADE_LOCAL, BLADE_LENGTH } from './stances.js?v=20261114-ik1';
 import { DEFAULTS } from './chiv.data.js';
 
 const Q = new URLSearchParams(location.search);
