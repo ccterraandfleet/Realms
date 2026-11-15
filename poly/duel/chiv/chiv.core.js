@@ -462,7 +462,7 @@ export class Duel {
       this.over = true;
       this.winner = this.a.hp <= 0 ? this.b : this.a;
       const dead = this.a.hp <= 0 ? this.a : this.b;
-      dead.alive = false; dead.state = 'dead';
+      dead.alive = false; dead.state = 'dead';dead.guard=false;dead.attack=null;dead.counterAttemptUntil=-99;dead.activeParryUntil=-99;
       this.emit('death', { who: dead.id, vs: this.winner.id });
     }
     return this.drain();

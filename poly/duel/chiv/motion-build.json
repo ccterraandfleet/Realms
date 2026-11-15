@@ -1,26 +1,29 @@
 {
-  "build": "2026-11-15 08:30 UTC",
-  "version": "exchange-v1",
+  "build": "2026-11-15 09:15 UTC",
+  "version": "handoff-v1",
   "files": {
-    "chiv.ai.js": "c721c569dbb7b1cab9b084867dd9c85491b794861c5574c3231bdaa9b7d812bf",
+    "chiv.ai.js": "8468e2be9208d25e303bd70da5f4049003bb262df35e6a7ad4a3915d62f4c718",
     "chiv.contact.js": "594ca08c626335b4b91d384ae9ca2042adff3c79cbb5a3a1c79844a0b5864646",
-    "chiv.core.js": "5927461a358484a5d11569c1ff754701b614cee0bfc495fa1eea8f34256c3606",
+    "chiv.core.js": "85cc24d64eb2c7ab64a976af5007edf9f4e9e9d6e31eca2b82ba595d0f208bb2",
     "combat-traces.json": "4917e40bf84bfdb5f833fbcceb668fc65539c2a9b2e7b562e8097d2acee43526",
-    "index.html": "1128838f2d8951129c6c028597687c47b57c2aa65cc43d81680ee591311bfa75",
-    "mocap.js": "8c838a2a66b5785aa899815be7b989d66e2c0d81308616418b90947ea7a8ad29",
+    "index.html": "bbc5a578d0d14bfbeeb30c718d2299a9850c918c3039d748e1b78b52dc842554",
+    "mocap.js": "bf486b9689ba0c84ff502482708baf9db4485a504024dd98ac38d05b159bba2a",
     "mocap/SOURCES.md": "dbbc2d171f3330b6c8ca4a031a55a87d999a960b15176d8710e52470884558c8",
     "mocap/locomotion.json": "bbeeccd7fa3dd36fad91955c40b79bec9e65c75ed31d69bc4568249ae8b25df6",
     "mocap/swings.json": "e357229b4af5f40e934f632b3c748f379ef74199cb6d996cd50bc91802f78f8b",
-    "motion-review.html": "60d0f7d843a736797d5933a37cdca4e62283ed2d8c67b6e3164feaf39588022c",
+    "motion-review.html": "d543e84507fd1729ff6bb23ba53440fdec45281ae5409b009bc23e5403e29504",
     "soldier.js": "012169fbe6cb2003fede45209f14931c031c819299d1f96d0864c1d9f2552e28",
-    "soldieractor.js": "a5201f7ee63001084687705fb2fe565f22d0d36e2ab437651b2434e77d2245e7",
-    "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed"
+    "soldieractor.js": "a84d09ba4414585157bdeafa2e8677800246ddb1b6f68e8c7addec028d2e352d",
+    "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed",
+    "handoff-browser-qa.js": "1daf7519915c5d382ae4ea25a13ee328c9f78118d89b05edcdc008d88c9cd2f3"
   },
   "localVerification": {
     "poseCases": 704,
     "combatRuleTests": 29,
     "styleRuleTests": 13,
     "exchangeRuleTests": 28,
-    "realInputCounterScenarios": 5
+    "realInputCounterScenarios": 5,
+    "browserAcceptanceChecks": 17,
+    "browserAcceptanceModes": 2
   }
 }
