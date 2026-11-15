@@ -72,7 +72,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 06:43</div>
+  <div id="build">BUILD 2026-11-15 06:58</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -790,6 +790,89 @@ sword.position.set(0.315, -0.335, -0.565);
 sword.rotation.set(-0.16, 0.16, 0.22);
 hand.add(sword);
 
+/* ===========================================================================
+ * THE SLEEVE THAT KEEPS THE ARM ATTACHED.
+ * There was no upper arm in the first person view at all: the sleeve geometry stopped
+ * 0.38 m below the wrist and nothing joined it to a shoulder, so any chamber that lifted
+ * the blade left the forearm hanging in space - "the arms go above the head fully like
+ * detached". A sleeve is now stretched every frame from a shoulder anchor below and
+ * BEHIND the lens to the elbow of the posed forearm, so the arm is attached by
+ * construction in every pose, however high the chamber goes. The anchor sits behind the
+ * camera, so the sleeve is only visible where it crosses into the frame, which is exactly
+ * how a first-person arm enters the picture.
+ * =========================================================================== */
+const SH_ANCHOR_R = new THREE.Vector3(0.285, -0.585, 0.155);
+const SH_ANCHOR_L = new THREE.Vector3(-0.300, -0.560, 0.170);
+const ELBOW_LOCAL = new THREE.Vector3(0, -0.46, 0);   /* far end of the forearm, in weapon space */
+function buildSleeve(material, radiusA, radiusB, opts = {}) {
+  const g = new THREE.Group();
+  const h = 1;                                        /* unit length, scaled per frame */
+  const geo = new THREE.CylinderGeometry(radiusB, radiusA, h, 10, 1, true);
+  geo.translate(0, h * 0.5, 0);                       /* base at the origin */
+  g.add(new THREE.Mesh(geo, material));
+  /* three cloth folds up the sleeve so it does not read as a plastic tube */
+  for (let i = 0; i < 3; i++) {
+    const r = new THREE.Mesh(new THREE.TorusGeometry(radiusA + 0.004 + i * 0.005, 0.0068, 4, 10), material);
+    r.rotation.x = Math.PI / 2;
+    r.position.y = 0.12 + i * 0.26;
+    g.add(r);
+  }
+  if (opts.pauldron) {
+    const pl = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), opts.pauldron);
+    pl.position.y = 0.02;
+    g.add(pl);
+  }
+  g.userData.unit = h;
+  hand.add(g);
+  return g;
+}
+const sleeveR = buildSleeve(linen, 0.062, 0.049, { pauldron: steel });
+const sleeveL = buildSleeve(linen, 0.058, 0.047, { pauldron: steel });
+function placeSleeve(sl, from, to) {
+  const d = new THREE.Vector3().subVectors(to, from);
+  const len = Math.max(0.02, d.length());
+  sl.position.copy(from);
+  sl.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.clone().normalize());
+  sl.scale.set(1, len / sl.userData.unit, 1);
+  sl.userData.end = to.clone();
+}
+const _elbowR = new THREE.Vector3(), _elbowL = new THREE.Vector3();
+const FOREARM_LEN = 0.30;      /* fist to elbow, roughly a forearm */
+/* THE ELBOW CANNOT BE DERIVED FROM THE BLADE AXIS. The weapon's own -Y is the BLADE's
+ * line, not the arm's, so using it put the elbow 0.54 m ABOVE the eye during a thrust:
+ * the arm was attached to a shoulder, but bent the wrong way, which is what read as
+ * "arms above the head". An elbow belongs on the line between the fist and the shoulder,
+ * so that is where it is put, and the sleeve then always hangs anatomically. */
+function elbowOf(fistPos, shoulder, out) {
+  out.copy(shoulder).sub(fistPos);
+  const d = out.length();
+  if (d < 1e-4) return out.copy(fistPos).add(new THREE.Vector3(0, -FOREARM_LEN, 0));
+  return out.multiplyScalar(Math.min(FOREARM_LEN, d * 0.9) / d).add(fistPos);
+}
+function updateSleeves() {
+  elbowOf(sword.position, SH_ANCHOR_R, _elbowR);
+  placeSleeve(sleeveR, SH_ANCHOR_R, _elbowR);
+  elbowOf(shield.position, SH_ANCHOR_L, _elbowL);
+  placeSleeve(sleeveL, SH_ANCHOR_L, _elbowL);
+}
+/* not called here: the shield is not built yet at this point in the file, and the
+ * sleeve is placed every frame anyway */
+if (typeof window !== 'undefined') {
+  window.__sleeveCheck = () => {
+    /* the sleeve is placed end to end every frame, so the check is that its far end
+     * lands ON the elbow and that the near end is behind the lens (out of sight) */
+    updateSleeves();
+    const endR = sleeveR.userData.end, endL = sleeveL.userData.end;
+    return {
+      gapR: +endR.distanceTo(_elbowR).toFixed(4),
+      gapL: +endL.distanceTo(_elbowL).toFixed(4),
+      anchorBehindLens: SH_ANCHOR_R.z > 0 && SH_ANCHOR_L.z > 0,
+      elbowR: [+endR.x.toFixed(2), +endR.y.toFixed(2), +endR.z.toFixed(2)],
+      elbowL: [+endL.x.toFixed(2), +endL.y.toFixed(2), +endL.z.toFixed(2)],
+    };
+  };
+}
+
 
 /* THE SHIELD: seven planks laid on an arc so it is curved, real iron edge boards with
  * sixteen rivets, an iron boss with its own rivets, leather enarmes behind, and a
@@ -1257,6 +1340,25 @@ window.__fieldScreen = () => SQUAD.flatMap((q, i) => [q.sa, q.sb].map((sd) => {
   return { pair: i, side: sd.side, ndc: [+v.x.toFixed(2), +v.y.toFixed(2)],
            onScreen: Math.abs(v.x) < 1 && Math.abs(v.y) < 1 && v.z < 1 };
 }));
+/* every man's sword hand against his own head, and his own arm length, so a chamber
+ * that lifts a hand over a head is caught as a number rather than an opinion */
+window.__soldierArms = () => {
+  const list = [];
+  const one = (act) => {
+    if (!act || !act.rig) return null;
+    act.root.updateMatrixWorld(true);
+    const g = (n) => { const bn = act.rig.byName.get(n); if (!bn) return null; const v = new THREE.Vector3(); bn.getWorldPosition(v); return v; };
+    const hand = g('hand.R'), head = g('head'), sh = g('arm.R'), el = g('fore.R');
+    if (!hand || !head || !sh || !el) return null;
+    return { handAboveHead: +(hand.y - head.y).toFixed(3), chain: +(sh.distanceTo(el) + el.distanceTo(hand)).toFixed(3) };
+  };
+  const mine = one(playerBody && playerBody.rig ? playerBody : null);
+  const foeOne = one(foeActor);
+  if (foeOne) list.push(foeOne);
+  if (mine) list.push(mine);
+  for (const q of SQUAD) { const r = one(q.actor); if (r) list.push(r); }
+  return list;
+};
 window.__squad = () => SQUAD.map((q, i) => ({
   pair: i, a: Math.round(q.duel.a.hp), b: Math.round(q.duel.b.hp),
   aState: q.duel.a.state, bState: q.duel.b.state,
@@ -1358,7 +1460,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 06:43');
+console.log('REALMS KINGDOM BUILD 2026-11-15 06:58');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -2772,6 +2874,10 @@ if (foeRig && foeRig.ok) {
     shield.rotation.x += shieldRock * 0.15;
     shield.rotation.z += shieldRock * 0.07;
   }
+  /* the arm must stay attached to a shoulder in EVERY pose, so the sleeve is stretched
+   * after the weapon and shield have been placed, not before */
+  updateSleeves();
+
   /* the shield hides the upper body while guarding: a real cost to turtling */
   shield.visible = true;
 
