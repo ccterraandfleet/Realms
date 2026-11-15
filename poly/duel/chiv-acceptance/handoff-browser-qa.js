@@ -64,3 +64,5 @@ button.onclick=async()=>{
  finally{window.__forceInput=false;key('Escape');window.requestAnimationFrame=nativeRAF;if(pendingFrame)nativeRAF(pendingFrame);button.disabled=false;}
 };
 })();
+
+(()=>{const b=document.createElement('button');b.textContent='Watch live duel';document.getElementById('qaPanel').append(b);b.onclick=()=>{window.__forceInput=true;document.getElementById('playButton').click();document.getElementById('qaPanel').style.display='none';const raf=window.requestAnimationFrame;let cb;window.requestAnimationFrame=f=>{cb=f;return 0};let t=0;const timer=setInterval(()=>{t++;if(t%22===0){window.__aimInject(-80,0);dispatchEvent(new MouseEvent('mousedown',{button:0}));dispatchEvent(new MouseEvent('mouseup',{button:0}));}window.__tickN(3);window.__renderOnce(.05)},50);addEventListener('keydown',function stop(e){if(e.key==='Escape'){clearInterval(timer);window.__forceInput=false;window.requestAnimationFrame=raf;if(cb)raf(cb);removeEventListener('keydown',stop)}});};})();
