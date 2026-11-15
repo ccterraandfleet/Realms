@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 06:10</div>
+  <div id="build">BUILD 2026-11-15 06:21</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -1264,7 +1264,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 06:10');
+console.log('REALMS KINGDOM BUILD 2026-11-15 06:21');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1835,43 +1835,87 @@ function captureSample(clip, u, mirror) {
 }
 
 if (typeof window !== 'undefined') { window.__Q = THREE.Quaternion; window.__V = THREE.Vector3; window.__E = THREE.Euler; }
+if (typeof window !== 'undefined') {
+  window.__fpGeom = (line, kind) => {
+    let worstFistZ = -9, worstFistX = 9, worstElbowZ = -9, travel = 0, prev = null;
+    for (const ph of ['wind', 'strike', 'follow']) {
+      for (let i = 0; i <= 20; i++) {
+        const pose = capturePose(line, kind, ph, i / 20);
+        if (!pose) continue;
+        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.rot[0], pose.rot[1], pose.rot[2], 'XYZ'));
+        /* the elbow end of the forearm, which is what crosses the camera if it is wrong */
+        const elbow = new THREE.Vector3(0, -0.46, 0).applyQuaternion(q).add(new THREE.Vector3(...pose.pos));
+        worstFistZ = Math.max(worstFistZ, pose.pos[2]);
+        worstElbowZ = Math.max(worstElbowZ, elbow.z);
+        worstFistX = Math.min(worstFistX, pose.pos[0]);
+        if (prev) travel += Math.hypot(pose.pos[0] - prev[0], pose.pos[1] - prev[1], pose.pos[2] - prev[2]);
+        prev = pose.pos;
+      }
+    }
+    return { fistZ: +worstFistZ.toFixed(2), fistXmin: +worstFistX.toFixed(2),
+             elbowZ: +worstElbowZ.toFixed(2), handPath: +travel.toFixed(2) };
+  };
+}
 if (typeof window !== 'undefined') window.__capTest = (l, k, ph, u) => capturePose(l, k, ph, u);
 function capturePose(line, kind, phase, u) {
+  /* ONE CLEAN PATH, rewritten from scratch after a run of patches left the overhead
+   * branch returning nothing at all. A captured strike, clamped into an envelope that
+   * provably stays in front of the eye, with the blade forced to point away from it. */
   if (!SWING_CLIPS.ready) { loadSwingClips(); return null; }
-  const want = line === 'T' ? 'overhead' : 'stab';
-  const key = kind === 'thrust' || line === 'T' ? 'stab:R' : 'slash:R';
-  const useOverhead = line === 'T';
-  const clip = SWING_CLIPS.by[(useOverhead ? 'overhead' : (kind === 'thrust' ? 'stab' : 'slash')) + ':R'];
+  const want = line === 'T' ? 'slash' : (kind === 'thrust' ? 'stab' : 'slash');
+  const clip = SWING_CLIPS.by[want + ':R'] || SWING_CLIPS.by['slash:R'] || SWING_CLIPS.by['stab:R'];
   if (!clip) return null;
-  const mirror = line === 'L';       // a left cut is the same hook thrown the other way
-  /* map the rule phases onto the clip, anchored on the fastest moment */
+  const mirror = line === 'L';       /* a left cut is the same hook thrown the other way */
+  const reverse = line === 'T';      /* an overhead reads as the hook travelling down */
+
   let a, b;
-  if (phase === 'wind') { a = 0.10; b = FP_CONTACT - 0.04; }
-  else if (phase === 'strike') { a = FP_CONTACT - 0.04; b = FP_CONTACT + 0.20; }
-  else if (phase === 'follow') { a = FP_CONTACT + 0.20; b = FP_CONTACT + 0.30; }
-  else { a = FP_CONTACT + 0.30; b = 1.0; }
-  let cu = a + (b - a) * Math.max(0, Math.min(1, u));
-  /* the capture is BOXING, so its "overhead" is an upward punch. Played backwards it
-   * comes down through the centre, which is the chop an overhead actually is. */
-  if (phase === 'overheadReversed') cu = 1 - cu;
-  if (useOverhead) cu = 1 - cu;
+  if (phase === 'wind') { a = 0.08; b = 0.50; }
+  else if (phase === 'strike') { a = 0.50; b = 0.78; }
+  else if (phase === 'follow') { a = 0.78; b = 0.90; }
+  else { a = 0.90; b = 1.0; }
+  const uu = Math.max(0, Math.min(1, u));
+  let cu = a + (b - a) * uu;
+  if (reverse) cu = 1 - cu;
+
   const sm = captureSample(clip, cu, mirror);
   if (!sm) return null;
-  /* KEEP IT IN FRONT OF THE EYE. A captured arm can finish behind the head, and a hilt
-   * behind the lens is a sword you cannot see. Clamp into a box in front of the camera. */
-  /* A HARD CLAMP FLATTENS THE ARC. Pinning every frame to the same depth killed the
-   * sweep (measured: 1.02 m of tip travel against Chivalry's ~1.9 m). This wides the
-   * hand's travel about the chest, the way a blade's own length widens the arc, and
-   * compresses depth around -0.55 instead of flattening it onto one plane. */
-  const WIDE = 1.32;
+
+  /* the hilt stays in your right half, in front of the lens, never touching it */
   const hand = [
-    Math.max(-0.85, Math.min(0.85, sm.hand[0] * WIDE)),
-    Math.max(-0.70, Math.min(0.55, sm.hand[1] * WIDE)),
-    Math.max(-1.05, Math.min(-0.28, -0.55 + (sm.hand[2] + 0.55) * 0.8)),
+    Math.max(0.04, Math.min(0.60, sm.hand[0] * 1.22 + 0.12)),
+    Math.max(-0.60, Math.min(0.32, sm.hand[1] * 1.22)),
+    Math.max(-0.95, Math.min(-0.36, -0.54 + (sm.hand[2] + 0.54) * 0.72)),
   ];
-  const tip = [hand[0] + sm.dir[0] * FP_BLADE, hand[1] + sm.dir[1] * FP_BLADE, Math.min(-0.10, hand[2] + sm.dir[2] * FP_BLADE)];
-  /* the fist holds the grip, so the sword origin sits slightly back from the wrist */
-  return poseFromTip(hand, tip, mirror ? -0.15 : 0.15);
+  if (reverse) hand[1] = Math.max(-0.60, Math.min(0.55, hand[1] + 0.16));
+
+  /* the blade points away from the eye; anything aimed back at the camera is blended
+   * into a forward cone, which is what stops the forearm reading as an arm through
+   * your own head */
+  let d = [sm.dir[0], sm.dir[1], sm.dir[2]];
+  if (d[2] > -0.30) {
+    const bias = [d[0] * 0.5, d[1] * 0.5 - 0.15, -1.0];
+    const bl = Math.hypot(bias[0], bias[1], bias[2]) || 1;
+    const k = Math.min(1, (d[2] + 0.30) / 0.85);
+    d = [d[0] + (bias[0] / bl - d[0]) * k, d[1] + (bias[1] / bl - d[1]) * k, d[2] + (bias[2] / bl - d[2]) * k];
+  }
+  if (reverse) d[1] = Math.min(0.25, d[1] - 0.35);      /* bring the blade down */
+  const dl = Math.hypot(d[0], d[1], d[2]) || 1;
+  d = [d[0] / dl, d[1] / dl, d[2] / dl];
+
+  let pose = poseFromTip(hand, [hand[0] + d[0] * FP_BLADE, hand[1] + d[1] * FP_BLADE, hand[2] + d[2] * FP_BLADE],
+                         mirror ? -0.15 : 0.15);
+  /* walk the whole pose forward until the far end of the forearm clears the lens */
+  for (let k = 0; k < 6; k++) {
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.rot[0], pose.rot[1], pose.rot[2], 'XYZ'));
+    const elbow = new THREE.Vector3(0, -0.46, 0).applyQuaternion(q);
+    const ez = pose.pos[2] + elbow.z;
+    if (ez <= -0.10) break;
+    const push = Math.min(0.09, ez + 0.10);
+    pose = poseFromTip([hand[0], hand[1], pose.pos[2] - push],
+      [hand[0] + d[0] * FP_BLADE, hand[1] + d[1] * FP_BLADE, pose.pos[2] - push + d[2] * FP_BLADE],
+      mirror ? -0.15 : 0.15);
+  }
+  return pose;
 }
 const vmSwing = { id: null, t: 0, on: false, line: 'T', kind: 'light', windup: 0.34 };
 function updateSwing(me, dt) {
