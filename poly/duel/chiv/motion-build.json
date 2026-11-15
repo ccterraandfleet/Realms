@@ -1,19 +1,19 @@
 {
-  "build": "2026-11-15 09:15 UTC",
-  "version": "handoff-v1",
+  "build": "2026-11-15 11:15 UTC",
+  "version": "action-v1",
   "files": {
-    "chiv.ai.js": "8468e2be9208d25e303bd70da5f4049003bb262df35e6a7ad4a3915d62f4c718",
+    "chiv.ai.js": "dd57a1f45770394374027086dba2e9e3c133706c09fc9547d3b4a5986e2c6568",
     "chiv.contact.js": "594ca08c626335b4b91d384ae9ca2042adff3c79cbb5a3a1c79844a0b5864646",
-    "chiv.core.js": "85cc24d64eb2c7ab64a976af5007edf9f4e9e9d6e31eca2b82ba595d0f208bb2",
+    "chiv.core.js": "b94c0984eaab366382a7b545db8a3b23ce909c84d31749e182880cea5b42391d",
     "combat-traces.json": "4917e40bf84bfdb5f833fbcceb668fc65539c2a9b2e7b562e8097d2acee43526",
-    "index.html": "bbc5a578d0d14bfbeeb30c718d2299a9850c918c3039d748e1b78b52dc842554",
-    "mocap.js": "bf486b9689ba0c84ff502482708baf9db4485a504024dd98ac38d05b159bba2a",
-    "mocap/SOURCES.md": "dbbc2d171f3330b6c8ca4a031a55a87d999a960b15176d8710e52470884558c8",
+    "index.html": "e7ef9474c7cec649c604cd4ff5a6f1faf1c1d327e3c8b8e997148994b289d120",
+    "mocap.js": "f1a08a216203071addc818d5085a692c61cf1258417c04cc35af823e5b9545ce",
+    "mocap/SOURCES.md": "ec99385a3d22005e8d5cb1952c2b0929037098c16155297e1156b2823551ef52",
     "mocap/locomotion.json": "bbeeccd7fa3dd36fad91955c40b79bec9e65c75ed31d69bc4568249ae8b25df6",
     "mocap/swings.json": "e357229b4af5f40e934f632b3c748f379ef74199cb6d996cd50bc91802f78f8b",
-    "motion-review.html": "d543e84507fd1729ff6bb23ba53440fdec45281ae5409b009bc23e5403e29504",
+    "motion-review.html": "9729ffdcd52abbe1eb96618d53babc80c952470014bef52fdfd076d7a13aa641",
     "soldier.js": "012169fbe6cb2003fede45209f14931c031c819299d1f96d0864c1d9f2552e28",
-    "soldieractor.js": "a84d09ba4414585157bdeafa2e8677800246ddb1b6f68e8c7addec028d2e352d",
+    "soldieractor.js": "e619b3242c30643393daa4bbe291664a27f040539a98789795f8f9f6cfd40288",
     "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed",
     "handoff-browser-qa.js": "1daf7519915c5d382ae4ea25a13ee328c9f78118d89b05edcdc008d88c9cd2f3"
   },
@@ -24,6 +24,24 @@
     "exchangeRuleTests": 28,
     "realInputCounterScenarios": 5,
     "browserAcceptanceChecks": 17,
-    "browserAcceptanceModes": 2
+    "browserAcceptanceModes": 2,
+    "actionIntegrityTests": 13,
+    "physicalMovementCases": 10,
+    "nativeAcceptanceChecksPerMode": 12,
+    "nativeAcceptanceModes": 2,
+    "combatHudViewports": [
+      [
+        600,
+        400
+      ],
+      [
+        1000,
+        600
+      ],
+      [
+        1920,
+        1080
+      ]
+    ]
   }
 }

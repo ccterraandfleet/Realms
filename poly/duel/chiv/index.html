@@ -62,6 +62,10 @@
 <script type="importmap">{"imports":{"three":"./lib/three.module.js","three/addons/":"./lib/"}}</script>
 <style>#hint{background:#101820d9;color:#dce7ed;padding:9px 14px;border-radius:6px;max-width:calc(100vw - 32px);font-size:11px}#zones{display:none}</style><style>
 .menuActions{display:flex;gap:12px;margin:18px 0 10px}.menuActions button,.menuSetting select{font:inherit;color:#eae6db;background:#253345;border:1px solid #536477;border-radius:5px;padding:10px 16px;cursor:pointer}.menuActions button:disabled{opacity:.55;cursor:wait}.menuActions #playButton{color:#152333;background:#d8c28b;border-color:#d8c28b;font-weight:700}.menuSetting{font-size:13px;color:#adb8c5}.menuSetting select{padding:7px 10px;margin-left:10px}#intro h1{margin:0 0 8px}#intro p{max-width:720px;padding:0 20px;line-height:1.6;text-align:center}#build{top:auto!important;bottom:7px!important}
+</style><style>
+#hint{display:none;bottom:48px;width:min(640px,calc(100vw - 64px));box-sizing:border-box;line-height:1.6}
+#hint.shown{display:block}
+#combatHelp{position:fixed;left:20px;bottom:20px;color:#d4dce0;background:#101820aa;border-radius:4px;padding:5px 8px;font-size:10px;letter-spacing:.05em}
 </style></head>
 <body>
 <div id="hud">
@@ -75,14 +79,14 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 09:15</div>
+  <div id="build">BUILD 2026-11-15 11:15</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
   </style>
   <div id="armed" aria-live="polite"></div>
-<div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>hold LMB / MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
+<div id="combatHelp">H controls &nbsp;·&nbsp; Esc pause</div><div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>hold LMB / MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
 <div id="intro">
@@ -94,18 +98,18 @@
   <p>Hold RMB and click the matching attack before contact to COUNTER. Block then attack to RIPOSTE. Kick breaks held guard. Press 1&ndash;4 for opponent difficulty.</p>
   <div class="menuActions"><button id="playButton" type="button" disabled>Loading fighters</button><button id="restartButton" type="button">New match</button></div>
   <label class="menuSetting">Opponent <select id="opponentSelect"><option value="ladder">Progressive ladder</option><option value="recruit">Recruit</option><option value="manatarms">Man-at-arms</option><option value="knight">Knight</option><option value="champion">Champion</option></select></label>
-  <p class="k">Esc pauses the duel. Your opponent waits while you are away.</p>
+  <p class="k">H shows controls during combat. Esc pauses the duel. Your opponent waits while you are away.</p>
 </div>
 
 <script type="module">
 import * as THREE from 'three';
-import {bladeContact,faces} from './chiv.contact.js?v=handoff-v1';
-let combatTraces=null;fetch('./combat-traces.json?v=handoff-v1').then(r=>{if(!r.ok)throw Error('Blade traces unavailable');return r.json();}).then(j=>combatTraces=j).catch(e=>console.error(e));
+import {bladeContact,faces} from './chiv.contact.js?v=action-v1';
+let combatTraces=null;fetch('./combat-traces.json?v=action-v1').then(r=>{if(!r.ok)throw Error('Blade traces unavailable');return r.json();}).then(j=>combatTraces=j).catch(e=>console.error(e));
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=handoff-v1';
-import { STYLES, styleRule } from './chiv.styles.js?v=handoff-v1';
+import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=action-v1';
+import { STYLES, styleRule } from './chiv.styles.js?v=action-v1';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
 import { EffectComposer } from './lib/EffectComposer.js';
@@ -113,8 +117,8 @@ import { RenderPass } from './lib/RenderPass.js';
 import { ShaderPass } from './lib/ShaderPass.js';
 import { UnrealBloomPass } from './lib/UnrealBloomPass.js';
 import { SMAAPass } from './lib/SMAAPass.js';
-import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js?v=handoff-v1';
-import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js?v=handoff-v1';
+import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js?v=action-v1';
+import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js?v=action-v1';
 
 /* ===========================================================================
  * THE COMPAT BOUNDARY.
@@ -1481,7 +1485,7 @@ const labNote = document.createElement('div');
 labNote.textContent = MODEL_NOTE[LAB.model];
 labNote.style.cssText = 'opacity:.45;font-size:9px;max-width:190px;letter-spacing:.02em';
 labPanel.appendChild(labNote);
-if(new URLSearchParams(location.search).has('lab'))document.body.appendChild(labPanel);
+if(new URLSearchParams(location.search).has('lab')&&!new URLSearchParams(location.search).has('clean'))document.body.appendChild(labPanel);
 
 /* the style line, on the HUD, so the difference is never hidden */
 window.__labStyle = { id: LAB.style, name: STYLES[LAB.style].name, rule: styleRule(STYLES[LAB.style]) };
@@ -1525,14 +1529,15 @@ window.__labRun = (bouts = 40, styleOverride = null) => {
 
 const kHudEl = (() => {
   const d = document.createElement('div');
-  d.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:40;' +
-    'font:600 11px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;' +
+  d.id='realmHud';
+  d.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:40;max-width:calc(100vw - 64px);box-sizing:border-box;' +
+    'font:600 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.05em;' +
     'color:#dfe8ef;background:#00000099;border:1px solid #2b3641;padding:5px 16px;text-align:center;pointer-events:none';
   document.body.appendChild(d);
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 08:30');
+console.log('REALMS KINGDOM BUILD 2026-11-15 11:15');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1699,6 +1704,8 @@ let rmbDown = false, lastZone = 'T', orbit = 0;
  * player, and the duelling rules read the ACTUAL distance between the two bodies. */
 const playerPos = new THREE.Vector3(0, 0, 4.2);
 const playerVel = new THREE.Vector3();
+let movementView={strafe:0,moveMag:0,sprinting:false};
+
 const foeVel = new THREE.Vector3();
 let foeCircle = 1, foeCircleT = 0, physGap = 4.2;
 /* the wall ring is at radius ARENA_R (10.5); a body stops just inside it */
@@ -1913,6 +1920,7 @@ function mainSpatial(f) {
 function mainContact(att,def,from,to){const A=mainSpatial(att),B=mainSpatial(def);if(A.view==='fp')A.y=1.68;return bladeContact(combatTraces,att.attack,from,to,A,B);}
 window.__contactReady=()=>!!combatTraces;
 function clearControls(){
+ document.querySelector('#hint')?.classList.remove('shown');
  for(const k in keys)keys[k]=false;lmbDown=false;lmbHeldFor=0;rmbDown=false;pressGuard=false;
  pendingAttack=null;pendingFeint=false;pendingDodge=null;aim.dx=0;aim.dy=0;aim.mag=0;mouseHist.length=0;
  playerVel.set(0,0,0);foeVel.set(0,0,0);
@@ -1920,6 +1928,7 @@ function clearControls(){
 function resetMatch(){round=0;score=[0,0];roundResults=[];newRound();}
 function newRound() {
   roundTransition=0;clearControls();
+  movementView={strafe:0,moveMag:0,sprinting:false};
   playerPos.set(0,0,0);foeRoot.position.set(0,0,-3.4);foeRoot.rotation.set(0,0,0);physGap=3.4;
   yaw=0;pitch=-.13;camShake=0;hitFlash=0;parryFlash=0;hitStop=0;camPunch=0;camRoll=0;shieldRock=0;
   lastMeHp=100;lastFoeHp=100;prevLook.x=0;prevLook.y=-.13;vmLagX=0;vmLagY=0;
@@ -2027,6 +2036,7 @@ addEventListener('keydown', (e) => {
   keys[k] = true;
   /* WASD is MOVEMENT now, the way it is in every first-person game: W and S close and
    * open the distance, A and D circle the opponent. Combat never touches the keyboard. */
+  if(k==='h'){document.querySelector('#hint').classList.toggle('shown');return;}
   if (k === 'q' || k === 'f') pendingFeint = true;
   /* THE KICK IS THE GUARD BREAK, and their data says so: KickLow and Shove, 5 damage,
    * 10 stamina, 0.45 riposte. It is not a thrust, which is what the old build had. */
@@ -2427,6 +2437,7 @@ function tick(dt) {
   }
   if(over)return;
   const me = duel.a, foe = duel.b;
+  stepBodies(dt);
   /* the combat core keeps every one of its rules, but its notion of distance is now
    * measured between two bodies instead of driven by a movement number */
   if (duel) duel.dist = Math.max(0.6, Math.min(6, physGap));
@@ -2814,16 +2825,24 @@ function updateTrail() {
   trailGeo.attributes.color.needsUpdate = true;
 }
 
-function render(dt) {
-  if (!duel) return;
-  if(!running && !window.__forceInput)dt=0;
-  const me = duel.a, foe = duel.b;
-
+// Physics runs on combat ticks, not rendering: lower frame rates cannot change dodge reach.
+function applyDodgeMotion(f,pos,vel,fx,fz,rx,rz,dt){
+  const m=f.dodgeMotion;if(!m)return;
+  if(!m.world)m.world=m.dir==='left'?[-rx,-rz]:m.dir==='right'?[rx,rz]:[-fx,-fz];
+  const u=Math.max(0,Math.min(1,(duel.clock-m.start)/m.duration));
+  const distance=m.distance*(1-Math.cos(Math.PI*u))/2,delta=Math.max(0,distance-m.applied);
+  pos.x+=m.world[0]*delta;pos.z+=m.world[1]*delta;
+  vel.set(m.world[0]*delta/Math.max(dt,1e-6),0,m.world[1]*delta/Math.max(dt,1e-6));m.applied=distance;
+  if(u>=1){f.dodgeMotion=null;vel.set(0,0,0);}
+}
+function stepBodies(dt){
+  if(!duel||!foeRoot||dt<=0)return;
+  const me=duel.a,foe=duel.b;
   /* ---------------------------------------------------------------- walking */
   const canMove=duel.a.alive && !over && !roundTransition;
   const ax = !canMove?0:(keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
   const az = !canMove?0:(keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
-  const strafe = ax;
+  movementView={strafe:ax,moveMag:Math.hypot(ax,az),sprinting:!!keys.shift&&Math.hypot(ax,az)>.1};
   const moveMag = Math.hypot(ax, az);
   const sprinting = keys['shift'] && moveMag > 0.1;
   const topSpeed = sprinting ? SPRINT : WALK;
@@ -2837,10 +2856,12 @@ function render(dt) {
   }
   /* accelerate toward the wish direction rather than snapping: a body has mass */
   const accel = moveMag > 0.001 ? 26 : 15;
-  playerVel.x = lerp(playerVel.x, wishX * topSpeed, Math.min(1, accel * dt));
-  playerVel.z = lerp(playerVel.z, wishZ * topSpeed, Math.min(1, accel * dt));
-  playerPos.x += playerVel.x * dt;
-  playerPos.z += playerVel.z * dt;
+  if(me.dodgeMotion && canMove) applyDodgeMotion(me,playerPos,playerVel,fx,fz,rx,rz,dt);
+  else {
+    playerVel.x = lerp(playerVel.x, wishX * topSpeed, Math.min(1, accel * dt));
+    playerVel.z = lerp(playerVel.z, wishZ * topSpeed, Math.min(1, accel * dt));
+    playerPos.x += playerVel.x * dt;playerPos.z += playerVel.z * dt;
+  }
   /* the wall is a wall */
   const rr = Math.hypot(playerPos.x, playerPos.z);
   if (rr > WALK_R) { playerPos.x *= WALK_R / rr; playerPos.z *= WALK_R / rr; playerVel.multiplyScalar(0.2); }
@@ -2861,24 +2882,41 @@ function render(dt) {
   if (physGap > 1.38) { wantX = toMeX; wantZ = toMeZ; foeSpeed = 3.4; }
   else if (physGap < 1.05) { wantX = -toMeX; wantZ = -toMeZ; foeSpeed = 2.6; }
   else { wantX = -toMeZ * foeCircle; wantZ = toMeX * foeCircle; foeSpeed = 0.62; }
-  if(exchangeLab || !foe.alive || !me.alive || over || roundTransition){foeSpeed=0;foeVel.set(0,0,0);playerVel.set(0,0,0);}
-  foeVel.x = lerp(foeVel.x, wantX * foeSpeed, Math.min(1, 9 * dt));
-  foeVel.z = lerp(foeVel.z, wantZ * foeSpeed, Math.min(1, 9 * dt));
-  fo.x += foeVel.x * dt;
-  fo.z += foeVel.z * dt;
+  if(exchangeLab || !foe.alive || !me.alive || over || roundTransition){foeSpeed=0;foeVel.set(0,0,0);}
+  if(foe.dodgeMotion && foe.alive && me.alive) {
+    const fy=foeRoot.rotation.y;
+    applyDodgeMotion(foe,fo,foeVel,Math.sin(fy),Math.cos(fy),Math.cos(fy),-Math.sin(fy),dt);
+  } else {
+    foeVel.x = lerp(foeVel.x, wantX * foeSpeed, Math.min(1, 9 * dt));
+    foeVel.z = lerp(foeVel.z, wantZ * foeSpeed, Math.min(1, 9 * dt));
+    fo.x += foeVel.x * dt;fo.z += foeVel.z * dt;
+  }
   const fr = Math.hypot(fo.x, fo.z);
   if (fr > WALK_R - 0.3) { fo.x *= (WALK_R - 0.3) / fr; fo.z *= (WALK_R - 0.3) / fr; }
-  /* never stand inside each other */
-  if (physGap < 0.78) {
-    const push = (0.78 - physGap);
-    playerPos.x += toMeX * push; playerPos.z += toMeZ * push;
-    fo.x -= toMeX * push; fo.z -= toMeZ * push;
+  // Project both bodies back inside the walls and apart using their CURRENT positions.
+  for(let i=0;i<3;i++){
+    const dx=playerPos.x-fo.x,dz=playerPos.z-fo.z,d=Math.hypot(dx,dz);
+    if(d<.78){const nx=d>1e-6?dx/d:1,nz=d>1e-6?dz/d:0,push=(.78-d)/2;
+      playerPos.x+=nx*push;playerPos.z+=nz*push;fo.x-=nx*push;fo.z-=nz*push;}
+    for(const [pos,radius] of [[playerPos,WALK_R],[fo,WALK_R-.3]]){
+      const n=Math.hypot(pos.x,pos.z);if(n>radius){pos.x*=radius/n;pos.z*=radius/n;}
+    }
   }
+  physGap=Math.hypot(playerPos.x-fo.x,playerPos.z-fo.z);
   /* the soldier's front is +Z (nasal helm, surcoat and shield all sit at +z in
    model space), so atan2 already points him AT the player. The old +PI turned him
    round to present his back. */
-  foeRoot.rotation.y = Math.atan2(gapX, gapZ);
+  foeRoot.rotation.y = Math.atan2(playerPos.x-fo.x,playerPos.z-fo.z);
   orbit = Math.atan2(playerPos.x - fo.x, playerPos.z - fo.z);
+
+}
+
+function render(dt) {
+  if (!duel) return;
+  if(!running && !window.__forceInput)dt=0;
+  const me = duel.a, foe = duel.b;
+
+  const {strafe,moveMag,sprinting}=movementView;
 
   /* camera: eye height, first person, shake, dodge lean */
   const shake = camShake > 0 ? camShake : 0;

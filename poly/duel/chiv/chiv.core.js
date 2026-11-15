@@ -2,9 +2,10 @@
  * CHIVALRY 2 PVP, REBUILT FROM THEIR OWN DATA
  * ===========================================================================
  * This replaces the accumulated pile of guesses. Every phase duration, damage
- * value, stamina cost, turn limit and swing direction below is READ from
+ * value, imported stamina cost, turn limit and swing direction is READ from
  * chiv.data.js, which is generated from Chivalry's own AbilitiesOverride
- * datatable. Nothing about the timing is invented.
+ * datatable. Defence windows, movement distance and unset fallback values remain
+ * explicit prototype tuning, not a claim of exact reference-game parity.
  *
  * THE PHASE PIPELINE, exactly as their data lays it out:
  *
@@ -45,13 +46,14 @@ export const CFG = {
   STAM_REGEN: 20,            // per second
   STAM_REGEN_DELAY: 0.65,    // after spending any
   BLOCK_STAM_PER_DMG: 0.6,   // blocking a hit costs stamina scaled by its damage
-  PARRY_WINDOW: 0.2,         // guard raised inside this before impact = a parry
-  COUNTER_WINDOW: 0.9,       // after a block, matching their attack TYPE counters
+  PARRY_WINDOW: 0.2,         // legacy directional modes, not a timed Chivalry RMB reward
+  COUNTER_WINDOW: 0.9,       // legacy directional modes; Chivalry uses pre-contact windows
   RIPOSTE_WINDOW: 1.0,       // after a block, any attack is a riposte
   FEINT_COST: 12,
   EXHAUST_LOCK: 1.1,         // no guard and no attacks while this runs
   STAGGER_TIME: 0.45,
   DODGE_TIME: 0.42,
+  DODGE_DISTANCE: 1.55,      // prototype displacement, not present in the ability table
   DODGE_IFRAMES: 0.26,
   FRONT_ARC: Math.PI * 0.55, // a block only covers this half-angle from facing
   GUARD_BREAK_STAGGER: 0.8,
@@ -121,6 +123,7 @@ export function phases(weapon, name) {
     feint: isNum(a.Feint) ? a.Feint : 0.175,
     damage: isNum(a.Damage) ? a.Damage : 0,
     stamina: isNum(a.StaminaCost) ? a.StaminaCost : 0,
+    cooldown: isNum(a.Cooldown) ? a.Cooldown : 0,
     turn: isNum(a.TurnLimitStrength) ? a.TurnLimitStrength : 45,
     turnV: isNum(a.VerticalTurnLimitStrength) ? a.VerticalTurnLimitStrength : 50,
     turnReverse: isNum(a.ReverseTurnLimitStrength) ? a.ReverseTurnLimitStrength : 50,
@@ -160,6 +163,8 @@ export class Fighter {
     this.turnAllowance = 0;        // degrees the turn limit still permits
     this.stats = { hits: 0, blocked: 0, parried: 0, countered: 0, feints: 0, kicks: 0, jabs: 0, disarmed: 0 };
     this.dodgeDir = 0;
+    this.cooldowns = Object.create(null);
+    this.dodgeMotion = null;
     this.alive = true;
   }
 
@@ -192,16 +197,20 @@ export class Fighter {
   startAttack(name, { alt = false, clock = 0, combo = false } = {}) {
     const ph = phases(this.weapon, name);
     if (!ph) return false;
-    if (!this.canStartAttack()) return false;
+    if (!this.canStartAttack() || clock < this.exhaustedUntil) return false;
+    if(this.stam < ph.stamina || clock < (this.cooldowns[name] ?? -99)) return false;
 
     /* HOLDING is skipped by a combo and replaced by their COMBO value, and a
      * riposte replaces the WINDUPP phase entirely rather than shortening it. */
     const chaining = combo || this.state === 'recovery' || this.state === 'thwack';
-    const riposting = clock < this.riposteUntil;
-    const counterAttempt = this.guard && !riposting && (!this.ruleset || this.ruleset==='chiv');
+    const defendable = ['slash','overhead','stab'].includes(TYPE_OF[name]);
+    const riposting = defendable && clock < this.riposteUntil;
+    const counterAttempt = defendable && this.guard && !riposting && (!this.ruleset || this.ruleset==='chiv');
     const hold = (counterAttempt || riposting) ? 0 : chaining ? (ph.combo ?? ph.hold) : ph.hold;
     const windup = riposting ? (ph.riposte ?? ph.windup) : ph.windup;
 
+    this.dodgeMotion = null;
+    this.cooldowns[name] = clock + ph.cooldown;
     this.attack = {
       id: ++SWING_SEQ,          // stable per swing: the viewmodel keys its arc off this
       name,
@@ -253,6 +262,7 @@ export class Fighter {
     if (!this.canFeint(clock)) return false;
     if (this.stam < CFG.FEINT_COST) return false;
     this.spendStam(CFG.FEINT_COST, clock);
+    this.cancelDefence();
     this.stats.feints++;
     this.attack = null;
     this.state = 'idle'; this.stateT = 0; this.stateDur = 0;
@@ -261,7 +271,10 @@ export class Fighter {
 
   feintTo(name,alt,clock) {
     if(!this.canFeint(clock) || this.attack.name===name && this.attack.alt===alt || this.stam<CFG.FEINT_COST)return false;
+    const ph=phases(this.weapon,name);
+    if(!ph || this.stam < CFG.FEINT_COST+ph.stamina || clock<(this.cooldowns[name]??-99))return false;
     const counter=this.attack.counterAttempt;
+    this.cancelDefence();
     this.spendStam(CFG.FEINT_COST,clock);this.stats.feints++;
     this.attack=null;this.state='idle';this.guard=counter;
     if(!this.startAttack(name,{alt,clock}))return false;
@@ -301,7 +314,13 @@ export class Fighter {
     this.stamSpentAt = clock;
   }
 
+  cancelDefence() {
+    this.activeParryUntil=-99;this.counterAttemptUntil=-99;
+    this.riposteUntil=-99;this.counterUntil=-99;
+  }
+
   stagger(seconds, clock) {
+    this.cancelDefence();this.dodgeMotion=null;
     this.attack = null;
     this.guard = false;
     this.state = 'stagger';
@@ -311,6 +330,7 @@ export class Fighter {
   }
 
   disarm(clock) {
+    this.cancelDefence();this.dodgeMotion=null;
     this.stats.disarmed++;
     this.attack = null;
     this.guard = false;
@@ -322,8 +342,13 @@ export class Fighter {
   }
 
   startDodge(dir, clock) {
-    if (!this.alive || this.busy) return false;
-    if (clock < this.exhaustedUntil) return false;
+    if (!this.alive || this.state!=='idle') return false;
+    const dash=phases(this.weapon,'Dash');
+    if(clock<this.exhaustedUntil || clock<(this.cooldowns.Dash??-99) || this.stam<(dash?.stamina??0))return false;
+    this.cancelDefence();
+    this.cooldowns.Dash=clock+(dash?.cooldown??0);
+    if(dash?.stamina)this.spendStam(dash.stamina,clock);
+    this.dodgeMotion={dir,start:clock,duration:CFG.DODGE_TIME,distance:CFG.DODGE_DISTANCE,applied:0,world:null};
     this.attack = null;
     this.guard = false;
     this.dodgeDir = dir;
@@ -334,7 +359,7 @@ export class Fighter {
   }
 
   inDodgeIFrames() {
-    return this.state === 'dodge' && this.stateT <= CFG.DODGE_IFRAMES;
+    return this.ruleset!=='chiv' && this.state === 'dodge' && this.stateT <= CFG.DODGE_IFRAMES;
   }
 
   /* The turn limit. THEIR RULE, not an invented multiplier: while the weapon is

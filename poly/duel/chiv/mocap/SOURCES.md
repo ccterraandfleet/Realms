@@ -26,3 +26,12 @@ The live duel now samples rendered blade paths throughout release, rather than a
 The behavioural reference for guard attacks, matching counters, ripostes, heavy commitment and attack-to-attack feints is the community guide “So You've Skipped the Tutorial”: https://steamcommunity.com/sharedfiles/filedetails/?id=2948723102 . This is a community reference, not official source code. The weapon phase and damage rows remain the existing community datatable import.
 
 Prototype values not established by the imported weapon table include capsule dimensions, guard drain, counter stamina refund, active-parry duration and the brief post-block defence lock. They remain tuning parameters, not a claim of exact Chivalry 2 numerical parity. Current world combat is still a duel prototype; a single attack cleaving several independently simulated combatants and production network reconciliation remain outside this release.
+
+
+## Physical dodge and action integrity
+
+The 2026-11-15 follow-up found that dodge previously changed a rules state without moving either body. Movement now runs on fixed combat steps, and dodge translates the same physical positions used for blade collision. Chivalry-mode dodge no longer grants invisible immunity when a blade actually contacts the body. Both combatants use the same movement contract.
+
+`Default.Dash.Cooldown = 1.0` and per-ability cooldowns come from the imported AbilitiesOverride rows. Paid abilities reject insufficient stamina instead of silently clamping it to zero. Dodge cannot restart itself or escape stagger. Cancelling or interrupting an attack clears its stale active-parry/riposte protection. Matching counters apply only to slash, overhead and stab types.
+
+The dodge distance (1.55 m), duration (0.42 s), and unspecified stamina values remain prototype parameters, not measured reference-game values. The import leaves Dash stamina unset. This correction closes reproducible control and state-integrity defects; it does not establish complete Chivalry numerical parity.
