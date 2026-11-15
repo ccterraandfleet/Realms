@@ -18,7 +18,7 @@
  * which is what a hand holding a blade actually does through a cut.
  * =========================================================================== */
 import * as THREE from 'three';
-import { BLADE_LOCAL } from './stances.js';
+import { BLADE_LOCAL } from './stances.js?v=motion-v4';
 
 /* our bone -> [source start joint, source end joint] */
 const MAP = [
@@ -26,15 +26,12 @@ const MAP = [
   ['spine',    'Spine',      'Spine1'],
   ['chest',    'Spine1',     'Spine2'],
   ['neck',     'Spine2',     'Neck'],
-  ['head',     'Neck',       'Head'],
-  ['clav.R',   'Spine2',     'RightShoulder'],
-  ['arm.R',    'RightShoulder', 'RightArm'],
-  ['fore.R',   'RightArm',   'RightForeArm'],
-  ['hand.R',   'RightForeArm', 'RightHand'],
-  ['clav.L',   'Spine2',     'LeftShoulder'],
-  ['arm.L',    'LeftShoulder', 'LeftArm'],
+  ['clav.R',   'RightShoulder', 'RightArm'],
+  ['arm.R',    'RightArm', 'RightForeArm'],
+  ['fore.R',   'RightForeArm', 'RightHand'],
+  ['clav.L',   'LeftShoulder', 'LeftArm'],
+  ['arm.L',    'LeftArm', 'LeftForeArm'],
   ['fore.L',   'LeftArm',    'LeftForeArm'],
-  ['hand.L',   'LeftForeArm', 'LeftHand'],
   ['thigh.R',  'RightUpLeg', 'RightLeg'],
   ['shin.R',   'RightLeg',   'RightFoot'],
   ['foot.R',   'RightFoot',  'RightToe'],
@@ -109,7 +106,9 @@ export function aimBone(rig, boneName, worldDir, rightWorld) {
 
 export function applyMocapFrame(rig, joints, opts = {}) {
   if (!rig || !joints) return rig;
-  const RIGHT = new THREE.Vector3(1, 0, 0);
+  rig.root.updateWorldMatrix(true, true);
+  const rootQ = rig.root.getWorldQuaternion(new THREE.Quaternion());
+  const RIGHT = new THREE.Vector3(1, 0, 0).applyQuaternion(rootQ);
   /* a mask lets mocap own the legs while the stance library owns the arms */
   const mask = opts.mask ? new Set(opts.mask) : null;
   const allow = (n) => !mask || mask.has(n);
@@ -123,31 +122,25 @@ export function applyMocapFrame(rig, joints, opts = {}) {
   }
   rig.root.updateMatrixWorld(true);
 
-  /* A FOOT HAS NO CHILD TO AIM AT IN THIS CAPTURE. LAFAN1's toe joint sits exactly on
-   * the ankle, so the ankle->toe vector is zero and setFromUnitVectors on a zero vector
-   * produced an arbitrary orientation: every man's feet pointed at nothing, the soles
-   * were never flat, and any foot-contact measurement was taken on garbage. When the
-   * direction is degenerate the foot is aimed forward and slightly down instead, which
-   * is what a foot does whether it is standing, stepping or swinging. */
+  // Real toes are retained by the corrected parser. Degenerate input still gets a safe fallback.
   const FWD = new THREE.Vector3(0, -0.12, 1).normalize();
-  const rootQ = rig.root ? rig.root.getWorldQuaternion(new THREE.Quaternion()) : null;
   for (const [our, a, b] of MAP) {
     if (!allow(our)) continue;
     const ja = joints[a], jb = joints[b];
     if (!ja || !jb) continue;
-    let dir = V(jb).sub(V(ja));
+    let dir = V(jb).sub(V(ja)).applyQuaternion(rootQ);
     if (dir.lengthSq() < 1e-8) {
       dir = rootQ ? FWD.clone().applyQuaternion(rootQ) : FWD.clone();
     }
     aim(rig, our, dir, RIGHT);
   }
 
-  /* the blade continues the forearm */
+  /* Captured/adapted weapon direction is explicit; older datasets can use the forearm. */
   const fore = rig.byName.get('fore.R'), hand = rig.byName.get('hand.R');
   if (fore && hand && allow('hand.R') && allow('fore.R')) {
     const fa = joints.RightForeArm, ha = joints.RightHand;
     if (fa && ha) {
-      const dir = V(ha).sub(V(fa)).normalize();
+      const dir = (joints.BladeDirection ? V(joints.BladeDirection) : V(ha).sub(V(fa))).normalize().applyQuaternion(rootQ);
       fore.updateMatrixWorld(true);
       const fq = fore.getWorldQuaternion(new THREE.Quaternion());
       const localDir = dir.clone().applyQuaternion(fq.clone().invert());
@@ -191,6 +184,7 @@ export class Locomotion {
    * to stick. Rate-matching against anything else is what makes feet skate. */
   naturalSpeed(name) {
     const c = this.d[name];
+    if (c && Number.isFinite(c.speed) && c.speed > 0) return c.speed;
     if (!c || !c.frames || c.frames.length < 4) return 1;
     const fr = c.frames, dt = 1 / (c.fps || 30);
     const feets = ['LeftToe', 'RightToe', 'LeftFoot', 'RightFoot'].filter((k) => fr[0][k]);

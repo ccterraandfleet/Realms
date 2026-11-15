@@ -737,6 +737,7 @@ function twistBone(rig, boneName, childName, angle) {
 }
 /* find the forearm roll that keeps the shield out of the chest */
 export function rollShieldClear(rig) {
+  if(rig.externalShield)return 0;
   const fl = rig.byName.get('fore.L');
   if (!fl) return 0;
   const base = fl.quaternion.clone();

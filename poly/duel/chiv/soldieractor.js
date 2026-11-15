@@ -1,36 +1,23 @@
-/* ===========================================================================
- * SOLDIER ACTOR — the purpose-built soldier standing in for the GLB rigs
- * ===========================================================================
- * The KayKit knight is one draw call but only until it is dressed: the forge kit
- * merges to ~34 draws on top, so a dressed man costs ~35. This soldier is 12 draws
- * and 6.5k triangles for a BETTER-looking figure, which is why it goes in the game
- * rather than staying a showroom page.
- *
- * Two things the GLB path had that this does not, and how they are covered:
- *  - no clips at all, so locomotion is generated from a phase number by animate();
- *  - no rigpose, so the sword arm is posed here straight from the core's own
- *    phaseInfo(), which is the same holding/windup/release/recovery clock the rules
- *    resolve hits on. The arm cannot drift out of step with the hitbox because both
- *    read the same phase.
- * =========================================================================== */
+/* Realms actor: captured combat layered after captured locomotion, plus grip and foot IK.
+ * Retarget vectors use the actor frame, not global axes. End-site offsets must never
+ * replace joint offsets. No head-height clamp: legitimate overhead guards remain valid.
+ */
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById } from './stances.js?v=20261114-ik2';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=20261115-mc7';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=motion-v4';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=motion-v4';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=motion-v4';
 
 let ATLAS = null;
 let LOCO = null;
 let locoLoading = false;
-/* CAPTURED STRIKES, cut out of the LAFAN1 fight capture: real people throwing real
- * punches and hooks. The arms were the last thing I was still authoring by hand, and
- * that is precisely what made our swings read as mechanical next to Chivalry's. */
+/* Combat motion: CMU subject 02 swordplay. Locomotion: corrected LAFAN1 import. */
 let SWINGS = null;
 let swingLoading = false;
 export function loadSwings() {
   if (SWINGS || swingLoading || typeof fetch !== 'function') return;
   swingLoading = true;
-  fetch('./mocap/swings.json')
+  fetch('./mocap/swings.json?v=motion-v4')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => {
       if (!j || !j.clips) return;
@@ -46,24 +33,14 @@ if (typeof window !== 'undefined') {
   window.__swingState = () => ({ loaded: !!SWINGS, keys: window.__swingKeys || null, uses: window.__swingUses || 0 });
 }
 
-/* CONTACT SITS AT 56.7% OF EVERY CLIP: the bake cut each window from 0.55 s before the
- * fastest hand speed to 0.42 s after it. Phase progress maps onto that anchor. */
-const CLIP_CONTACT = 0.567;
-/* THE CLAVICLES ARE NOT THE CAPTURE'S TO TURN. They were in this mask, and a clavicle
- * aimed along the capture's shoulder direction lifts the entire arm chain off the
- * shoulder and toward the skull - it is the joint that made every chamber read as arms
- * up by the ears. The torso and the arm below it are plenty for a readable cut. */
-const UPPER_MASK = ['spine', 'chest', 'neck', 'head', 'arm.R', 'fore.R', 'hand.R',
-                    'arm.L', 'fore.L', 'hand.L'];
-
-function clipTimeFor(phase, u) {
-  let a, b;
-  if (phase === 'holding') { a = 0.10; b = 0.34; }
-  else if (phase === 'windup') { a = 0.34; b = CLIP_CONTACT - 0.04; }
-  else if (phase === 'release') { a = CLIP_CONTACT - 0.04; b = CLIP_CONTACT + 0.20; }
-  else { a = CLIP_CONTACT + 0.20; b = 1.0; }
-  const p = phase === 'release' ? Math.pow(u, 0.72) : u;
-  return Math.max(0, Math.min(0.999, a + (b - a) * p));
+// Captured vectors are actor-local. Retarget into world space once, parent-first.
+const UPPER_MASK = ['spine','chest','neck','clav.R','arm.R','fore.R','hand.R'];
+const smooth = (u) => {u=Math.max(0,Math.min(1,u));return u*u*(3-2*u);};
+function clipTimeFor(phase,u) {
+  if(phase==='holding') return 0.08*smooth(u);
+  if(phase==='windup') return 0.08+0.22*u;
+  if(phase==='release') return 0.30+0.58*u;
+  return 0.88+0.12*u;
 }
 
 function swingFrameAt(clip, u) {
@@ -81,16 +58,24 @@ function swingFrameAt(clip, u) {
 
 /* which captured strike answers a given stance: read off its own id */
 function swingFor(stance) {
-  if (!SWINGS) return null;
-  const id = String((stance && stance.id) || 'Slash:Left');
-  const line = /Overhead/i.test(id) ? 'overhead' : /Stab/i.test(id) ? 'stab' : 'slash';
-  const hand = /Left/i.test(id) ? 'L' : 'R';
-  return SWINGS[line + ':' + hand] || SWINGS['slash:' + hand] || SWINGS['slash:R'] || null;
+  if(!SWINGS || !stance) return null;
+  const id=stance.id || '';
+  const kind=/Overhead/.test(id)?'overhead':/Stab/.test(id)?'stab':/Slash/.test(id)?'slash':null;
+  if(!kind) return null; // Kicks, jabs, and reactions must not masquerade as slashes.
+  return SWINGS[kind+':'+(kind==='slash' && /Left/.test(id)?'L':'R')] || null;
+}
+export function capturedMotion(attack,phase,u) {
+  if(!SWINGS) {loadSwings();return null;}
+  const clip=swingFor(stanceForAttack(attack)); if(!clip)return null;
+  let weight=1;
+  if(phase==='holding')weight=smooth(u);
+  if(phase==='recovery')weight=1-smooth((u-.15)/.85);
+  return {frame:swingFrameAt(clip,clipTimeFor(phase,u)),weight,clip:clip.name};
 }
 export function loadLocomotion() {
   if (LOCO || locoLoading || typeof fetch !== 'function') return;
   locoLoading = true;
-  fetch('./mocap/locomotion.json')
+  fetch('./mocap/locomotion.json?v=motion-v4')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => { if (j) { LOCO = new Locomotion(j); if (typeof window !== 'undefined') { window.__locoKeys = Object.keys(j); window.__locoTiersData = LOCO.tiers(); } } else if (typeof window !== 'undefined') window.__locoErr = 'fetch not ok'; })
     .catch((e) => { if (typeof window !== 'undefined') window.__locoErr = String(e); })
@@ -104,35 +89,14 @@ export async function initActors(loader) {
   if (!ATLAS) ATLAS = await new Atlas(loader).ready();
   if (!LOCO) {
     try {
-      const r = await fetch('./mocap/locomotion.json');
+      const r = await fetch('./mocap/locomotion.json?v=motion-v4');
       if (r.ok) LOCO = new Locomotion(await r.json());
     } catch (e) { LOCO = null; if (typeof window !== 'undefined') window.__locoErr = String(e); }
   }
+  loadSwings();
   return ATLAS;
 }
 export const actorsReady = () => !!ATLAS;
-
-/* Chamber and strike are authored per attack LINE. arm.R is [x,y,z] in radians,
- * fore.R is the elbow bend. A LEFT cut must chamber on his RIGHT and cross the body,
- * because a left attack is one where the blade travels right to left. */
-const LINE = {
-  Left: {
-    chamber: { arm: [-0.30, 0.52, -1.00], fore: [-1.32, 0, 0], chest: 0.34 },
-    strike:  { arm: [-0.95, -0.55, 0.82], fore: [-0.24, 0, 0], chest: -0.36 },
-  },
-  Right: {
-    chamber: { arm: [-0.66, -0.58, -0.28], fore: [-1.62, 0, 0], chest: -0.32 },
-    strike:  { arm: [-0.60, 0.58, 0.52], fore: [-0.24, 0, 0], chest: 0.36 },
-  },
-  Down: {
-    chamber: { arm: [-2.30, 0.10, -0.12], fore: [-1.30, 0, 0], chest: 0.14 },
-    strike:  { arm: [0.58, -0.05, -0.05], fore: [-0.12, 0, 0], chest: -0.14 },
-  },
-  T: {
-    chamber: { arm: [-0.84, 0.18, -0.26], fore: [-1.88, 0, 0], chest: 0.16 },
-    strike:  { arm: [-1.44, -0.10, -0.10], fore: [-0.10, 0, 0], chest: -0.12 },
-  },
-};
 
 export function lineOf(a) {
   if (!a) return 'Left';
@@ -146,6 +110,24 @@ export function lineOf(a) {
 
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+// Analytic two-bone leg IK: fix planted feet without stretching the skeleton.
+function placeFoot(rig,side,target,footWorldQ) {
+  const thigh=rig.byName.get('thigh.'+side),shin=rig.byName.get('shin.'+side),foot=rig.byName.get('foot.'+side);
+  const S=thigh.getWorldPosition(new THREE.Vector3());
+  const L1=shin.position.length(),L2=foot.position.length();
+  const dir=target.clone().sub(S);const distance=Math.max(Math.abs(L1-L2)+.001,Math.min(L1+L2-.001,dir.length()));dir.normalize();
+  const pole=new THREE.Vector3(side==='R'?.08:-.08,0,1).applyQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()));pole.addScaledVector(dir,-pole.dot(dir));
+  if(pole.lengthSq()<1e-8)pole.set(1,0,0);pole.normalize();
+  const along=(L1*L1+distance*distance-L2*L2)/(2*distance);
+  const E=S.clone().addScaledVector(dir,along).addScaledVector(pole,Math.sqrt(Math.max(0,L1*L1-along*along)));
+  const goal=S.clone().addScaledVector(dir,distance);
+  const pq=thigh.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  thigh.quaternion.setFromUnitVectors(shin.position.clone().normalize(),E.clone().sub(S).normalize().applyQuaternion(pq));thigh.updateMatrixWorld(true);
+  const tq=thigh.getWorldQuaternion(new THREE.Quaternion()).invert();
+  shin.quaternion.setFromUnitVectors(foot.position.clone().normalize(),goal.sub(E).normalize().applyQuaternion(tq));shin.updateMatrixWorld(true);
+  foot.quaternion.copy(shin.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(footWorldQ));foot.updateMatrixWorld(true);
+}
 
 export class Actor {
   constructor(opts = {}) {
@@ -164,9 +146,18 @@ export class Actor {
       const drop = new Set(opts.omitBones);
       parts = parts.filter((q) => !drop.has(q.bone));
     }
+    const shieldParts=parts.filter(p=>p.equipment==='shield');
+    parts=parts.filter(p=>p.equipment!=='shield');
+    this.rig.externalShield=true;
     const built = assemble(this.rig, parts);
     this.built = built;
     this.root = built.root;
+    if(shieldParts.length){
+      this.shield=new THREE.Group();
+      const center=new THREE.Vector3(-.160, opts.shield==='round'?1:.86, .335);
+      for(const p of shieldParts){const mesh=new THREE.Mesh(p.geo.clone().translate(-center.x,-center.y,-center.z),p.mat);this.shield.add(mesh);}
+      this.root.add(this.shield);
+    }
     /* a skinned mesh's bounding box is not its pose, so culling by it makes men
      * disappear the moment they swing. Same trap as the autoFit measurement. */
     this.root.traverse((n) => { if (n.isSkinnedMesh || n.isMesh) n.frustumCulled = false; });
@@ -209,160 +200,134 @@ export class Actor {
   static LOWER = ['hips', 'thigh.L', 'shin.L', 'foot.L', 'toe.L', 'thigh.R', 'shin.R', 'foot.R', 'toe.R'];
 
   update(dt, f, moving = 0) {
-    if (!f) return;
-    this.t += dt;
-    const dead = f.alive === false || f.state === 'dead';
-    const busy = !!f.attack;
-    const mode = dead ? 'dead' : busy ? 'stand' : (moving > 0.05 ? 'walk' : 'idle');
-    animate(this.rig, this.t, mode);
-    if (dead) return;
-    this.root.updateMatrixWorld(true);
-
-    /* The pose comes from the SAME stance library the review page shows, so the
-     * swings in the game are the IK-authored, spline-interpolated ones rather
-     * than a second set of numbers that drift. */
-    let pose = null, w = 0;
-    if (busy) {
-      const st = stanceForAttack(f.attack) || stanceById('Slash:Left');
-      const { phase, u } = f.phaseInfo ? f.phaseInfo() : { phase: 'release', u: 0 };
-      if (!SWINGS) loadSwings();
-      const clip = swingFor(st);
-      const fr = clip ? swingFrameAt(clip, clipTimeFor(phase, u)) : null;
-      if (fr) {
-        /* the strike is the whole upper body, so the stance library adds nothing */
-        applyMocapFrame(this.rig, fr, { mask: UPPER_MASK });
-        this.root.updateMatrixWorld(true);
-        if (typeof window !== 'undefined') window.__swingUses = (window.__swingUses || 0) + 1;
-        pose = null;
-        w = 0;
+    if(!f)return;
+    this.t+=dt;
+    this.root.updateWorldMatrix(true,true);
+    const wp=this.root.getWorldPosition(new THREE.Vector3());
+    const speed=this._lastWp?Math.min(9,wp.distanceTo(this._lastWp)/Math.max(dt,1e-4)):0;
+    this._lastWp=wp.clone();
+    const dead=f.alive===false || f.state==='dead';
+    animate(this.rig,this.t,dead?'dead':'stand');
+    if(dead){this._previous=null;this._footLocks={};if(this.shield){this.shield.position.set(-.28,.04,.30);this.shield.rotation.set(-Math.PI/2,0,.12);}return;}
+    // Base stance and locomotion are resolved BEFORE the upper-body capture.
+    applyPose(this.rig,GUARD_POSE,1);
+    if(!LOCO)loadLocomotion();
+    const lowerBase=new Map(Actor.LOWER.map(n=>[n,this.bone(n).quaternion.clone()]));
+    const baseHipY=this.bone('hips').position.y;
+    this._movingBlend=lerp(this._movingBlend||0,speed>.08?1:0,1-Math.exp(-dt*12));
+    this._contactFlags={L:false,R:false};
+    if(LOCO && speed>.08) {
+      const tiers=LOCO.tiers();let lo=tiers[0],hi=lo;
+      for(let i=1;i<tiers.length;i++){hi=tiers[i];if(speed<=hi.speed)break;lo=hi;}
+      const blend=lo===hi?0:clamp01((speed-lo.speed)/(hi.speed-lo.speed));
+      const strideLo=LOCO.d[lo.name].stride, strideHi=LOCO.d[hi.name].stride;
+      const stride=lerp(strideLo,strideHi,blend);
+      this._gait=(this._gait || 0)+dt*speed/Math.max(.1,stride);
+      const a=LOCO.sample(lo.name,this._gait*LOCO.d[lo.name].seconds);
+      const b=LOCO.sample(hi.name,this._gait*LOCO.d[hi.name].seconds);
+      const jt={};
+      for(const k of Object.keys(a))jt[k]=a[k].map((v,i)=>lerp(v,(b[k] || a[k])[i],blend));
+      const contacts={};this._previousToeZ=this._previousToeZ || {};
+      for(const side of ['L','R']){
+        const key=side==='L'?'LeftToe':'RightToe',z=jt[key][2];
+        contacts[side]=jt[key][1]<.065 && this._previousToeZ[side]!==undefined && z<this._previousToeZ[side]-1e-5;
+        this._previousToeZ[side]=z;
+      }
+      // Stepping follows movement relative to facing, including backpedals and strafes.
+      const velocity=wp.clone().sub(this._previousWp || wp);
+      const facing=this.root.getWorldQuaternion(new THREE.Quaternion()).invert();
+      velocity.applyQuaternion(facing);
+      const travelAngle=Math.atan2(velocity.x,velocity.z);
+      if(velocity.lengthSq()>1e-8) {
+        const c=Math.cos(travelAngle),s=Math.sin(travelAngle);
+        for(const k of Object.keys(jt))if(/Leg|Foot|Toe/.test(k)){
+          const v=jt[k],hx=jt.Hips[0],hz=jt.Hips[2];
+          const x=v[0]-hx,z=v[2]-hz;
+          // Keep hip spacing anatomical; rotate stride excursion, not the entire legs.
+          const restX=k.startsWith('Right')?.10:-.10;
+          v[0]=hx+restX+(x-restX)*c+z*s;v[2]=hz+z*c-(x-restX)*s;
+        }
+      }
+      applyMocapFrame(this.rig,jt,{mask:Actor.LOWER});
+      this._contactFlags=contacts;
+      this._motionLower=new Map(Actor.LOWER.map(n=>[n,this.bone(n).quaternion.clone()]));
+      this._motionHipY=this.bone('hips').position.y;
+      this._loco={spd:speed,clip:lo.name+'+'+hi.name,blend};
+      if(typeof window!=='undefined'){window.__loco=this._loco;window.__locoCalls=(window.__locoCalls||0)+1;}
+    }
+    if(this._motionLower) {
+      for(const [n,q] of lowerBase)this.bone(n).quaternion.copy(q).slerp(this._motionLower.get(n),this._movingBlend);
+      this.bone('hips').position.y=lerp(baseHipY,this._motionHipY,this._movingBlend);
+    }
+    this.root.updateWorldMatrix(true,true);
+    this._previousWp=wp.clone();
+    // Guard is a stable base for transitions, not an unrelated idle arm pose.
+    applyPose(this.rig,GUARD_POSE,1,{skip:Actor.LOWER});
+    const base=new Map(UPPER_MASK.map(n=>[n,this.bone(n).quaternion.clone()]));
+    let motion=null;
+    if(f.attack){
+      const info=f.phaseInfo?f.phaseInfo():{phase:'release',u:0};
+      motion=capturedMotion(f.attack,info.phase,info.u);
+      if(motion){
+        applyMocapFrame(this.rig,motion.frame,{mask:UPPER_MASK});
+        for(const [n,q] of base){const bone=this.bone(n),target=bone.quaternion.clone();bone.quaternion.copy(q).slerp(target,motion.weight);}
+        this.root.updateWorldMatrix(true,true);
+        if(typeof window!=='undefined')window.__swingUses=(window.__swingUses||0)+1;
       } else {
-        pose = poseAt(st, phase, u) || st.poses.chamber || GUARD_POSE;
-        w = 1;
-        if (phase === 'holding') w = clamp01(u / 0.5);
-        else if (phase === 'recovery') w = clamp01(1 - u * 0.85);
+        const st=stanceForAttack(f.attack);if(st)applyPose(this.rig,poseAt(st,info.phase,info.u),1,{skip:Actor.LOWER});
       }
-    } else {
-      pose = GUARD_POSE;
-      /* he carries a guard rather than standing with his arms down, but the
-       * weight drops while walking so the stride still reads */
-      w = (f.guard ? 0.85 : 0.5) * (moving > 0.05 ? 0.7 : 1);
+    } else if(f.state==='stagger' || f.state==='exhausted'){
+      const st=stanceById(f.state==='stagger'?'Stagger':'Fatigue');
+      if(st)applyPose(this.rig,poseAt(st,'hold',0),1,{skip:Actor.LOWER});
     }
-    /* LOCOMOTION comes from captured motion, legs only: the walk you see is a
-     * real person's walk, not my sine waves. It is masked to the lower body so
-     * the stance library still owns the torso and arms above it. */
-    /* the speed comes from the body itself, so this works for the squad, the
-     * opponent and anything else that owns an Actor without extra plumbing */
-    const wp = this.root.getWorldPosition(this._wp || (this._wp = new THREE.Vector3()));
-    if (!this._lastWp) this._lastWp = wp.clone();
-    const worldSpd = this._lastWp.distanceTo(wp) / Math.max(dt, 1e-4);
-    this._lastWp.copy(wp);
-    this._lastPos = this._lastPos || this.root.position.clone();
-    const localSpd = this._lastPos.distanceTo(this.root.position) / Math.max(dt, 1e-4);
-    this._lastPos.copy(this.root.position);
-    const spd = Math.max(localSpd, worldSpd);
-    if (!LOCO) loadLocomotion();
-    if (LOCO && (moving > 0.05 || spd > 0.25)) {
-      if (typeof window !== 'undefined') window.__locoCalls = (window.__locoCalls || 0) + 1;
-      const tier = LOCO.tiers();                    /* [{name, speed}] sorted slow to fast */
-      /* pick the pair that brackets the ground speed, blend between them, and play
-       * each at speed/natural so a planted foot does not skate */
-      let lo = tier[0], hi = tier[tier.length - 1];
-      for (let i = 0; i < tier.length - 1; i++) {
-        if (spd >= tier[i].speed && spd <= tier[i + 1].speed) { lo = tier[i]; hi = tier[i + 1]; break; }
-      }
-      if (spd > hi.speed) lo = hi;
-      if (spd < lo.speed) hi = lo;
-      const span = Math.max(0.15, hi.speed - lo.speed);
-      const blend = lo === hi ? 0 : Math.max(0, Math.min(1, (spd - lo.speed) / span));
-      const rateLo = Math.max(0.55, Math.min(1.75, spd / lo.speed));
-      const rateHi = Math.max(0.55, Math.min(1.75, spd / hi.speed));
-      this._phLo = (this._phLo === undefined ? Math.random() : this._phLo) + dt * rateLo;
-      this._phHi = (this._phHi === undefined ? this._phLo : this._phHi) + dt * rateHi;
-      let jt = null;
-      try {
-        const a1 = LOCO.sample(lo.name, this._phLo);
-        const a2 = lo === hi ? a1 : LOCO.sample(hi.name, this._phHi);
-        if (a1 && a2 && blend > 0.001) {
-          jt = {};
-          for (const k of Object.keys(a1)) {
-            const a = a1[k], b2 = a2[k] || a;
-            jt[k] = [a[0] + (b2[0] - a[0]) * blend, a[1] + (b2[1] - a[1]) * blend, a[2] + (b2[2] - a[2]) * blend];
-          }
-        } else jt = a1;
-      } catch (e) { if (typeof window !== 'undefined') window.__locoErr = String(e); LOCO = null; }
-      if (jt) {
-        applyMocapFrame(this.rig, jt, { mask: Actor.LOWER });
-        this._loco = { spd: +spd.toFixed(2), clip: lo === hi ? lo.name : lo.name + '+' + hi.name,
-          blend: +blend.toFixed(2), rate: +rateLo.toFixed(2), natural: +lo.speed.toFixed(2) };
-        if (typeof window !== 'undefined') window.__loco = this._loco;
-      }
+    // The off-hand carries a shield. It must not perform the source performer's two-hand sword grip.
+    solveArm(this.rig,'L',GUARD_POSE.ik.L);
+    rollShieldClear(this.rig);
+    // Frame-rate-independent transition damping, including interrupts and feints.
+    const alpha=1-Math.exp(-Math.max(0,dt)*32);
+    if(this._previous && !this.noSmoothing)for(const b of this.rig.bones){
+      if(Actor.LOWER.includes(b.name) || b.name==='root')continue;
+      const prev=this._previous.get(b.name);if(prev){const target=b.quaternion.clone();b.quaternion.copy(prev).slerp(target,alpha);}
     }
-    if (pose) applyPose(this.rig, pose, w, { skip: Actor.LOWER });
-    Actor.clampArmsBelowHead(this.rig);
-    this.root.updateMatrixWorld(true);
-  }
-
-  /* =========================================================================
-   * NO ARM ABOVE THE HEAD.
-   * The capture is boxing, and a boxing chamber lifts the whole arm chain until the
-   * elbow and the upper arm ride above the top of the skull - measured 0.105 m of upper
-   * arm and 0.116 m of forearm above the head mid-swing, against 0.05 m BELOW it at rest.
-   * On a rigid-skinned limb that reads as two sticks floating over a man's head, which is
-   * exactly what "their arms go over their head, like detached" describes.
-   * The capture keeps its arc; what it may not keep is the elevation. After the pose is
-   * applied, the shoulder and then the elbow are re-aimed so the limb stays at or below
-   * the crown, which carries the hand down with it because the chain is hierarchical.
-   * The margin is ELEVEN CENTIMETRES, not two: the clamp moves the JOINT and a limb has
-   * thickness, so a forearm joint parked exactly on the crown still shows its top surface
-   * above it. Measured with 0.02 the upper arm still cleared the skull by 0.078 m.
-   * ======================================================================= */
-  static clampArmsBelowHead(rig, margin = 0.12, handMargin = 0.18) {
-    const head = rig.byName.get('head');
-    if (!head) return;
-    const H = new THREE.Vector3(), S = new THREE.Vector3(), E = new THREE.Vector3();
-    const dir = new THREE.Vector3(), flat = new THREE.Vector3();
-    rig.root.updateMatrixWorld(true);
-    head.getWorldPosition(H);
-    const limit = H.y - margin;
-    const handLimit = H.y - handMargin;
-    for (const side of ['R', 'L']) {
-      const armB = rig.byName.get('arm.' + side), foreB = rig.byName.get('fore.' + side);
-      if (!armB || !foreB) continue;
-      /* the upper arm: pull the elbow down to the crown */
-      armB.getWorldPosition(S);
-      foreB.getWorldPosition(E);
-      const reach = Math.max(0.04, S.distanceTo(E));
-      if (E.y > limit) {
-        dir.subVectors(E, S).normalize();
-        const wantY = Math.max(-0.98, Math.min(0.98, (limit - S.y) / reach));
-        if (wantY < dir.y) {
-          flat.set(dir.x, 0, dir.z);
-          if (flat.lengthSq() < 1e-8) flat.set(0, 0, -1);
-          flat.normalize().multiplyScalar(Math.sqrt(Math.max(0, 1 - wantY * wantY)));
-          aimBone(rig, 'arm.' + side, new THREE.Vector3(flat.x, wantY, flat.z));
-          rig.root.updateMatrixWorld(true);
-          foreB.getWorldPosition(E);
-        }
+    this._previous=new Map(this.rig.bones.map(b=>[b.name,b.quaternion.clone()]));
+    this.root.updateWorldMatrix(true,true);
+    // Preserve flight phases, but never let a sole penetrate the ground.
+    const toes=['toe.L','toe.R'].map(n=>this.bone(n).getWorldPosition(new THREE.Vector3()).y);
+    const ground=this.root.getWorldPosition(new THREE.Vector3()).y;
+    const inContact=this._contactFlags.L || this._contactFlags.R;
+    const correction=ground+.032-Math.min(...toes);
+    this.bone('hips').position.y+=Math.max(inContact?-.10:0,Math.min(.12,correction));
+    this.root.updateWorldMatrix(true,true);
+    this._footLocks=this._footLocks || {};
+    for(const side of ['L','R']) {
+      const foot=this.bone('foot.'+side),toe=this.bone('toe.'+side),shin=this.bone('shin.'+side);
+      const F=foot.getWorldPosition(new THREE.Vector3()),T=toe.getWorldPosition(new THREE.Vector3());
+      const fq=foot.getWorldQuaternion(new THREE.Quaternion());
+      const contact=speed>.08 && this._movingBlend>.95 && this._contactFlags[side];
+      this._footRelease=this._footRelease || {};
+      if(!contact){
+        if(this._footLocks[side])this._footRelease[side]=this._footLocks[side].clone().sub(T);
+        delete this._footLocks[side];
       }
-      /* the forearm, in case the hand still sits above the crown */
-      const handB = rig.byName.get('hand.' + side);
-      if (!handB) continue;
-      const W = new THREE.Vector3();
-      handB.getWorldPosition(W);
-      if (W.y > handLimit) {
-        foreB.getWorldPosition(E);
-        const flen = Math.max(0.04, E.distanceTo(W));
-        dir.subVectors(W, E).normalize();
-        const wantY = Math.max(-0.98, Math.min(0.98, (handLimit - E.y) / flen));
-        if (wantY < dir.y) {
-          flat.set(dir.x, 0, dir.z);
-          if (flat.lengthSq() < 1e-8) flat.set(0, 0, -1);
-          flat.normalize().multiplyScalar(Math.sqrt(Math.max(0, 1 - wantY * wantY)));
-          aimBone(rig, 'fore.' + side, new THREE.Vector3(flat.x, wantY, flat.z));
-          rig.root.updateMatrixWorld(true);
-        }
-      }
+      else if(!this._footLocks[side])this._footLocks[side]=T.clone().setY(ground+.032);
+      const lock=this._footLocks[side];
+      const ankle=lock?lock.clone().add(F.clone().sub(T)):F;
+      if(!lock && this._footRelease[side]){this._footRelease[side].multiplyScalar(Math.exp(-dt*24));ankle.add(this._footRelease[side]);}
+      if(lock)delete this._footRelease[side];
+      // Keep knees bending forward during strafes/backpedals too.
+      if(speed>.08)placeFoot(this.rig,side,ankle,fq);
     }
+    this.root.updateWorldMatrix(true,true);
+    const finalLow=Math.min(...['toe.L','toe.R'].map(n=>this.bone(n).getWorldPosition(new THREE.Vector3()).y));
+    this.bone('hips').position.y+=Math.max(0,ground+.032-finalLow);
+    this.root.updateWorldMatrix(true,true);
+    if(this.shield){
+      const wrist=this.root.worldToLocal(this.bone('hand.L').getWorldPosition(new THREE.Vector3()));
+      const elbow=this.root.worldToLocal(this.bone('fore.L').getWorldPosition(new THREE.Vector3()));
+      this.shield.position.copy(wrist).lerp(elbow,.35).add(new THREE.Vector3(-.015,-.10,.105));
+      this.shield.rotation.set(-.05,-.16,.04);
+    }
+    this.built.skeleton.update();
   }
 
   /* used by the tests: where is the sword hand, and did it actually travel */

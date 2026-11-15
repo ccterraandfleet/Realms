@@ -366,6 +366,8 @@ export function buildSoldier(rig, mats, spec = {}) {
     parts.push({ geo: at(cyl(0.012, 0.013, 0.115, 8).translate(0, -0.005, 0)), mat: mats.leather, bone: 'hand.R' });
     parts.push({ geo: at(sph(0.019, 8, 6).translate(0, -0.085, 0)), mat: mats.brass, bone: 'hand.R' });
   }
+  /* shield pieces are tagged so actor equipment can use an explicit grip transform. */
+  const shieldStart=parts.length;
   /* shield on the left forearm */
   const sh = spec.shield || 'kite';
   /* 'none' has to mean none: the else branch below builds a SHIELD, so a spec of
@@ -386,6 +388,7 @@ export function buildSoldier(rig, mats, spec = {}) {
     parts.push({ geo: sph(0.040, 10, 8).translate(-0.160, 1.00, 0.360), mat: mats.steel, bone: 'fore.L' });
   }
 
+  for(let i=shieldStart;i<parts.length;i++)parts[i].equipment='shield';
   return parts;
 }
 
