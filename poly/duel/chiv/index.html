@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 05:42</div>
+  <div id="build">BUILD 2026-11-15 05:50</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -1264,7 +1264,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 05:42');
+console.log('REALMS KINGDOM BUILD 2026-11-15 05:50');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1412,7 +1412,7 @@ function sfxStep(gain = 0.16) {
 }
 
 /* ------------------------------------------------------------------ duel state */
-let duel = null, brain = null, styleKey = 'manatarms', round = 0, score = [0, 0], over = false;
+let duel = null, brain = null, styleKey = 'recruit', round = 0, score = [0, 0], over = false, manualStyle = false;
 /* the roster is now TEMPERAMENTS of opponent, not spell-style gimmicks */
 const ROSTER = Object.keys(TEMPERAMENTS);
 let realmYou = 'C.C. Terra & Fleet', realmFoe = 'House Corvane';
@@ -1470,6 +1470,9 @@ function attackFromClick(kind) {
  * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
 const FX = { blood: 0, spark: 0, hits: 0, kills: 0, maxShake: 0, maxStop: 0 };
+window.__match = () => ({ round, score: [...score], styleKey, over,
+  dots: [...document.querySelectorAll('#dots i')].map((d) => d.className || '-'),
+  msg: (document.getElementById('msg') || {}).textContent || '' });
 window.__fx = () => ({ ...FX });
 /* motion weight state: the weapon is attached to a body, not to the lens */
 let lookYawVel = 0, lookPitchVel = 0;
@@ -1609,6 +1612,7 @@ let foePrev = 'idle', lastCalloutId = null;
 let foeHold = { key: null, raised: 0, dur: 0, act: null };
 
 function newRound() {
+  if (!manualStyle) styleKey = ROSTER[Math.min(round, ROSTER.length - 1)];
   /* a Duel is two Fighters plus the clock, never an empty shell */
   duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60, style: LAB.style });
   // a fresh duel starts with both fighters at full health and stamina
@@ -1617,6 +1621,8 @@ function newRound() {
   over = false;
   if (foeActions.idle) { foeActions.idle.reset().play(); }
   updateDots();
+  const lbl = (TEMPERAMENTS[styleKey] && TEMPERAMENTS[styleKey].label) || styleKey;
+  say('ROUND ' + (round + 1) + '  ·  ' + lbl, 1400);
 }
 function updateDots() {
   /* THERE ARE ONLY FIVE DOTS. This used to loop up to the raw score, so once the tally
@@ -1689,6 +1695,7 @@ addEventListener('keydown', (e) => {
   if (k === ' ') pendingDodge = keys['a'] ? 'left' : keys['d'] ? 'right' : 'back';
   if (k === 'r' && over) { score = [0, 0]; round = 0; newRound(); }
   if (k >= '1' && k <= '4') {
+    manualStyle = true;
     styleKey = ROSTER[Number(k) - 1] || styleKey;
     score = [0, 0]; newRound();
     say('OPPONENT: ' + (TEMPERAMENTS[styleKey]?.label || styleKey));
@@ -1987,7 +1994,7 @@ function tick(dt) {
       parryFlash = 1; say('PARRY'); sfxClang(0.5 * dg, 1.32);
       burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.35, 0)));
     }
-    if (e.type === 'block') { camShake = Math.max(camShake, 0.16); sfxClang(0.34 * dg, 1);
+    if (e.type === 'block') { camShake = Math.max(camShake, 0.26); sfxClang(0.4 * dg, 1);
       burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.3, 0))); }
     /* their two signature answers, named the way the game names them */
     if (e.type === 'counter') { say('COUNTER', 800); parryFlash = Math.max(parryFlash, 0.55); sfxClang(0.42 * dg, 1.18); }
@@ -2012,8 +2019,9 @@ function tick(dt) {
       sfxThud(0.72 * dg); sfxGrunt(0.3);
       const winner = e.who === foe.id ? 0 : 1;
       score[winner]++;
+      round++;
       updateDots();
-      over = score[0] >= 2 || score[1] >= 2;
+      over = score[0] >= 3 || score[1] >= 3;
       say(winner === 0 ? 'THE FIELD IS YOURS' : 'YOU ARE DOWN', 1600);
       if (foeActions.death) playFoe('death', { timeScale: 1 });
       setTimeout(() => {

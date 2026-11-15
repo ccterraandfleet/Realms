@@ -149,7 +149,7 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
    * so it is a habit rather than a wall, and never while a parry is being set up */
   if (!inDanger && !self.busy && dist <= myReach + 0.4 && clock >= (brain.nextPosture || 0)) {
     brain.nextPosture = clock + 0.4 + rng() * 0.45;
-    brain.posture = rng() < Math.min(0.8, guardChance * 0.8);
+    brain.posture = rng() < Math.min(0.92, (1 - brain.reaction) * guardChance * 1.15);
   }
   if (!inDanger && !self.busy && brain.posture && self.stam > 25
       && clock >= (brain.postureAfter || 0) && !(foe.guard && rng() < 0.7)) guard = true;
@@ -176,7 +176,8 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
   else brain.foeGuardSince = 0;
   if (foe.guard && !self.busy && dist <= myReach + 0.15) {
     const held = clock - (brain.foeGuardSince || clock);
-    if (held > 0.12 && clock >= (brain.nextKickAt || 0) && rng() < 0.25 + brain.aggression * 0.6) {
+    const skill = 1 - brain.reaction;
+    if (held > 0.12 && clock >= (brain.nextKickAt || 0) && rng() < 0.1 + skill * 0.9) {
       brain.nextKickAt = clock + 0.6;
       out.attack = rng() < 0.6 ? 'KickLow' : 'Shove';
       out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
@@ -195,7 +196,7 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
    * This is the answer to a man winding up in your face. ---- */
   const hasJab = !!ability(brain.weapon, 'Jab');
   if (hasJab && fAtk && foe.state === 'holding' && !self.busy && dist <= myReach
-      && clock >= (brain.nextJabAt || 0) && rng() < 0.15 + brain.aggression * 0.5) {
+      && clock >= (brain.nextJabAt || 0) && rng() < 0.1 + (1 - brain.reaction) * 0.7) {
     out.attack = 'Jab';
     brain.nextJabAt = clock + 1.1;
     out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
@@ -210,7 +211,9 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
     const r2 = rng();
     /* a man behind his shield gets KICKED, because a guard cannot stop a kick and
      * a slash is simply re-blocked the moment his recovery ends */
-    out.attack = foe.guard ? 'KickLow' : (r2 < 0.5 ? 'Slash' : r2 < 0.8 ? 'Overhead' : 'Stab');
+    out.attack = foe.guard ? 'KickLow'
+      : (rng() < 0.15 + (1 - brain.reaction) * 0.5 ? (r2 < 0.5 ? 'OverheadHeavy' : 'SlashHeavy')
+        : (r2 < 0.5 ? 'Slash' : r2 < 0.8 ? 'Overhead' : 'Stab'));
     out.alt = rng() < 0.5;
     out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
   }
@@ -239,17 +242,28 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
   if (!self.busy && clock >= brain.nextDecision) {
     brain.nextDecision = clock + 0.18 + rng() * 0.35;
     const guardHeld = foe.guard && brain.foeGuardSince && clock - brain.foeGuardSince > 0.12;
-    if (dist <= myReach * 0.98 && rng() < brain.aggression && foe.state !== 'release' && !guardHeld) {
+    /* never swing into a man who is winding up or already live: that is a trade,
+     * and a trade is a coin flip that a passive bot wins by simply not playing */
+    const foeCanAnswer = foe.state === 'windup' || foe.state === 'release';
+    if (dist <= myReach * 0.98 && rng() < 0.38 + brain.aggression * 0.45
+        && !foeCanAnswer && !guardHeld) {
       const roll = rng();
+      const openMan = !foe.guard && foe.state !== 'windup' && dist <= myReach * 0.82;
+      const heavyBias = openMan ? 0.10 + (1 - brain.reaction) * 0.55 : 0.04;
       let name;
-      if (roll < 0.46) name = 'Slash';
-      else if (roll < 0.72) name = 'Overhead';
-      else if (roll < 0.94) name = 'Stab';
+      if (roll < heavyBias) name = rng() < 0.5 ? 'SlashHeavy' : 'OverheadHeavy';
+      else if (roll < heavyBias + 0.3) name = 'Slash';
+      else if (roll < heavyBias + 0.52) name = 'Overhead';
+      else if (roll < heavyBias + 0.76) name = 'Stab';
       else name = 'Special';
       out.attack = name;
       out.alt = rng() < 0.5;
       brain.lastAttackName = name;
       brain.feintedThis = false;
+      if (self.stats && self.stats.hits > (brain.lastHitsSeen || 0)) { brain.lastHitsSeen = self.stats.hits; }
+      if (clock - (brain.lastHitLandedAt || -9) < 0.4 && rng() < 1 - brain.reaction) {
+        brain.nextDecision = clock;   /* follow the hit up before he resets */
+      }
       /* a feint is a second input inside the chamber, which is how the game does it */
       if (rng() < brain.feintChance) brain.wantFeintAt = clock + 0.12 + rng() * 0.1;
     }
