@@ -22,6 +22,67 @@ import { applyMocapFrame, Locomotion } from './mocap.js?v=20261114-mc3';
 let ATLAS = null;
 let LOCO = null;
 let locoLoading = false;
+/* CAPTURED STRIKES, cut out of the LAFAN1 fight capture: real people throwing real
+ * punches and hooks. The arms were the last thing I was still authoring by hand, and
+ * that is precisely what made our swings read as mechanical next to Chivalry's. */
+let SWINGS = null;
+let swingLoading = false;
+export function loadSwings() {
+  if (SWINGS || swingLoading || typeof fetch !== 'function') return;
+  swingLoading = true;
+  fetch('./mocap/swings.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (!j || !j.clips) return;
+      const by = {};
+      for (const c of j.clips) { const k = c.kind + ':' + c.hand; if (!by[k]) by[k] = c; }
+      SWINGS = by;
+      if (typeof window !== 'undefined') window.__swingKeys = Object.keys(by);
+    })
+    .catch((e) => { if (typeof window !== 'undefined') window.__swingErr = String(e); })
+    .finally(() => { swingLoading = false; });
+}
+if (typeof window !== 'undefined') {
+  window.__swingState = () => ({ loaded: !!SWINGS, keys: window.__swingKeys || null, uses: window.__swingUses || 0 });
+}
+
+/* CONTACT SITS AT 56.7% OF EVERY CLIP: the bake cut each window from 0.55 s before the
+ * fastest hand speed to 0.42 s after it. Phase progress maps onto that anchor. */
+const CLIP_CONTACT = 0.567;
+const UPPER_MASK = ['spine', 'chest', 'neck', 'head', 'clav.R', 'arm.R', 'fore.R', 'hand.R',
+                    'clav.L', 'arm.L', 'fore.L', 'hand.L'];
+
+function clipTimeFor(phase, u) {
+  let a, b;
+  if (phase === 'holding') { a = 0.10; b = 0.34; }
+  else if (phase === 'windup') { a = 0.34; b = CLIP_CONTACT - 0.04; }
+  else if (phase === 'release') { a = CLIP_CONTACT - 0.04; b = CLIP_CONTACT + 0.20; }
+  else { a = CLIP_CONTACT + 0.20; b = 1.0; }
+  const p = phase === 'release' ? Math.pow(u, 0.72) : u;
+  return Math.max(0, Math.min(0.999, a + (b - a) * p));
+}
+
+function swingFrameAt(clip, u) {
+  if (!clip || !clip.frames || !clip.frames.length) return null;
+  const f = u * (clip.frames.length - 1);
+  const i0 = Math.floor(f), i1 = Math.min(clip.frames.length - 1, i0 + 1), t = f - i0;
+  const A = clip.frames[i0], B = clip.frames[i1];
+  const out = {};
+  for (const k of Object.keys(A)) {
+    const p = A[k], q = B[k] || p;
+    out[k] = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t, p[2] + (q[2] - p[2]) * t];
+  }
+  return out;
+}
+
+/* which captured strike answers a given stance: read off its own id */
+function swingFor(stance) {
+  if (!SWINGS) return null;
+  const id = String((stance && stance.id) || 'Slash:Left');
+  const line = /Overhead/i.test(id) ? 'overhead' : /Stab/i.test(id) ? 'stab' : 'slash';
+  const hand = /Left/i.test(id) ? 'L' : 'R';
+  return SWINGS[line + ':' + hand] || SWINGS['slash:' + hand] || SWINGS['slash:R'] || null;
+}
 export function loadLocomotion() {
   if (LOCO || locoLoading || typeof fetch !== 'function') return;
   locoLoading = true;
@@ -150,10 +211,22 @@ export class Actor {
     if (busy) {
       const st = stanceForAttack(f.attack) || stanceById('Slash:Left');
       const { phase, u } = f.phaseInfo ? f.phaseInfo() : { phase: 'release', u: 0 };
-      pose = poseAt(st, phase, u) || st.poses.chamber || GUARD_POSE;
-      w = 1;
-      if (phase === 'holding') w = clamp01(u / 0.5);
-      else if (phase === 'recovery') w = clamp01(1 - u * 0.85);
+      if (!SWINGS) loadSwings();
+      const clip = swingFor(st);
+      const fr = clip ? swingFrameAt(clip, clipTimeFor(phase, u)) : null;
+      if (fr) {
+        /* the strike is the whole upper body, so the stance library adds nothing */
+        applyMocapFrame(this.rig, fr, { mask: UPPER_MASK });
+        this.root.updateMatrixWorld(true);
+        if (typeof window !== 'undefined') window.__swingUses = (window.__swingUses || 0) + 1;
+        pose = null;
+        w = 0;
+      } else {
+        pose = poseAt(st, phase, u) || st.poses.chamber || GUARD_POSE;
+        w = 1;
+        if (phase === 'holding') w = clamp01(u / 0.5);
+        else if (phase === 'recovery') w = clamp01(1 - u * 0.85);
+      }
     } else {
       pose = GUARD_POSE;
       /* he carries a guard rather than standing with his arms down, but the
