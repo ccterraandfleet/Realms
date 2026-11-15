@@ -18,7 +18,7 @@
  * which is what a hand holding a blade actually does through a cut.
  * =========================================================================== */
 import * as THREE from 'three';
-import { BLADE_LOCAL } from './stances.js?v=motion-v5';
+import { BLADE_LOCAL } from './stances.js?v=exchange-v1';
 
 /* our bone -> [source start joint, source end joint] */
 const MAP = [
@@ -142,6 +142,11 @@ export function applyMocapFrame(rig, joints, opts = {}) {
     if (fa && ha) {
       const dir = (joints.BladeDirection ? V(joints.BladeDirection) : V(ha).sub(V(fa))).normalize().applyQuaternion(rootQ);
       fore.updateMatrixWorld(true);
+      if(joints.AimTarget && joints.AimWeight>0){
+        const target=rig.root.localToWorld(V(joints.AimTarget));
+        const actualHand=hand.getWorldPosition(new THREE.Vector3());
+        dir.lerp(target.sub(actualHand).normalize(),joints.AimWeight).normalize();
+      }
       const fq = fore.getWorldQuaternion(new THREE.Quaternion());
       const localDir = dir.clone().applyQuaternion(fq.clone().invert());
       hand.quaternion.copy(new THREE.Quaternion().setFromUnitVectors(BLADE_LOCAL, localDir));

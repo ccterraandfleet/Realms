@@ -1,5 +1,4 @@
-import { zoneOf } from './chiv.styles.js';
-import { ability } from './chiv.core.js';
+import { zoneOf } from './chiv.styles.js?v=exchange-v1';
 /* ===========================================================================
  * A CHIVALRY OPPONENT FOR THE DATA-DRIVEN CORE
  * ===========================================================================
@@ -45,8 +44,6 @@ export function makeChivBrain(weapon = 'Longsword', temperament = 'manatarms', s
     planUntil: 0,
     feintedThis: false,
     lastAttackName: null,
-    foeSwingTimes: [], foeGuardSince: 0,
-    nextJabAt: 0, nextPunish: 0, nextKickAt: 0, nextBaitAt: 0,
   };
 }
 
@@ -57,6 +54,7 @@ const ATTACKS_BY_TYPE = {
 };
 
 export function chivThink(brain, self, foe, dist, clock, dt, style) {
+  if(style?.id==='chiv' && self && foe)return chivExchange(brain,self,foe,dist,clock,dt);
   const out = {};
   if (!self || !foe) return out;
   const rng = brain.rng;
@@ -69,13 +67,10 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
     brain.seenAttack = fAtk;
     brain.reactAt = clock + brain.reaction * (0.75 + rng() * 0.5);
     brain.incomingType = fAtk.type;
-    brain.foeSwingTimes = (brain.foeSwingTimes || []).filter((t) => clock - t < 1.6).concat(clock);
   }
   if (!fAtk) brain.seenAttack = null;
 
   const inDanger = fAtk && (foe.state === 'windup' || foe.state === 'release');
-  const spammy = (brain.foeSwingTimes || []).length >= 3;   /* 3 swings inside 1.6s */
-  const guardChance = spammy ? Math.min(1, brain.guardChance + 0.3) : brain.guardChance;
   const myReach = 2.25 + (brain.weapon === 'Spear' ? 0.75 : brain.weapon === 'Dagger' ? -0.75 : 0);
 
   /* ---- DEFEND. A guard raised inside the parry window is worth far more than a
@@ -84,17 +79,13 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
   if (inDanger && brain.stanceFor !== fAtk) {
     brain.stanceFor = fAtk;
     const r = rng();
-    brain.stance = r < guardChance * 0.5 ? 'hold' : r < guardChance ? 'parry' : 'eat';
+    brain.stance = r < brain.guardChance * 0.5 ? 'hold' : r < brain.guardChance ? 'parry' : 'eat';
   }
   if (inDanger && clock >= brain.reactAt) {
     const u = foe.stateDur > 0 ? foe.stateT / foe.stateDur : 1;
     const nearlyHome = foe.state === 'release' ? u > 0.15 : u > 0.55;
     if (brain.stance === 'hold') guard = true;
     else if (brain.stance === 'parry' && nearlyHome) guard = true;
-    else if (brain.stance === 'eat' && nearlyHome && !self.busy && rng() < 0.55) {
-      out.dodge = rng() < 0.5 ? -1 : 1;     /* footwork beats eating it */
-      return out;
-    }
   }
 
   /* ---- THE READ, for the directional styles ----
@@ -131,7 +122,6 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
     out.attack = name;
     out.alt = rng() < 0.5;
     brain.usedCounterAt = clock;      // remembered HERE, not by clearing the fighter's window
-    brain.postureAfter = clock + 0.5; brain.posture = false;
     return out;
   }
 
@@ -141,81 +131,7 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
     out.attack = pick(rng, ['Slash', 'Overhead', 'Stab']);
     out.alt = rng() < 0.5;
     brain.usedRiposteAt = clock;
-    brain.postureAfter = clock + 0.5; brain.posture = false;
     return out;
-  }
-
-  /* keep a guard up while in range and uncommitted, re-rolled on its own cadence
-   * so it is a habit rather than a wall, and never while a parry is being set up */
-  if (!inDanger && !self.busy && dist <= myReach + 0.4 && clock >= (brain.nextPosture || 0)) {
-    brain.nextPosture = clock + 0.4 + rng() * 0.45;
-    brain.posture = rng() < Math.min(0.92, (1 - brain.reaction) * guardChance * 1.15);
-  }
-  if (!inDanger && !self.busy && brain.posture && self.stam > 25
-      && clock >= (brain.postureAfter || 0) && !(foe.guard && rng() < 0.7)) guard = true;
-
-  /* DEFENCE WINS THE FRAME. Measured without this: block:0 parry:0 against a
-   * spammer, because every new tactic below returned before the guard was set. */
-  if (inDanger && !self.busy && clock >= brain.reactAt) {
-    if (guard) {
-      out.guard = true;
-      if (stanceOut) out.stance = stanceOut;
-      return out;
-    }
-    /* the read failed: give ground instead of trading into the blade */
-    out.move = -1;
-    out.guard = self.stam > 6;
-    return out;
-  }
-  /* and never begin a swing while his is already live */
-  if (inDanger && self.busy === 0 && foe.state === 'release') return out;
-
-  /* ---- BREAK THE TURTLE. A held guard falls to exactly two things in their
-   * game: a kick that rips it off him, or a feint he presses into. ---- */
-  if (foe.guard) { if (!brain.foeGuardSince) brain.foeGuardSince = clock; }
-  else brain.foeGuardSince = 0;
-  if (foe.guard && !self.busy && dist <= myReach + 0.15) {
-    const held = clock - (brain.foeGuardSince || clock);
-    const skill = 1 - brain.reaction;
-    if (held > 0.12 && clock >= (brain.nextKickAt || 0) && rng() < 0.1 + skill * 0.9) {
-      brain.nextKickAt = clock + 0.6;
-      out.attack = rng() < 0.6 ? 'KickLow' : 'Shove';
-      out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
-    }
-    if (held > 0.3 && clock >= (brain.nextBaitAt || 0) && rng() < 0.6) {
-      brain.nextBaitAt = clock + 1.1;
-      out.attack = 'Overhead';
-      out.alt = rng() < 0.5;
-      brain.wantFeintAt = clock + 0.1 + rng() * 0.07;
-      brain.feintedThis = false;
-      out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
-    }
-  }
-
-  /* ---- THE JAB. Their rule for a swing that is already coming: it interrupts it.
-   * This is the answer to a man winding up in your face. ---- */
-  const hasJab = !!ability(brain.weapon, 'Jab');
-  if (hasJab && fAtk && foe.state === 'holding' && !self.busy && dist <= myReach
-      && clock >= (brain.nextJabAt || 0) && rng() < 0.1 + (1 - brain.reaction) * 0.7) {
-    out.attack = 'Jab';
-    brain.nextJabAt = clock + 1.1;
-    out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
-  }
-
-  /* ---- TEMPO. A man in recovery cannot defend, so the punish is to hit him
-   * NOW. This is the single thing that makes an opponent feel dangerous. ---- */
-  if ((foe.state === 'recovery' || foe.state === 'thwack') && !self.busy && dist <= myReach
-      && foe.stateT < (foe.stateDur || 0) * 0.8 && clock >= (brain.nextPunish || 0)
-      && rng() < 0.35 + (1 - brain.reaction) * 0.75) {
-    brain.nextPunish = clock + 0.3;
-    const r2 = rng();
-    /* a man behind his shield gets KICKED, because a guard cannot stop a kick and
-     * a slash is simply re-blocked the moment his recovery ends */
-    out.attack = foe.guard ? 'KickLow'
-      : (rng() < 0.15 + (1 - brain.reaction) * 0.5 ? (r2 < 0.5 ? 'OverheadHeavy' : 'SlashHeavy')
-        : (r2 < 0.5 ? 'Slash' : r2 < 0.8 ? 'Overhead' : 'Stab'));
-    out.alt = rng() < 0.5;
-    out.guard = guard; if (stanceOut) out.stance = stanceOut; return out;
   }
 
   /* ---- the guard-break: if he is just sitting on his block, kick it off him ---- */
@@ -241,29 +157,17 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
   /* ---- ATTACK. Decided on a cadence, not every frame, so it commits. ---- */
   if (!self.busy && clock >= brain.nextDecision) {
     brain.nextDecision = clock + 0.18 + rng() * 0.35;
-    const guardHeld = foe.guard && brain.foeGuardSince && clock - brain.foeGuardSince > 0.12;
-    /* never swing into a man who is winding up or already live: that is a trade,
-     * and a trade is a coin flip that a passive bot wins by simply not playing */
-    const foeCanAnswer = foe.state === 'windup' || foe.state === 'release';
-    if (dist <= myReach * 0.98 && rng() < 0.38 + brain.aggression * 0.45
-        && !foeCanAnswer && !guardHeld) {
+    if (dist <= myReach * 0.98 && rng() < brain.aggression) {
       const roll = rng();
-      const openMan = !foe.guard && foe.state !== 'windup' && dist <= myReach * 0.82;
-      const heavyBias = openMan ? 0.10 + (1 - brain.reaction) * 0.55 : 0.04;
       let name;
-      if (roll < heavyBias) name = rng() < 0.5 ? 'SlashHeavy' : 'OverheadHeavy';
-      else if (roll < heavyBias + 0.3) name = 'Slash';
-      else if (roll < heavyBias + 0.52) name = 'Overhead';
-      else if (roll < heavyBias + 0.76) name = 'Stab';
+      if (roll < 0.46) name = 'Slash';
+      else if (roll < 0.72) name = 'Overhead';
+      else if (roll < 0.94) name = 'Stab';
       else name = 'Special';
       out.attack = name;
       out.alt = rng() < 0.5;
       brain.lastAttackName = name;
       brain.feintedThis = false;
-      if (self.stats && self.stats.hits > (brain.lastHitsSeen || 0)) { brain.lastHitsSeen = self.stats.hits; }
-      if (clock - (brain.lastHitLandedAt || -9) < 0.4 && rng() < 1 - brain.reaction) {
-        brain.nextDecision = clock;   /* follow the hit up before he resets */
-      }
       /* a feint is a second input inside the chamber, which is how the game does it */
       if (rng() < brain.feintChance) brain.wantFeintAt = clock + 0.12 + rng() * 0.1;
     }
@@ -284,4 +188,42 @@ export function chivThink(brain, self, foe, dist, clock, dt, style) {
 
   out.guard = guard;
   return out;
+}
+
+// Chivalry exchange policy: read the telegraph, intercept before contact, then answer.
+// Never changes a Fighter's state or resources. Both sides use the same public inputs.
+function chivExchange(brain,self,foe,dist,clock,dt){
+ const out={guard:false},rng=brain.rng,a=foe.attack;
+ if(!self.alive)return out;
+ const readable=a&&['holding','windup','release'].includes(foe.state)&&!a.resolved;
+ if(readable && brain.observedId!==a.id){
+  brain.observedId=a.id;brain.reactAt=clock+brain.reaction*(.85+rng()*.3);
+  const skill=Math.max(0,Math.min(1,(.45-brain.reaction)/.32));
+  brain.tryCounter=rng()<(.10+skill*.65);brain.readCorrect=rng()<(.55+skill*.42);brain.willGuard=rng()<brain.guardChance;
+ }
+ if(readable){
+  if(clock<brain.reactAt)return {guard:self.guard};
+  if(a.type==='kick')return {guard:false,move:-.5};
+  const contactPhase=a.type==='stab'?.03:a.type==='overhead'?.22:a.dir==='Right'?.30:.16;
+  const eta=(foe.state==='holding'?Math.max(0,foe.stateDur-foe.stateT)+a.windup:foe.state==='windup'?Math.max(0,foe.stateDur-foe.stateT):0)+(foe.state==='release'?a.release*contactPhase-foe.stateT:a.release*contactPhase);
+  if(brain.tryCounter && self.canStartAttack() && dist<1.8 && eta>.01 && eta<.18){
+   const type=brain.readCorrect?a.type:['slash','overhead','stab'].find(x=>x!==a.type);
+   const name={slash:'Slash',overhead:'Overhead',stab:'Stab'}[type];
+   if(name){brain.tryCounter=false;return {guard:true,attack:name,alt:rng()<.5};}
+  }
+  if(brain.willGuard && self.canRaiseGuard(clock))out.guard=true;
+  // A committed counter may be changed to follow a visible feint, but never before reaction.
+  if(self.attack?.counterAttempt && self.attack.type!==a.type && brain.readCorrect && self.canFeint(clock))out.attack={slash:'Slash',overhead:'Overhead',stab:'Stab'}[a.type];
+  return out;
+ }
+ if(self.attack && self.state==='holding' && self.stateT>.12 && brain.feintFor!==self.attack.id && !/Heavy$/.test(self.attack.name)){brain.feintFor=self.attack.id;if(rng()<brain.feintChance)return{attack:['Slash','Overhead','Stab'].find(n=>n!==self.attack.name)};}
+ if(self.busy && !['recovery','thwack'].includes(self.state))return out;
+ if(clock<self.riposteUntil && clock-self.lastBlockedAt>brain.reaction*.35){return {attack:['Slash','Overhead','Stab'][Math.floor(rng()*3)],alt:rng()<.5,guard:false};}
+ if(clock<(brain.nextDecision||0))return {guard:self.guard};
+ brain.nextDecision=clock+.12+brain.reaction*.5+rng()*.18;
+ if(dist>1.65)return out;
+ if(foe.guard && clock-foe.guardUpAt>.28 && dist<1.13 && rng()<brain.kickChance+.2)return {attack:'KickLow'};
+ if(rng()>brain.aggression)return {guard:rng()<brain.guardChance*.32};
+ const name=['Slash','Overhead','Stab'][Math.floor(rng()*3)];
+ return {attack:name,alt:rng()<.5,guard:false,combo:self.state==='recovery'||self.state==='thwack'};
 }

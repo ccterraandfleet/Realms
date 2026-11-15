@@ -4,7 +4,7 @@
 <header><strong>REALMS · captured combat review</strong><select id="attack"><option value="Slash:Left">Left cut</option><option value="Slash:Right">Right cut</option><option value="Overhead:Down">Overhead</option><option value="Stab:None">Thrust</option></select><button id="play">Pause</button><input id="time" type="range" min="0" max="1" step="0.001" value="0"><span id="phase"></span></header><div id="view"></div><footer>Front · quarter · side · rear. Same Actor.update() and motion data as the game. CMU swordplay cuts and thrust.</footer>
 <script type="module">
 import * as THREE from 'three';
-import {initActors,makeActor,loadSwings} from './soldieractor.js?v=motion-v5';
+import {initActors,makeActor,loadSwings} from './soldieractor.js?v=exchange-v1';
 const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setPixelRatio(1);renderer.setSize(innerWidth,innerHeight-110);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1;
 document.querySelector('#view').appendChild(renderer.domElement);
 const scene=new THREE.Scene();scene.background=new THREE.Color('#18212b');scene.add(new THREE.HemisphereLight(0xe0edff,0x5d584b,2));const key=new THREE.DirectionalLight(0xffe4c2,3);key.position.set(-3,5,5);scene.add(key);

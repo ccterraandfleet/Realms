@@ -4,9 +4,9 @@
  */
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=motion-v5';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=motion-v5';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=motion-v5';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=exchange-v1';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=exchange-v1';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=exchange-v1';
 
 let ATLAS = null;
 let LOCO = null;
@@ -17,7 +17,7 @@ let swingLoading = false;
 export function loadSwings() {
   if (SWINGS || swingLoading || typeof fetch !== 'function') return;
   swingLoading = true;
-  fetch('./mocap/swings.json?v=motion-v5')
+  fetch('./mocap/swings.json?v=exchange-v1')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => {
       if (!j || !j.clips) return;
@@ -69,13 +69,22 @@ export function capturedMotion(attack,phase,u) {
   const clip=swingFor(stanceForAttack(attack)); if(!clip)return null;
   let weight=1;
   if(phase==='holding')weight=smooth(u);
+  if(phase==='windup' && attack.hold===0)weight=smooth(u/.35);
   if(phase==='recovery')weight=1-smooth((u-.15)/.85);
-  return {frame:swingFrameAt(clip,clipTimeFor(phase,u)),weight,clip:clip.name};
+  let time=clipTimeFor(phase,u);
+  if(phase==='recovery' && attack.contactU!==undefined){const start=.30+.58*attack.contactU;time=start+Math.min(.08,1-start)*smooth(u/.25);}
+  const frame=swingFrameAt(clip,time);
+  const kind=/Stab/.test(attack.name)?'stab':/Overhead/.test(attack.name)?'overhead':'slash';
+  let w=kind==='stab'?1:phase==='release'?(kind==='overhead'?smooth(u/.3):Math.sin(Math.PI*u)**2):0;
+  if(phase==='recovery')w=kind==='stab'||kind==='overhead'?1:attack.contactU!==undefined?Math.sin(Math.PI*attack.contactU)**2:0;
+  frame.AimTarget=[0,kind==='overhead' && (phase==='release'||phase==='recovery')?1.65-1.10*(phase==='release'?u:attack.contactU??1):1.30,1.45];
+  frame.AimWeight=w;
+  return {frame,weight,clip:clip.name};
 }
 export function loadLocomotion() {
   if (LOCO || locoLoading || typeof fetch !== 'function') return;
   locoLoading = true;
-  fetch('./mocap/locomotion.json?v=motion-v5')
+  fetch('./mocap/locomotion.json?v=exchange-v1')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => { if (j) { LOCO = new Locomotion(j); if (typeof window !== 'undefined') { window.__locoKeys = Object.keys(j); window.__locoTiersData = LOCO.tiers(); } } else if (typeof window !== 'undefined') window.__locoErr = 'fetch not ok'; })
     .catch((e) => { if (typeof window !== 'undefined') window.__locoErr = String(e); })
@@ -89,7 +98,7 @@ export async function initActors(loader) {
   if (!ATLAS) ATLAS = await new Atlas(loader).ready();
   if (!LOCO) {
     try {
-      const r = await fetch('./mocap/locomotion.json?v=motion-v5');
+      const r = await fetch('./mocap/locomotion.json?v=exchange-v1');
       if (r.ok) LOCO = new Locomotion(await r.json());
     } catch (e) { LOCO = null; if (typeof window !== 'undefined') window.__locoErr = String(e); }
   }
@@ -285,7 +294,7 @@ export class Actor {
     rollShieldClear(this.rig);
     // Frame-rate-independent transition damping, including interrupts and feints.
     const alpha=1-Math.exp(-Math.max(0,dt)*32);
-    if(this._previous && !this.noSmoothing)for(const b of this.rig.bones){
+    if(this._previous && !this.noSmoothing && !f.attack)for(const b of this.rig.bones){
       if(Actor.LOWER.includes(b.name) || b.name==='root')continue;
       const prev=this._previous.get(b.name);if(prev){const target=b.quaternion.clone();b.quaternion.copy(prev).slerp(target,alpha);}
     }

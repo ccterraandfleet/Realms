@@ -73,14 +73,14 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 08:08</div>
+  <div id="build">BUILD 2026-11-15 08:30</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
   </style>
   <div id="armed" aria-live="polite"></div>
-<div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
+<div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>hold LMB / MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
 <div id="intro">
@@ -89,16 +89,18 @@
   <p class="k">LMB attack &middot; move the mouse UP for an overhead, LEFT or RIGHT for a cut, DOWN for a thrust</p>
   <p class="k">WASD move &middot; mouse look &middot; RMB guard &middot; MMB heavy &middot; Q feint</p>
   <p class="k">Shift sprint &nbsp; Space dodge &nbsp; K kick &nbsp; J jab</p>
-  <p>Counter with a matching attack from guard. Kick breaks a held guard. Press 1&ndash;4 for opponent difficulty.</p>
+  <p>Hold RMB and click the matching attack before contact to COUNTER. Block then attack to RIPOSTE. Kick breaks held guard. Press 1&ndash;4 for opponent difficulty.</p>
 </div>
 
 <script type="module">
 import * as THREE from 'three';
+import {bladeContact,faces} from './chiv.contact.js?v=exchange-v1';
+let combatTraces=null;fetch('./combat-traces.json?v=exchange-v1').then(r=>{if(!r.ok)throw Error('Blade traces unavailable');return r.json();}).then(j=>combatTraces=j).catch(e=>console.error(e));
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=motion-v5';
-import { STYLES, styleRule } from './chiv.styles.js';
+import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=exchange-v1';
+import { STYLES, styleRule } from './chiv.styles.js?v=exchange-v1';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
 import { EffectComposer } from './lib/EffectComposer.js';
@@ -106,8 +108,8 @@ import { RenderPass } from './lib/RenderPass.js';
 import { ShaderPass } from './lib/ShaderPass.js';
 import { UnrealBloomPass } from './lib/UnrealBloomPass.js';
 import { SMAAPass } from './lib/SMAAPass.js';
-import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js';
-import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js';
+import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js?v=exchange-v1';
+import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js?v=exchange-v1';
 
 /* ===========================================================================
  * THE COMPAT BOUNDARY.
@@ -1339,7 +1341,7 @@ function buildTheField() {
   if (fieldBuilt || !foeModel || !knightClips) return;
   fieldBuilt = true;
   FIELD_ANCHORS.forEach(([ax, az], i) => {
-    const gap = 1.7;
+    const gap = 1.3;
     const a = new Fighter('ally' + i, -1, 'Longsword');
     const b = new Fighter('foe' + i, 1, 'Longsword');
     const duel = new Duel(a, b, { dist: gap, style: LAB.style });
@@ -1351,7 +1353,10 @@ function buildTheField() {
     sb.root.rotation.y = -Math.PI / 2;
     const ba = makeChivBrain('Longsword', 'manatarms', 101 + i * 7);
     const bb = makeChivBrain('Longsword', 'knight', 211 + i * 11);
-    SQUAD.push({ duel, a, b, sa, sb, ba, bb, resetAt: 0, gap });
+    const spatial=f=>{const r=f===a?sa.root:sb.root;return{x:r.position.x,y:r.position.y,z:r.position.z,yaw:r.rotation.y,facing:r.rotation.y,view:'body'};};
+    const contactTest=(att,def,from,to)=>bladeContact(combatTraces,att.attack,from,to,spatial(att),spatial(def));
+    const frontTest=(att,def)=>faces(spatial(att),spatial(def));duel.contactTest=contactTest;duel.frontTest=frontTest;
+    SQUAD.push({duel,a,b,sa,sb,ba,bb,resetAt:0,gap,contactTest,frontTest});
   });
 }
 
@@ -1372,7 +1377,7 @@ function stepTheField(dt) {
         a.state = b.state = 'idle'; a.attack = b.attack = null; a.guard = b.guard = false;
         a.guardLock = b.guardLock = 0; a.riposteUntil = b.riposteUntil = -99;
         a.counterUntil = b.counterUntil = -99;
-        const fresh = new Duel(a, b, { dist: pair.gap, style: LAB.style });
+        const fresh = new Duel(a, b, {dist:pair.gap,style:LAB.style,contactTest:pair.contactTest,frontTest:pair.frontTest});
         pair.duel = fresh;
       }
     } else {
@@ -1522,7 +1527,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 08:08');
+console.log('REALMS KINGDOM BUILD 2026-11-15 08:30');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1680,6 +1685,7 @@ let guardZone = 'T', pressGuard = false, pendingAttack = null, pendingFeint = fa
  * click, and the CLICK DIRECTION comes from how the mouse was just moved. Up = overhead,
  * left and right = the two side cuts, down = thrust. The guard follows the mouse the same
  * way, so the hand that aims the cut also aims the block. */
+let lmbDown=false,lmbHeldFor=0;
 let rmbDown = false, lastZone = 'T', orbit = 0;
 /* THIS IS A PLACE, NOT A DUEL STAGE. The old build faked movement by moving a single
  * number (the gap) so there was nothing to walk around in. Now the player and the
@@ -1893,10 +1899,17 @@ let foePrev = 'idle', lastCalloutId = null;
 /* his attack clips are HELD at the raised frame during the windup, then released fast */
 let foeHold = { key: null, raised: 0, dur: 0, act: null };
 
+let exchangeLab=false,labIntent={};
+function mainSpatial(f) {
+  if(f===duel.a)return {x:playerPos.x,z:playerPos.z,y:0,view:'fp',yaw,pitch,facing:yaw+Math.PI};
+  return {x:foeRoot.position.x,z:foeRoot.position.z,y:foeRoot.position.y,view:'body',yaw:foeRoot.rotation.y,facing:foeRoot.rotation.y,scale:1.075};
+}
+function mainContact(att,def,from,to){const A=mainSpatial(att),B=mainSpatial(def);if(A.view==='fp')A.y=1.68;return bladeContact(combatTraces,att.attack,from,to,A,B);}
+window.__contactReady=()=>!!combatTraces;
 function newRound() {
   if (!manualStyle) styleKey = ROSTER[Math.min(round, ROSTER.length - 1)];
   /* a Duel is two Fighters plus the clock, never an empty shell */
-  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), { maxTime: 60, style: LAB.style });
+  duel = new Duel(new Fighter('you', -1), new Fighter('them', 1), {maxTime:60,style:LAB.style,contactTest:mainContact,frontTest:(a,b)=>faces(mainSpatial(a),mainSpatial(b))});
   // a fresh duel starts with both fighters at full health and stamina
   brain = makeChivBrain('Longsword', styleKey, (Date.now() & 0xffff) ^ round);
   foePrev = 'idle';
@@ -1906,6 +1919,12 @@ function newRound() {
   const lbl = (TEMPERAMENTS[styleKey] && TEMPERAMENTS[styleKey].label) || styleKey;
   say('ROUND ' + (round + 1) + '  ·  ' + lbl, 1400);
 }
+if(new URLSearchParams(location.search).has('lab'))window.__exchangeLab={
+ reset:(distance=1.3)=>{exchangeLab=true;labIntent={};rmbDown=false;lmbDown=false;pendingAttack=null;newRound();playerPos.set(0,0,0);foeRoot.position.set(0,0,-distance);foeRoot.rotation.y=0;playerVel.set(0,0,0);foeVel.set(0,0,0);yaw=0;pitch=0;physGap=distance;window.__exchangeLog=[];hitFlash=0;parryFlash=0;camShake=0;camRoll=0;camPunch=0;hitStop=0;},
+ enemy:(intent)=>{labIntent={...intent};},
+ aim:(angle)=>{yaw=angle;},
+ state:()=>({a:duel.a.state,b:duel.b.state,aHP:duel.a.hp,bHP:duel.b.hp,events:window.__exchangeLog})
+};
 function updateDots() {
   /* THERE ARE ONLY FIVE DOTS. This used to loop up to the raw score, so once the tally
    * passed five it wrote className on undefined and threw on EVERY tick - the picture
@@ -1932,10 +1951,16 @@ intro.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement) { intro.style.display = 'flex'; }
 });
+let lastCombatLook=performance.now();
 document.addEventListener('mousemove', (e) => {
   if (!document.pointerLockElement && !window.__forceInput) return;
-  yaw -= e.movementX * 0.0022;
-  pitch = Math.max(-0.9, Math.min(0.9, pitch - e.movementY * 0.0022));
+  const now=performance.now(),elapsed=Math.min(.05,Math.max(.001,(now-lastCombatLook)/1000));lastCombatLook=now;
+  let dx=-e.movementX*.0022,dy=-e.movementY*.0022;
+  if(duel?.a.attack && ['windup','release'].includes(duel.a.state)){
+    const a=duel.a.attack,limit=(dx<0?a.turnReverse:a.turn)*Math.PI/180*elapsed;
+    dx=Math.max(-limit,Math.min(limit,dx));const vl=a.turnV*Math.PI/180*elapsed;dy=Math.max(-vl,Math.min(vl,dy));
+  }
+  yaw+=dx;pitch=Math.max(-.9,Math.min(.9,pitch+dy));
   /* keep the last quarter second of mouse travel: the click reads its direction from
    * here, so a cut is aimed by moving the mouse and then pressing, exactly as it is in
    * Chivalry, rather than by remembering which key stands for which cut */
@@ -1954,15 +1979,16 @@ renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mousedown', (e) => {
   audioInit();
   if (!document.pointerLockElement && !window.__forceInput) return;
-  if (e.button === 0) { pendingAttack = attackFromClick('light'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
+  if (e.button === 0) { lmbDown=true;lmbHeldFor=0; pendingAttack = attackFromClick('light'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
   if (e.button === 2) { rmbDown = true; pressGuard = true; guardZone = lastZone; e.preventDefault(); }
   if (e.button === 1) { pendingAttack = attackFromClick('heavy'); window.__lastClickAttack = pendingAttack; e.preventDefault(); }
 }, { passive: false });
 addEventListener('mouseup', (e) => {
+  if(e.button===0){lmbDown=false;lmbHeldFor=0;}
   if (e.button === 2) rmbDown = false;
 });
 /* a click that leaves the window must not leave the guard stuck up */
-addEventListener('blur', () => { rmbDown = false; for (const k in keys) keys[k] = false; });
+addEventListener('blur', () => { lmbDown=false;lmbHeldFor=0;rmbDown = false; for (const k in keys) keys[k] = false; });
 addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (keys[k]) return;
@@ -1989,6 +2015,7 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
 function say(text, ms = 1200) {
+  ROUND_MSG.style.color='#e8e4d7';
   ROUND_MSG.textContent = text;
   ROUND_MSG.style.opacity = 1;
   clearTimeout(say._t);
@@ -2072,6 +2099,18 @@ if (typeof window !== 'undefined') {
   window.__fpHilt = () => { sword.updateWorldMatrix(true, false); camera.updateMatrixWorld(true);
     const v = sword.getWorldPosition(new THREE.Vector3()); camera.worldToLocal(v); return [v.x, v.y, v.z]; };
 }
+window.__bakeFirstPerson = () => {
+  const out={},keepPos=sword.position.clone(),keepQ=sword.quaternion.clone();
+  for(const [key,name,dir] of [['slash:L','Slash','Left'],['slash:R','Slash','Right'],['overhead:R','Overhead','Down'],['stab:R','Stab',null]]){
+    out[key]=[];
+    for(let i=0;i<=120;i++){
+      const u=i/120,me={attack:{name,dir,hold:.35},state:'release',guard:false,phaseInfo:()=>({phase:'release',u})};
+      const p=capturedViewPose(capturedMotion(me.attack,'release',u));if(!p)throw Error('Missing motion during trace bake');sword.position.fromArray(p.pos);sword.rotation.fromArray(p.rot);updateSleeves();
+      out[key].push([...window.__fpHilt(),...window.__fpTip()]);
+    }
+  }
+  sword.position.copy(keepPos);sword.quaternion.copy(keepQ);updateSleeves();return out;
+};
 const SWING_CLIPS = { ready: false, by: {} };
 const FP_CONTACT = 0.567;          // contact sits here in every baked clip
 const FP_BLADE = 0.84;
@@ -2146,6 +2185,7 @@ function capturedViewPose(motion) {
   if(!H || !head || !blade)return null;
   const pos=[Math.max(-.48,Math.min(.58,H[0]*.85+.05)),Math.max(-.58,Math.min(.35,(H[1]-head[1])*.85+.08)),Math.max(-.68,Math.min(-.23,-(H[2]-head[2])*.85-.22))];
   const dir=new THREE.Vector3(blade[0],blade[1],-blade[2]).normalize();
+  if(f.AimTarget && f.AimWeight>0){const t=new THREE.Vector3(0,(f.AimTarget[1]-head[1])*.85+.08,-f.AimTarget[2]);dir.lerp(t.sub(new THREE.Vector3(...pos)).normalize(),f.AimWeight).normalize();}
   const maxZ=Math.min(.8,(-.12-pos[2])/.84);
   if(dir.z>maxZ){const planar=Math.hypot(dir.x,dir.y)||1;const mag=Math.sqrt(1-maxZ*maxZ);dir.set(dir.x/planar*mag,dir.y/planar*mag,maxZ);}
   const target=poseFromTip(pos,[pos[0]+dir.x*.84,pos[1]+dir.y*.84,pos[2]+dir.z*.84],0);
@@ -2362,7 +2402,9 @@ function tick(dt) {
   if (me.attack && (me.state === 'windup' || me.state === 'release')) {
     swingTurn = Math.max(-1, Math.min(1, lookYawVel / Math.max(1, me.attack.turn)));
   }
+  lmbHeldFor=lmbDown?lmbHeldFor+dt:0;
   const ia = {
+    heavy:lmbDown&&lmbHeldFor>.18,
     move: 0,
     guard: !!rmbDown,
     attack: pendingAttack ? pendingAttack.name : null,
@@ -2370,9 +2412,10 @@ function tick(dt) {
     feint: pendingFeint,
     dodge: pendingDodge,
   };
-  const ib = chivThink(brain, foe, me, duel.dist, duel.clock, dt, duel.style);
+  const ib=exchangeLab?{...labIntent}:chivThink(brain, foe, me, duel.dist, duel.clock, dt, duel.style);if(exchangeLab){delete labIntent.attack;delete labIntent.feint;}
   ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
   const events = duel.step(dt, ia, ib) || [];
+  window.__exchangeLog=window.__exchangeLog||[];window.__exchangeLog.push(...events);if(window.__exchangeLog.length>600)window.__exchangeLog.splice(0,window.__exchangeLog.length-600);
   pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
 
   for (const e of events) {
@@ -2398,13 +2441,15 @@ function tick(dt) {
       }
     }
     if (e.type === 'parry') {
-      parryFlash = 1; say('PARRY'); sfxClang(0.5 * dg, 1.32);
+      parryFlash = 1; say(e.who===me.id?'PARRY':'ENEMY PARRY'); sfxClang(0.5 * dg, 1.32);
       burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.35, 0)));
     }
-    if (e.type === 'block') { camShake = Math.max(camShake, 0.26); sfxClang(0.4 * dg, 1);
+    if (e.type === 'block') { say(e.who===me.id?'BLOCK · RIPOSTE READY':'ENEMY BLOCK',650); camShake = Math.max(camShake, 0.08); sfxClang(0.4 * dg, 1);
       burst('parry', foeRoot.position.clone().add(new THREE.Vector3(0, 1.3, 0))); }
     /* their two signature answers, named the way the game names them */
-    if (e.type === 'counter') { say('COUNTER', 800); parryFlash = Math.max(parryFlash, 0.55); sfxClang(0.42 * dg, 1.18); }
+    if (e.type === 'counter') { say(e.who===me.id?'COUNTER':'ENEMY COUNTER',800); ROUND_MSG.style.color='#72caff'; parryFlash = Math.max(parryFlash, 0.55); sfxClang(0.42 * dg, 1.18); }
+    if(e.type==='riposte'){say(e.who===me.id?'RIPOSTE':'ENEMY RIPOSTE',650);ROUND_MSG.style.color='#f2cc70';}
+    if(e.type==='activeparry'){say(e.who===me.id?'ACTIVE PARRY':'ENEMY ACTIVE PARRY',500);sfxClang(.4*dg,1.15);}
     if (e.type === 'kick') { sfxThud(0.34 * dg); camShake = Math.max(camShake, 0.25); say('KICK', 700); }
     if (e.type === 'guardbreak') { sfxClang(0.55 * dg, 0.8); camShake = 0.6; say('GUARD BROKEN', 900);
       hitStop = Math.max(hitStop, 0.11);
@@ -2775,9 +2820,10 @@ function render(dt) {
   /* HE MUST STAND INSIDE SWORD REACH. At the old 1.25-2.3 band he settled at 2.3m,
    * and a Longsword reaches 2.25: measured both men swinging into thin air for ten
    * seconds with nobody able to land. The band is now inside the actual reach. */
-  if (physGap > 1.85) { wantX = toMeX; wantZ = toMeZ; foeSpeed = 3.4; }
-  else if (physGap < 1.15) { wantX = -toMeX; wantZ = -toMeZ; foeSpeed = 2.6; }
-  else { wantX = -toMeZ * foeCircle; wantZ = toMeX * foeCircle; foeSpeed = 1.25; }
+  if (physGap > 1.38) { wantX = toMeX; wantZ = toMeZ; foeSpeed = 3.4; }
+  else if (physGap < 1.05) { wantX = -toMeX; wantZ = -toMeZ; foeSpeed = 2.6; }
+  else { wantX = -toMeZ * foeCircle; wantZ = toMeX * foeCircle; foeSpeed = 0.62; }
+  if(exchangeLab){foeSpeed=0;foeVel.set(0,0,0);playerVel.set(0,0,0);}
   foeVel.x = lerp(foeVel.x, wantX * foeSpeed, Math.min(1, 9 * dt));
   foeVel.z = lerp(foeVel.z, wantZ * foeSpeed, Math.min(1, 9 * dt));
   fo.x += foeVel.x * dt;
@@ -2871,7 +2917,7 @@ if (foeRig && foeRig.ok) {
   /* viewmodel */
   updateSwing(me, dt);
   const target = targetPose(me, duel.clock);
-  const k = 1 - Math.pow(0.001, (hitStop > 0 ? dt * 0.07 : dt) * (target.fast / 12));
+  const k = me.attack ? 1 : 1 - Math.pow(0.001, (hitStop > 0 ? dt * 0.07 : dt) * (target.fast / 12));
   for (let i = 0; i < 3; i++) {
     pose.pos[i] = lerp(pose.pos[i], target.p.pos[i], k);
 

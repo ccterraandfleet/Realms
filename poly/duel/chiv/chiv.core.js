@@ -148,6 +148,8 @@ export class Fighter {
     this.guardLock = 0;            // can't raise the guard while > 0
     this.riposteUntil = -99;
     this.counterUntil = -99;
+    this.activeParryUntil = -99;
+    this.counterAttemptUntil = -99;
     this.counterType = null;       // which attack TYPE would counter
     this.lastBlockedAt = -99;
     this.chained = false;          // this attack came out of a combo
@@ -196,7 +198,8 @@ export class Fighter {
      * riposte replaces the WINDUPP phase entirely rather than shortening it. */
     const chaining = combo || this.state === 'recovery' || this.state === 'thwack';
     const riposting = clock < this.riposteUntil;
-    const hold = chaining ? (ph.combo ?? ph.hold) : ph.hold;
+    const counterAttempt = this.guard && !riposting && (!this.ruleset || this.ruleset==='chiv');
+    const hold = (counterAttempt || riposting) ? 0 : chaining ? (ph.combo ?? ph.hold) : ph.hold;
     const windup = riposting ? (ph.riposte ?? ph.windup) : ph.windup;
 
     this.attack = {
@@ -216,9 +219,14 @@ export class Fighter {
       feintWindow: ph.feint,
       chained: !!chaining,
       riposting,
+      counterAttempt,
+      sweepU: 0,
       resolved: false,
       t: 0,
     };
+    this.guard = false;
+    this.counterAttemptUntil = counterAttempt ? clock + Math.max(windup, 0.12) : -99;
+    if(riposting) this.activeParryUntil=clock+0.5;
     this.chained = !!chaining;
     this.riposting = riposting;
     this.turnThisSwing = 0;
@@ -235,7 +243,7 @@ export class Fighter {
   }
 
   canFeint(clock) {
-    if (!this.attack) return false;
+    if (!this.attack || /Heavy$/.test(this.attack.name)) return false;
     const inChamber = this.state === 'holding' || this.state === 'windup';
     if (!inChamber) return false;
     return this.stateT >= 0 && this.stateT <= this.attack.feintWindow + (this.attack.hold || 0);
@@ -251,9 +259,27 @@ export class Fighter {
     return true;
   }
 
+  feintTo(name,alt,clock) {
+    if(!this.canFeint(clock) || this.attack.name===name && this.attack.alt===alt || this.stam<CFG.FEINT_COST)return false;
+    const counter=this.attack.counterAttempt;
+    this.spendStam(CFG.FEINT_COST,clock);this.stats.feints++;
+    this.attack=null;this.state='idle';this.guard=counter;
+    if(!this.startAttack(name,{alt,clock}))return false;
+    this.attack.hold=0;this.state='windup';this.stateDur=Math.max(this.attack.windup,.001);this.stateT=0;
+    return true;
+  }
+  chargeHeavy() {
+    if(!this.attack || !['holding','windup'].includes(this.state) || /Heavy$/.test(this.attack.name))return false;
+    if(!['Slash','Overhead','Stab'].includes(this.attack.name))return false;
+    const ph=phases(this.weapon,this.attack.name+'Heavy');if(!ph)return false;
+    this.attack.name+='Heavy';this.attack.damage=ph.damage;this.attack.windup=ph.windup;this.attack.release=ph.release;this.attack.recovery=ph.recovery;this.attack.thwack=ph.thwack;
+    if(this.state==='windup')this.stateDur=ph.windup;
+    return true;
+  }
+
   /* ---- guard ----------------------------------------------------------- */
   canRaiseGuard(clock) {
-    return this.alive && !this.busy && this.guardLock <= 0 && clock >= this.exhaustedUntil;
+    return this.alive && (!this.busy || this.state==='recovery' || this.state==='thwack') && this.guardLock <= 0 && clock >= this.exhaustedUntil;
   }
   /* zone is optional: the Chivalry style has nothing to aim, and passes none */
   raiseGuard(clock, zone = null) {
@@ -263,6 +289,7 @@ export class Fighter {
     }
     if (this.guard) return true;
     if (!this.canRaiseGuard(clock)) return false;
+    if(this.state==='recovery' || this.state==='thwack'){this.attack=null;this.state='idle';this.stateT=0;this.stateDur=0;}
     this.guard = true;
     this.guardUpAt = clock;
     return true;
@@ -338,6 +365,9 @@ export class Duel {
     this.over = false;
     this.winner = null;
     this.style = styleById(opts.style);
+    this.contactTest=opts.contactTest || null;
+    this.frontTest=opts.frontTest || (()=>true);
+    a.ruleset=b.ruleset=this.style.id;
   }
 
   emit(type, data = {}) { this.events.push({ t: this.clock, type, ...data }); }
@@ -361,6 +391,7 @@ export class Duel {
     for (let i = 0; i < 2; i++) {
       const f = F[i], inp = I[i];
       f._lastDt = dt;
+      f.guardLock=Math.max(0,f.guardLock-dt);
       if (!f.alive) continue;
 
       /* intent */
@@ -374,20 +405,23 @@ export class Duel {
         /* THE BLOCK HAS TO BE SNAPSHOTTED BEFORE THE NEW SWING STARTS, because
          * startAttack clears the counter window as part of chaining. The ANSWER's
          * own direction comes from f.attack once it exists. */
-        const cSnap = { until: f.counterUntil, zone: f.counterZone,
-                        line: f.counterLine, type: f.counterType };
-        f.startAttack(name, { alt: !!inp.alt, clock: this.clock, combo: !!inp.combo });
-        const isCounter = this.counterMatches(f, name, cSnap);
-        if (f.attack && isCounter) {
-          f.stats.countered++;
-          this.emit('counter', { who: f.id, vs: F[1 - i].id, attack: name });
+        const oldId=f.attack?.id;
+        const legacySnap={until:f.counterUntil,zone:f.counterZone,line:f.counterLine,type:f.counterType};
+        let started=f.startAttack(name, {alt:!!inp.alt,clock:this.clock,combo:!!inp.combo});
+        if(!started && this.style.feint)started=f.feintTo(name,!!inp.alt,this.clock);
+        if(started && f.attack?.id!==oldId){
+          if(this.style.id==='mix' && this.counterMatches(f,name,legacySnap)){f.stats.countered++;f.stam=Math.min(CFG.STAM_MAX,f.stam+this.style.counterRefund);this.emit('counter',{who:f.id,vs:F[1-i].id,attack:name});}
+          if(f.attack.riposting)this.emit('riposte',{who:f.id,vs:F[1-i].id,attack:name});
+          if(f.attack.counterAttempt)this.emit('counterattempt',{who:f.id,vs:F[1-i].id,attack:name});
         }
       }
+
+      if(inp.heavy)f.chargeHeavy();
 
       /* advance the pipeline */
       if (f.busy || f.state === 'stagger' || f.state === 'dodge') {
         f.stateT += dt;
-        while (f.stateT >= f.stateDur && f.stateDur > 0) {
+        while (f.stateT >= f.stateDur && f.stateDur > 0 && f.state!=='release') {
           const spill = f.stateT - f.stateDur;
           this.advancePhase(f, i, F);
           if (!f.busy && f.state !== 'stagger' && f.state !== 'dodge') break;
@@ -395,20 +429,34 @@ export class Duel {
         }
       }
 
+      if(f.guard){f.spendStam(6*dt,this.clock);}
       /* stamina */
       if (this.clock - f.stamSpentAt > CFG.STAM_REGEN_DELAY && f.state !== 'stagger') {
         const before = f.stam;
-        f.stam = Math.min(CFG.STAM_MAX, f.stam + CFG.STAM_REGEN * dt);
+        if(!f.guard)f.stam = Math.min(CFG.STAM_MAX, f.stam + CFG.STAM_REGEN * dt);
         if (before <= 0 && f.stam > 0) this.emit('recovered', { who: f.id });
       }
     }
 
-    /* RESOLUTION IS DEFERRED UNTIL BOTH MEN HAVE ADVANCED, and it is driven by
-     * the release phase actually being entered rather than by spotting the state
-     * afterwards. A kick has NO Release phase in the ability table (Release -1),
-     * so a zero-length release would otherwise transition to recovery inside the
-     * same step the hitbox went live and the strike would vanish unresolved. */
-    for (const { att, def } of this._pending) this.resolveStrike(att, def);
+    // Every frame of release can contact, including walking into a previously missed swing.
+    for(let i=0;i<2;i++) {
+      const f=F[i];if(f.attack && !f.attack.resolved && f.state==='release')this._pending.push({att:f,def:F[1-i],u:Math.min(1,f.stateT/Math.max(.001,f.stateDur))});
+    }
+    const contacts=[];
+    for(const {att,def,u=1} of this._pending){
+      const a=att.attack;if(!a || a.resolved)continue;
+      const from=a.sweepU || 0;
+      const contact=this.contactTest?this.contactTest(att,def,from,u,this): (this.dist<=this.reachOf(att) && (a.release<=0 || u>=.38) ? {u:Math.max(from,.38)} : false);
+      a.sweepU=u;
+      if(contact)contacts.push({att,def,contact,id:a.id,u:contact.u??u,order:Math.max(0,Math.min(1,((contact.u??u)-from)/Math.max(1e-6,u-from)))});
+    }
+    contacts.sort((a,b)=>a.order-b.order || a.id-b.id);
+    for(const c of contacts)if(c.att.attack?.id===c.id && !c.att.attack.resolved){c.att.attack.contactU=c.u;this.resolveStrike(c.att,c.def,c.contact);}
+    // End release only AFTER its final swept segment has been tested.
+    for(const f of F)if(f.state==='release' && f.stateT>=f.stateDur && f.attack){
+      if(!f.attack.resolved){f.attack.resolved=true;this.emit('whiff',{who:F.find(x=>x!==f).id,vs:f.id,attack:f.attack.name});}
+      f.state='recovery';f.stateT=0;f.stateDur=f.attack.recovery;
+    }
 
     if (this.a.hp <= 0 || this.b.hp <= 0) {
       this.over = true;
@@ -449,10 +497,10 @@ export class Duel {
     /* an ability with no release (a kick, a shove) still needs one step of life */
     f.stateDur = Math.max(a.release, 0.001);
     this.emit('release', { who: f.id, attack: a.name, dir: a.dir });
-    this._pending.push({ att: f, def: F[1 - i] });
+    if(a.release<=0)this._pending.push({att:f,def:F[1-i],u:1});
   }
 
-  resolveStrike(att, def) {
+  resolveStrike(att, def, contact = true) {
     const a = att.attack;
     if (!a || a.resolved) return;
     a.resolved = true;
@@ -462,13 +510,23 @@ export class Duel {
     if (def.state === 'dead') return;
     if (def.inDodgeIFrames()) { this.emit('dodged', { who: def.id, vs: att.id }); return; }
 
+    const front=this.frontTest(att,def,this);
+    const matching=def.attack && def.attack.counterAttempt && this.clock<=def.counterAttemptUntil && def.attack.type===a.type;
+    if(front && a.type!=='kick' && (matching || this.clock<def.activeParryUntil)){
+      if(matching){
+        def.stats.countered++;def.stam=Math.min(CFG.STAM_MAX,def.stam+15);
+        def.counterAttemptUntil=-99;def.activeParryUntil=this.clock+.4;
+        this.emit('counter',{who:def.id,vs:att.id,attack:a.name,contactU:a.contactU});
+      }else{def.stats.blocked++;this.emit('activeparry',{who:def.id,vs:att.id,attack:a.name,contactU:a.contactU});}
+      att.state='recovery';att.stateT=0;att.stateDur=a.blocked;att.guardLock=Math.max(att.guardLock,.08);return;
+    }
     const type = a.type;
     const isKick = type === 'kick';
 
     /* A KICK IS THE GUARD BREAK. Their data: KickLow and Shove, 5 damage,
      * 10 stamina, 0.45 riposte. It does not go through a raised guard, it
      * removes it. */
-    if (def.guard) {
+    if (def.guard && front) {
       if (isKick) {
         def.guard = false;
         def.guardLock = CFG.GUARD_BREAK_STAGGER;
@@ -489,12 +547,12 @@ export class Duel {
           { who: def.id, vs: att.id, attack: a.name, dir: a.dir, zone: gate.zone, held: gate.held });
         /* fall through to the damage path below */
       } else {
-      const fresh = (this.clock - def.guardUpAt) <= this.style.parryWindow;
+      const fresh = this.style.id!=='chiv' && (this.clock - def.guardUpAt) <= this.style.parryWindow;
       const cost = a.damage * CFG.BLOCK_STAM_PER_DMG * (this.style.blockStam / 0.30);
       def.spendStam(cost, this.clock);
       def.stats.blocked++;
       def.lastBlockedAt = this.clock;
-      def.counterUntil = this.clock + this.style.counterWindow;
+      def.counterUntil = this.style.id==='chiv' ? -99 : this.clock + this.style.counterWindow;
       def.counterType = type;
       def.counterZone = zoneOf(a);
       def.counterLine = lineOf(a);
@@ -503,11 +561,11 @@ export class Duel {
       if (fresh) {
         def.stats.parried++;
         def.stam = Math.min(CFG.STAM_MAX, def.stam + 8);
-        this.emit('parry', { who: def.id, vs: att.id, attack: a.name, attackType: type });
+        this.emit('parry', { who: def.id, vs: att.id, attack: a.name, attackType: type, contactU:a.contactU });
         /* FOR HONOR punishes a parry: he is left open long enough to answer */
         if (this.style.parryPunish > 0) att.stagger(this.style.parryPunish, this.clock);
       } else {
-        this.emit('block', { who: def.id, vs: att.id, attack: a.name, attackType: type });
+        this.emit('block', { who: def.id, vs: att.id, attack: a.name, attackType: type, contactU:a.contactU });
       }
       if (def.stam <= 0) {
         def.disarm(this.clock);
@@ -515,6 +573,7 @@ export class Duel {
       }
       /* the attacker eats the ability's own Blocked recovery */
       att.state = 'recovery'; att.stateT = 0; att.stateDur = a.blocked;
+      att.guardLock=Math.max(att.guardLock,.08);
       return;
       }
     }
@@ -523,20 +582,20 @@ export class Duel {
       this.applyDamage(def, 5);
       att.stats.kicks++;
       this.emit('kick', { who: def.id, vs: att.id, dmg: 5 });
-      def.stagger(0.35, this.clock);
+      // An unguarded kick does not interrupt a committed attack.
       att.state = 'recovery'; att.stateT = 0; att.stateDur = a.blocked;
       return;
     }
 
     this.applyDamage(def, a.damage);
     att.stats.hits++;
-    this.emit('hit', { who: def.id, vs: att.id, dmg: Math.round(a.damage), hp: Math.max(0, def.hp), attack: a.name });
+    this.emit('hit', { who: def.id, vs: att.id, dmg: Math.round(a.damage), hp: Math.max(0, def.hp), attack: a.name, dir:a.dir, contactU:a.contactU });
     if (type === 'jab') att.stats.jabs++;
     /* THWACK: their number, and it replaces the recovery on a connect */
     att.state = 'thwack';
     att.stateT = 0;
     att.stateDur = a.thwack ?? a.recovery;
-    if (def.stagger) def.stagger(0.3, this.clock);
+    if (def.alive && def.stagger) def.stagger(0.3, this.clock);
   }
 
   /* does the guard actually stop this? */

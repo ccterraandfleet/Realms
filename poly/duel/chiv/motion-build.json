@@ -1,22 +1,26 @@
 {
-  "build": "2026-11-15 08:08 UTC",
-  "version": "motion-v5",
+  "build": "2026-11-15 08:30 UTC",
+  "version": "exchange-v1",
   "files": {
-    "index.html": "8298f9d351887e1f0209d2308f3e6e9579a870b96b1023c65e544ae1146707f6",
-    "mocap.js": "ef651cfaf574c5d6c8efdcb51db18832f3d73eab36ff173a3c635c070d85186f",
-    "soldieractor.js": "050b08d0b752757dbf3d77353cb63d7fe8bb0d050f0f3f8bee575f5703e0a58d",
-    "soldier.js": "012169fbe6cb2003fede45209f14931c031c819299d1f96d0864c1d9f2552e28",
-    "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed",
+    "chiv.ai.js": "c721c569dbb7b1cab9b084867dd9c85491b794861c5574c3231bdaa9b7d812bf",
+    "chiv.contact.js": "594ca08c626335b4b91d384ae9ca2042adff3c79cbb5a3a1c79844a0b5864646",
+    "chiv.core.js": "5927461a358484a5d11569c1ff754701b614cee0bfc495fa1eea8f34256c3606",
+    "combat-traces.json": "4917e40bf84bfdb5f833fbcceb668fc65539c2a9b2e7b562e8097d2acee43526",
+    "index.html": "1128838f2d8951129c6c028597687c47b57c2aa65cc43d81680ee591311bfa75",
+    "mocap.js": "8c838a2a66b5785aa899815be7b989d66e2c0d81308616418b90947ea7a8ad29",
+    "mocap/SOURCES.md": "dbbc2d171f3330b6c8ca4a031a55a87d999a960b15176d8710e52470884558c8",
     "mocap/locomotion.json": "bbeeccd7fa3dd36fad91955c40b79bec9e65c75ed31d69bc4568249ae8b25df6",
     "mocap/swings.json": "e357229b4af5f40e934f632b3c748f379ef74199cb6d996cd50bc91802f78f8b",
-    "motion-review.html": "0362e2f942b5fce41fa8ae1bb403f1dd63f37aad58f2cafb7108d1b316bf98af",
-    "mocap/SOURCES.md": "bc496e5a71cc6c2b4dcf89e7bc454b809d5b9312cd6d78089a59715764e181d0"
+    "motion-review.html": "60d0f7d843a736797d5933a37cdca4e62283ed2d8c67b6e3164feaf39588022c",
+    "soldier.js": "012169fbe6cb2003fede45209f14931c031c819299d1f96d0864c1d9f2552e28",
+    "soldieractor.js": "a5201f7ee63001084687705fb2fe565f22d0d36e2ab437651b2434e77d2245e7",
+    "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed"
   },
   "localVerification": {
-    "actorPoses": 704,
-    "coreTests": 29,
-    "styleTests": 13,
-    "realClickDirections": 4,
-    "completeMatchesBothQualityModes": true
+    "poseCases": 704,
+    "combatRuleTests": 29,
+    "styleRuleTests": 13,
+    "exchangeRuleTests": 28,
+    "realInputCounterScenarios": 5
   }
 }
