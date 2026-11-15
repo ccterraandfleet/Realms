@@ -72,7 +72,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 06:58</div>
+  <div id="build">BUILD 2026-11-15 07:16</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -96,7 +96,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf, actorsReady } from './soldieractor.js';
+import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep } from './soldieractor.js';
 import { STYLES, styleRule } from './chiv.styles.js';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
@@ -858,7 +858,78 @@ function updateSleeves() {
 /* not called here: the shield is not built yet at this point in the file, and the
  * sleeve is placed every frame anyway */
 if (typeof window !== 'undefined') {
-  window.__sleeveCheck = () => {
+  window.__armSweep = (name, opts) => (window.__SWINGSWEEP = armSweep(name, opts));
+  window.__poseSweep = () => poseSweep();
+  /* ===========================================================================
+ * DOES THE ARM MESH ACTUALLY FOLLOW THE ARM BONES?
+ * The bones measured clean in every pose, so if arms still appear over a head then the
+ * SKIN is not following them. This walks every vertex of the man, finds the bone that
+ * dominates it, transforms it the way the renderer does, and reports the highest vertex
+ * owned by each arm bone against the head. If a hand-owned vertex sits above the head
+ * while the hand BONE sits below it, the skin is disconnected from the skeleton.
+ * =========================================================================== */
+function skinAudit(actor, maxLimbDist = 0.36) {
+  if (!actor) return null;
+  actor.root.updateMatrixWorld(true);
+  const rig = actor.rig;
+  const headBone = rig.byName.get('head');
+  const head = new THREE.Vector3(); if (headBone) headBone.getWorldPosition(head);
+  const names = ['clav.R', 'arm.R', 'fore.R', 'hand.R', 'clav.L', 'arm.L', 'fore.L', 'hand.L', 'chest', 'hips', 'head'];
+  const idxOf = {};
+  rig.bones.forEach((b, i) => { if (names.includes(b.name)) idxOf[i] = b.name; });
+  /* A BLADE IS ONE METRE FROM THE HAND AND THE ARM IS THIRTY CENTIMETRES, so geometry is
+   * attributed by DISTANCE FROM ITS OWN JOINT. Anything further out than maxLimbDist is
+   * the weapon, not the limb, and must not be counted as an arm over the head. */
+  const limb = {}, weapon = {};
+  let crownRel = null;
+  const boneNames = rig.bones.map((b) => b.name);
+  const v = new THREE.Vector3(), jw = new THREE.Vector3();
+  let scanned = 0;
+  actor.root.traverse((n) => {
+    if (!n.isSkinnedMesh) return;
+    const pos = n.geometry.attributes.position;
+    const si = n.geometry.attributes.skinIndex, sw = n.geometry.attributes.skinWeight;
+    if (!si || !sw) return;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      if (n.applyBoneTransform) n.applyBoneTransform(i, v);
+      v.applyMatrix4(n.matrixWorld);
+      scanned++;
+      let bi = -1, bw = 0;
+      for (const comp of ['getX', 'getY', 'getZ', 'getW']) {
+        const boneIdx = si[comp](i), wt = sw[comp](i);
+        if (wt > bw) { bw = wt; bi = boneIdx; }
+      }
+      const nm = idxOf[bi];
+      const b = rig.bones[bi];
+      if (!nm || !b) continue;
+      b.getWorldPosition(jw);
+      const d = v.distanceTo(jw);
+      if (nm === 'head' && d <= maxLimbDist && (!crownRel || v.y > crownRel.y)) crownRel = { y: v.y };
+      const rec = d <= maxLimbDist ? (limb[nm] || (limb[nm] = { y: -9, d: 0 })) : (weapon[nm] || (weapon[nm] = { y: -9, d: 0 }));
+      if (v.y > rec.y) { rec.y = v.y; rec.d = d; }
+    }
+  });
+  const rel = (o, base) => {
+    const out = {};
+    for (const k of Object.keys(o)) out[k] = +(o[k].y - base).toFixed(3);
+    return out;
+  };
+  /* THE CROWN, not the head joint: the head bone sits at the base of the skull and its top
+   * is about 0.21 m higher, so measuring arms against the joint called a chest-high hand
+   * "above the head". */
+  const crown = (crownRel && crownRel.y) || (head.y + 0.21);
+  return { headY: +head.y.toFixed(3), crownY: +crown.toFixed(3), scanned,
+           limbVsCrown: rel(limb, crown), weaponVsCrown: rel(weapon, crown) };
+}
+window.__skinAudit = (d) => {
+  try {
+    return { foe: skinAudit(foeActor, d), mine: playerBody ? skinAudit(playerBody, d) : null };
+  } catch (e) {
+    return { error: String(e && e.message || e) };
+  }
+};
+window.__sleeveCheck = () => {
     /* the sleeve is placed end to end every frame, so the check is that its far end
      * lands ON the elbow and that the near end is behind the lens (out of sight) */
     updateSleeves();
@@ -1460,7 +1531,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 06:58');
+console.log('REALMS KINGDOM BUILD 2026-11-15 07:16');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is

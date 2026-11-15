@@ -97,6 +97,16 @@ function aim(rig, boneName, desiredWorldDir, rightWorld) {
   b.updateMatrixWorld(true);
 }
 
+/* a public way to point one bone somewhere, for the passes that need to correct a pose
+ * after the capture has had its say */
+export function aimBone(rig, boneName, worldDir, rightWorld) {
+  const b = rig.byName.get(boneName);
+  if (!b || !worldDir || worldDir.lengthSq() < 1e-9) return;
+  rig.root.updateMatrixWorld(true);
+  aim(rig, boneName, worldDir.clone().normalize(), (rightWorld || new THREE.Vector3(1, 0, 0)).clone());
+  b.updateMatrixWorld(true);
+}
+
 export function applyMocapFrame(rig, joints, opts = {}) {
   if (!rig || !joints) return rig;
   const RIGHT = new THREE.Vector3(1, 0, 0);

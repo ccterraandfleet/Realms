@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js';
 import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById } from './stances.js?v=20261114-ik2';
-import { applyMocapFrame, Locomotion } from './mocap.js?v=20261115-mc6';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=20261115-mc7';
 
 let ATLAS = null;
 let LOCO = null;
@@ -49,8 +49,12 @@ if (typeof window !== 'undefined') {
 /* CONTACT SITS AT 56.7% OF EVERY CLIP: the bake cut each window from 0.55 s before the
  * fastest hand speed to 0.42 s after it. Phase progress maps onto that anchor. */
 const CLIP_CONTACT = 0.567;
-const UPPER_MASK = ['spine', 'chest', 'neck', 'head', 'clav.R', 'arm.R', 'fore.R', 'hand.R',
-                    'clav.L', 'arm.L', 'fore.L', 'hand.L'];
+/* THE CLAVICLES ARE NOT THE CAPTURE'S TO TURN. They were in this mask, and a clavicle
+ * aimed along the capture's shoulder direction lifts the entire arm chain off the
+ * shoulder and toward the skull - it is the joint that made every chamber read as arms
+ * up by the ears. The torso and the arm below it are plenty for a readable cut. */
+const UPPER_MASK = ['spine', 'chest', 'neck', 'head', 'arm.R', 'fore.R', 'hand.R',
+                    'arm.L', 'fore.L', 'hand.L'];
 
 function clipTimeFor(phase, u) {
   let a, b;
@@ -294,7 +298,71 @@ export class Actor {
       }
     }
     if (pose) applyPose(this.rig, pose, w, { skip: Actor.LOWER });
+    Actor.clampArmsBelowHead(this.rig);
     this.root.updateMatrixWorld(true);
+  }
+
+  /* =========================================================================
+   * NO ARM ABOVE THE HEAD.
+   * The capture is boxing, and a boxing chamber lifts the whole arm chain until the
+   * elbow and the upper arm ride above the top of the skull - measured 0.105 m of upper
+   * arm and 0.116 m of forearm above the head mid-swing, against 0.05 m BELOW it at rest.
+   * On a rigid-skinned limb that reads as two sticks floating over a man's head, which is
+   * exactly what "their arms go over their head, like detached" describes.
+   * The capture keeps its arc; what it may not keep is the elevation. After the pose is
+   * applied, the shoulder and then the elbow are re-aimed so the limb stays at or below
+   * the crown, which carries the hand down with it because the chain is hierarchical.
+   * The margin is ELEVEN CENTIMETRES, not two: the clamp moves the JOINT and a limb has
+   * thickness, so a forearm joint parked exactly on the crown still shows its top surface
+   * above it. Measured with 0.02 the upper arm still cleared the skull by 0.078 m.
+   * ======================================================================= */
+  static clampArmsBelowHead(rig, margin = 0.12, handMargin = 0.18) {
+    const head = rig.byName.get('head');
+    if (!head) return;
+    const H = new THREE.Vector3(), S = new THREE.Vector3(), E = new THREE.Vector3();
+    const dir = new THREE.Vector3(), flat = new THREE.Vector3();
+    rig.root.updateMatrixWorld(true);
+    head.getWorldPosition(H);
+    const limit = H.y - margin;
+    const handLimit = H.y - handMargin;
+    for (const side of ['R', 'L']) {
+      const armB = rig.byName.get('arm.' + side), foreB = rig.byName.get('fore.' + side);
+      if (!armB || !foreB) continue;
+      /* the upper arm: pull the elbow down to the crown */
+      armB.getWorldPosition(S);
+      foreB.getWorldPosition(E);
+      const reach = Math.max(0.04, S.distanceTo(E));
+      if (E.y > limit) {
+        dir.subVectors(E, S).normalize();
+        const wantY = Math.max(-0.98, Math.min(0.98, (limit - S.y) / reach));
+        if (wantY < dir.y) {
+          flat.set(dir.x, 0, dir.z);
+          if (flat.lengthSq() < 1e-8) flat.set(0, 0, -1);
+          flat.normalize().multiplyScalar(Math.sqrt(Math.max(0, 1 - wantY * wantY)));
+          aimBone(rig, 'arm.' + side, new THREE.Vector3(flat.x, wantY, flat.z));
+          rig.root.updateMatrixWorld(true);
+          foreB.getWorldPosition(E);
+        }
+      }
+      /* the forearm, in case the hand still sits above the crown */
+      const handB = rig.byName.get('hand.' + side);
+      if (!handB) continue;
+      const W = new THREE.Vector3();
+      handB.getWorldPosition(W);
+      if (W.y > handLimit) {
+        foreB.getWorldPosition(E);
+        const flen = Math.max(0.04, E.distanceTo(W));
+        dir.subVectors(W, E).normalize();
+        const wantY = Math.max(-0.98, Math.min(0.98, (handLimit - E.y) / flen));
+        if (wantY < dir.y) {
+          flat.set(dir.x, 0, dir.z);
+          if (flat.lengthSq() < 1e-8) flat.set(0, 0, -1);
+          flat.normalize().multiplyScalar(Math.sqrt(Math.max(0, 1 - wantY * wantY)));
+          aimBone(rig, 'fore.' + side, new THREE.Vector3(flat.x, wantY, flat.z));
+          rig.root.updateMatrixWorld(true);
+        }
+      }
+    }
   }
 
   /* used by the tests: where is the sword hand, and did it actually travel */
@@ -304,6 +372,80 @@ export class Actor {
     this.root.updateMatrixWorld(true);
     return h.getWorldPosition(out);
   }
+}
+
+/* ===========================================================================
+ * SWEEP A STRIKE FRAME BY FRAME AND WATCH WHERE THE ARMS ACTUALLY GO.
+ * Sampling a man during play proves nothing: he may never have swung in the window.
+ * This applies every frame of a clip to a throwaway actor and reports, for each hand,
+ * how far ABOVE THE HEAD it gets, plus how hard the clavicle is being twisted - a
+ * clavicle driven by the capture's shoulder position will carry the whole arm up and
+ * over the head even though the hand itself is only at chest height.
+ * =========================================================================== */
+/* WHERE DOES HE HOLD HIS ARMS WHEN HE IS NOT SWINGING?
+ * The man stands in front of you in a guard far longer than he swings, so if the guard
+ * pose is the one with the arms up, that is what "the arms go over their head" means. */
+export function poseSweep() {
+  const act = makeActor({ tint: 0x2f6ea6, kind: 'sword', helm: 'kettle', shield: 'kite', shadows: false });
+  const out = {};
+  const g = (n) => { const b = act.bone(n); if (!b) return null; const p = new THREE.Vector3(); b.getWorldPosition(p); return p; };
+  const measure = (label, pose, w) => {
+    for (const n of ['clav.R', 'clav.L', 'arm.R', 'arm.L', 'fore.R', 'fore.L', 'hand.R', 'hand.L', 'chest', 'neck', 'head', 'spine']) {
+      const b = act.bone(n); if (b) b.quaternion.identity();
+    }
+    animate(act.rig, 0.4, 'idle');
+    act.root.updateMatrixWorld(true);
+    if (pose) { applyPose(act.rig, pose, w === undefined ? 1 : w, { skip: Actor.LOWER }); act.root.updateMatrixWorld(true); }
+    const head = g('head'), hr = g('hand.R'), hl = g('hand.L');
+    const elr = g('fore.R'), ell = g('fore.L'), clr = g('clav.R');
+    out[label] = {
+      handR: hr && head ? +(hr.y - head.y).toFixed(3) : null,
+      handL: hl && head ? +(hl.y - head.y).toFixed(3) : null,
+      elbowR: elr && head ? +(elr.y - head.y).toFixed(3) : null,
+      elbowL: ell && head ? +(ell.y - head.y).toFixed(3) : null,
+      clavR: clr && head ? +(clr.y - head.y).toFixed(3) : null,
+    };
+  };
+  measure('idle-bare', null);
+  measure('guard-1.0', GUARD_POSE, 1);
+  measure('guard-0.85', GUARD_POSE, 0.85);
+  for (const id of ['Guard', 'BlockImpact', 'Riposte', 'Parry', 'Stagger', 'Fatigue', 'Taunt', 'Death']) {
+    const st = stanceById(id);
+    if (!st) continue;
+    for (const ph of ['chamber', 'strike']) {
+      const p = poseAt(st, 'release', ph === 'strike' ? 1 : 0);
+      if (p) measure(id + ':' + ph, p, 1);
+    }
+  }
+  return out;
+}
+export function armSweep(clipName, opts = {}) {
+  const act = makeActor({ tint: 0x2f6ea6, kind: 'sword', helm: 'kettle', shield: 'kite', shadows: false });
+  if (!SWINGS) loadSwings();
+  const store = SWINGS;
+  const c = store ? store[clipName] : null;
+  if (!c) return { error: 'no clip ' + clipName, keys: store ? Object.keys(store) : null };
+  const rows = [];
+  const v = () => new THREE.Vector3();
+  const mk = opts.resetClav !== false;
+  for (let i = 0; i < c.frames.length; i++) {
+    /* reset the upper body to rest each frame so nothing accumulates */
+    if (mk) {
+      for (const n of UPPER_MASK) { const b = act.bone(n); if (b) b.quaternion.identity(); }
+      act.root.updateMatrixWorld(true);
+    }
+    applyMocapFrame(act.rig, c.frames[i], { mask: UPPER_MASK });
+    act.root.updateMatrixWorld(true);
+    const g = (n) => { const b = act.bone(n); if (!b) return null; const p = v(); b.getWorldPosition(p); return p; };
+    const head = g('head'), hr = g('hand.R'), hl = g('hand.L'), elr = g('fore.R'), cl = g('clav.R'), ch = g('chest');
+    if (!head || !hr) continue;
+    let clavTilt = null;
+    if (cl && ch) clavTilt = +((cl.y - ch.y)).toFixed(3);
+    rows.push({ i, r: +(hr.y - head.y).toFixed(3), l: hl ? +(hl.y - head.y).toFixed(3) : null,
+                elbowR: elr ? +(elr.y - head.y).toFixed(3) : null, clavTilt });
+  }
+  const pick = (k) => { const a = rows.map((r) => r[k]).filter((x) => x !== null); return a.length ? { min: Math.min(...a), max: Math.max(...a) } : null; };
+  return { clip: clipName, frames: rows.length, handR: pick('r'), handL: pick('l'), elbowR: pick('elbowR'), clavTilt: pick('clavTilt'), rows };
 }
 
 export function makeActor(opts) {
