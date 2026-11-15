@@ -21,6 +21,17 @@ import { applyMocapFrame, Locomotion } from './mocap.js?v=20261114-mc3';
 
 let ATLAS = null;
 let LOCO = null;
+let locoLoading = false;
+export function loadLocomotion() {
+  if (LOCO || locoLoading || typeof fetch !== 'function') return;
+  locoLoading = true;
+  fetch('./mocap/locomotion.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j) { LOCO = new Locomotion(j); if (typeof window !== 'undefined') window.__locoKeys = Object.keys(j); } else if (typeof window !== 'undefined') window.__locoErr = 'fetch not ok'; })
+    .catch((e) => { if (typeof window !== 'undefined') window.__locoErr = String(e); })
+    .finally(() => { locoLoading = false; });
+}
+if (typeof window !== 'undefined') window.__locoState = () => ({ loco: !!LOCO, calls: window.__locoCalls || 0, keys: window.__locoKeys || null });
 export const locomotion = () => LOCO;
 export async function initActors(loader) {
   if (!ATLAS) ATLAS = await new Atlas(loader).ready();
@@ -28,7 +39,7 @@ export async function initActors(loader) {
     try {
       const r = await fetch('./mocap/locomotion.json');
       if (r.ok) LOCO = new Locomotion(await r.json());
-    } catch (e) { LOCO = null; }
+    } catch (e) { LOCO = null; if (typeof window !== 'undefined') window.__locoErr = String(e); }
   }
   return ATLAS;
 }
@@ -152,10 +163,38 @@ export class Actor {
     /* LOCOMOTION comes from captured motion, legs only: the walk you see is a
      * real person's walk, not my sine waves. It is masked to the lower body so
      * the stance library still owns the torso and arms above it. */
-    if (LOCO && moving > 0.05) {
-      const clip = moving > 0.8 ? 'run' : 'walk';
-      const jt = LOCO.sample(clip, this.t * (moving > 0.8 ? 1.15 : 1.0));
-      if (jt) applyMocapFrame(this.rig, jt, { mask: Actor.LOWER });
+    /* the speed comes from the body itself, so this works for the squad, the
+     * opponent and anything else that owns an Actor without extra plumbing */
+    const wp = this.root.getWorldPosition(this._wp || (this._wp = new THREE.Vector3()));
+    if (!this._lastWp) this._lastWp = wp.clone();
+    const worldSpd = this._lastWp.distanceTo(wp) / Math.max(dt, 1e-4);
+    this._lastWp.copy(wp);
+    this._lastPos = this._lastPos || this.root.position.clone();
+    const localSpd = this._lastPos.distanceTo(this.root.position) / Math.max(dt, 1e-4);
+    this._lastPos.copy(this.root.position);
+    const spd = Math.max(localSpd, worldSpd);
+    this._phWalk = (this._phWalk || 0) + dt * Math.min(1.8, Math.max(0.55, spd / 1.35));
+    this._phRun = (this._phRun || 0) + dt * Math.min(1.7, Math.max(0.6, spd / 3.9));
+    if (!LOCO) loadLocomotion();
+    if (LOCO && (moving > 0.05 || spd > 0.25)) {
+      if (typeof window !== 'undefined') window.__locoCalls = (window.__locoCalls || 0) + 1;
+      const blend = Math.max(0, Math.min(1, (spd - 1.35) / (3.2 - 1.35)));
+      let jw = null, jr = null;
+      try { jw = LOCO.sample('walk', this._phWalk); jr = LOCO.sample('run', this._phRun); }
+      catch (e) { if (typeof window !== 'undefined') window.__locoErr = String(e); LOCO = null; }
+      let jt = jw;
+      if (jw && jr) {
+        jt = {};
+        for (const k of Object.keys(jw)) {
+          const a = jw[k], b2 = jr[k] || a;
+          jt[k] = [a[0] + (b2[0] - a[0]) * blend, a[1] + (b2[1] - a[1]) * blend, a[2] + (b2[2] - a[2]) * blend];
+        }
+      } else jt = jw || jr;
+      if (jt) {
+        applyMocapFrame(this.rig, jt, { mask: Actor.LOWER });
+        this._loco = { spd: +spd.toFixed(2), blend: +blend.toFixed(2) };
+        if (typeof window !== 'undefined') window.__loco = this._loco;
+      }
     }
     if (pose) applyPose(this.rig, pose, w, { skip: Actor.LOWER });
     this.root.updateMatrixWorld(true);

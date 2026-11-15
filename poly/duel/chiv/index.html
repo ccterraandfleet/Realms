@@ -67,7 +67,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 05:20</div>
+  <div id="build">BUILD 2026-11-15 05:42</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -917,6 +917,7 @@ const dustMat = new THREE.MeshBasicMaterial({ color: 0xcbbfa6, transparent: true
 const bits = [];
 let bloodMat = null;
 function burst(kind, at) {
+  if (typeof FX !== 'undefined') { if (kind === 'blood') FX.blood++; else if (kind === 'parry') FX.spark++; }
   if (kind === 'blood' && !bloodMat) bloodMat = new THREE.MeshBasicMaterial({ color: 0x8d0f14 });
   const n = kind === 'blood' ? 16 : kind === 'parry' ? 18 : 10;
   const mat = kind === 'blood' ? bloodMat : kind === 'parry' ? sparkMatBright : dustMat;
@@ -1263,7 +1264,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 05:20');
+console.log('REALMS KINGDOM BUILD 2026-11-15 05:42');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1468,6 +1469,8 @@ function attackFromClick(kind) {
 /* the camera starts pointed slightly DOWN: a first-person duel should be mostly arena,
  * and an empty blue sky filling the top of the frame was reading as 'the ground is blue' */
 let yaw = 0, pitch = -0.13, camShake = 0, parryFlash = 0, hitFlash = 0, dodgeRoll = 0;
+const FX = { blood: 0, spark: 0, hits: 0, kills: 0, maxShake: 0, maxStop: 0 };
+window.__fx = () => ({ ...FX });
 /* motion weight state: the weapon is attached to a body, not to the lens */
 let lookYawVel = 0, lookPitchVel = 0;
 let liveMe = null;
@@ -1964,6 +1967,7 @@ function tick(dt) {
     const ek = vmKind({ name: e.attack, dir: e.dir });
 
     if (e.type === 'hit') {
+      FX.hits++;
       sfxThud(0.52 * dg);
       /* the line decides which way the camera is thrown, so a cut from your left
        * knocks you left instead of jolting the same way every time */
@@ -1997,7 +2001,15 @@ function tick(dt) {
     if (e.type === 'windup') sfxGrunt(isFoe ? 0.34 * dg : 0.12);
     if (e.type === 'release') sfxWhoosh(isFoe ? 0.52 * dg : 0.26, ek === 'heavy' ? 0.42 : 0.3, ek === 'thrust' ? 1.25 : 1);
     if (e.type === 'death') {
-      sfxThud(0.6 * dg); sfxGrunt(0.3);
+      FX.kills++;
+      hitStop = 0.34;
+      camShake = Math.max(camShake, 0.72);
+      camPunch = e.who === foe.id ? 0.95 : -1.15;
+      FX.maxStop = Math.max(FX.maxStop, hitStop);
+      FX.maxShake = Math.max(FX.maxShake, camShake);
+      burst('blood', foeRoot.position.clone().add(new THREE.Vector3(0, 1.15, 0)));
+      burst('blood', foeRoot.position.clone().add(new THREE.Vector3(0, 0.85, 0)));
+      sfxThud(0.72 * dg); sfxGrunt(0.3);
       const winner = e.who === foe.id ? 0 : 1;
       score[winner]++;
       updateDots();
@@ -2388,6 +2400,7 @@ function render(dt) {
   if (foe.hp < lastFoeHp - 0.01) { hitStop = 0.075; camPunch = 0.55; }
   if (me.hp < lastMeHp - 0.01) { hitStop = 0.095; camPunch = -0.85; shieldRock = 0.65; }
   lastFoeHp = foe.hp; lastMeHp = me.hp;
+  if (typeof FX !== 'undefined') { FX.maxShake = Math.max(FX.maxShake, camShake); FX.maxStop = Math.max(FX.maxStop, hitStop); }
   hitStop = Math.max(0, hitStop - dt);
   camPunch = lerp(camPunch, 0, 1 - Math.pow(0.0000012, dt));
   shieldRock = lerp(shieldRock, 0, 1 - Math.pow(0.0006, dt));
