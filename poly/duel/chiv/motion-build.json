@@ -1,21 +1,22 @@
 {
-  "build": "2026-11-15 07:58 UTC",
-  "version": "motion-v4",
+  "build": "2026-11-15 08:08 UTC",
+  "version": "motion-v5",
   "files": {
-    "index.html": "894d09801ca85a714324db55af97120f413102aedb7bb7c3c9d00e82a5c68822",
-    "mocap.js": "8ac8090a77bfcae2f694f2f5ebbb1008722e02bcbd07581c372d08eb92299a86",
-    "soldieractor.js": "0cf551d8859e862f69dab1f27464a4d5c35ca7c1899a2709209c83d1b362fd02",
-    "soldier.js": "6ea4c4448deaf5018afe14827db159eaa69fc36199ae362e657b9861a6664e61",
+    "index.html": "8298f9d351887e1f0209d2308f3e6e9579a870b96b1023c65e544ae1146707f6",
+    "mocap.js": "ef651cfaf574c5d6c8efdcb51db18832f3d73eab36ff173a3c635c070d85186f",
+    "soldieractor.js": "050b08d0b752757dbf3d77353cb63d7fe8bb0d050f0f3f8bee575f5703e0a58d",
+    "soldier.js": "012169fbe6cb2003fede45209f14931c031c819299d1f96d0864c1d9f2552e28",
     "stances.js": "2637455c198de9f74d9c031e887f38f90e51d49d3812597a79633ed9b51ea9ed",
     "mocap/locomotion.json": "bbeeccd7fa3dd36fad91955c40b79bec9e65c75ed31d69bc4568249ae8b25df6",
     "mocap/swings.json": "e357229b4af5f40e934f632b3c748f379ef74199cb6d996cd50bc91802f78f8b",
-    "motion-review.html": "9a6c698ba107d3062c20debfca71d0916dd573c509a1088c8756a9a9bdb8a2d2",
+    "motion-review.html": "0362e2f942b5fce41fa8ae1bb403f1dd63f37aad58f2cafb7108d1b316bf98af",
     "mocap/SOURCES.md": "bc496e5a71cc6c2b4dcf89e7bc454b809d5b9312cd6d78089a59715764e181d0"
   },
   "localVerification": {
     "actorPoses": 704,
     "coreTests": 29,
     "styleTests": 13,
-    "realClickDirections": 4
+    "realClickDirections": 4,
+    "completeMatchesBothQualityModes": true
   }
 }

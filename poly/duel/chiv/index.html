@@ -73,7 +73,7 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 07:58</div>
+  <div id="build">BUILD 2026-11-15 08:08</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
@@ -97,7 +97,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=motion-v4';
+import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=motion-v5';
 import { STYLES, styleRule } from './chiv.styles.js';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
@@ -202,11 +202,11 @@ let skyDome = null;
  * at full strength it double counts the sky and flattens every form */
 /* a blue sky over blue-shadowed ground washes every warm albedo to grey-cyan, so the
  * fill is warm and weak and a bounce term stands in for light coming back off the grass */
-const fillLight = new THREE.HemisphereLight(0xcfcabb, 0x6b6042, 0.30);
+const fillLight = new THREE.HemisphereLight(0xcfcabb, 0x6b6042, 0.65);
 scene.add(fillLight);
-const bounce = new THREE.DirectionalLight(0xd8b98a, 0.35);
+const bounce = new THREE.DirectionalLight(0xd8b98a, 0.50);
 bounce.position.set(-14, 6, 26);
-const sun = new THREE.DirectionalLight(0xfff2e0, 2.35);
+const sun = new THREE.DirectionalLight(0xfff2e0, 1.75);
 /* measured off the HDRI's own bright spot: azimuth toward -Z, 44.5 deg elevation,
  * so the shadows on the ground and the visible sun cannot disagree */
 sun.position.set(12.6, 31.5, -29.5);
@@ -256,7 +256,7 @@ const PAL = {
   worn: [0x7e9a44, 0x71903c, 0x6d8a3a, 0x7f6c48],
   stone: [0x7d786e, 0x6e6a60, 0x87806f],
 };
-const PALETTE_CHROMA = 1.45;
+const PALETTE_CHROMA = 1.0;
 function groundMesh() {
   const pos = [], col = [], uvs = [], c = new THREE.Color();
   const UV_SCALE = 4.0;   /* one texture tile every 4 world units: coarse enough that
@@ -1522,7 +1522,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 07:58');
+console.log('REALMS KINGDOM BUILD 2026-11-15 08:08');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is

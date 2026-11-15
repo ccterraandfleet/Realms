@@ -4,9 +4,9 @@
  */
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=motion-v4';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=motion-v4';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=motion-v4';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=motion-v5';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=motion-v5';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=motion-v5';
 
 let ATLAS = null;
 let LOCO = null;
@@ -17,7 +17,7 @@ let swingLoading = false;
 export function loadSwings() {
   if (SWINGS || swingLoading || typeof fetch !== 'function') return;
   swingLoading = true;
-  fetch('./mocap/swings.json?v=motion-v4')
+  fetch('./mocap/swings.json?v=motion-v5')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => {
       if (!j || !j.clips) return;
@@ -75,7 +75,7 @@ export function capturedMotion(attack,phase,u) {
 export function loadLocomotion() {
   if (LOCO || locoLoading || typeof fetch !== 'function') return;
   locoLoading = true;
-  fetch('./mocap/locomotion.json?v=motion-v4')
+  fetch('./mocap/locomotion.json?v=motion-v5')
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => { if (j) { LOCO = new Locomotion(j); if (typeof window !== 'undefined') { window.__locoKeys = Object.keys(j); window.__locoTiersData = LOCO.tiers(); } } else if (typeof window !== 'undefined') window.__locoErr = 'fetch not ok'; })
     .catch((e) => { if (typeof window !== 'undefined') window.__locoErr = String(e); })
@@ -89,7 +89,7 @@ export async function initActors(loader) {
   if (!ATLAS) ATLAS = await new Atlas(loader).ready();
   if (!LOCO) {
     try {
-      const r = await fetch('./mocap/locomotion.json?v=motion-v4');
+      const r = await fetch('./mocap/locomotion.json?v=motion-v5');
       if (r.ok) LOCO = new Locomotion(await r.json());
     } catch (e) { LOCO = null; if (typeof window !== 'undefined') window.__locoErr = String(e); }
   }

@@ -153,16 +153,29 @@ const cyl = (rt, rb, h, s = 14) => new THREE.CylinderGeometry(rt, rb, h, s);
 export function soldierMaterials(M, realm = 0x2f6f9e) {
   const cloth = M.cloth.clone();
   cloth.color = new THREE.Color(realm);
-  const shieldWood = M.leather.clone();
-  shieldWood.color = new THREE.Color(0x8a6a44);
+  // A wooden shield is not dark leather. Use low-contrast grain so its face stays readable.
+  if (!soldierMaterials.woodMap && typeof document !== 'undefined') {
+    const canvas=document.createElement('canvas');canvas.width=128;canvas.height=256;
+    const cx=canvas.getContext('2d'),im=cx.createImageData(128,256);
+    for(let y=0;y<256;y++)for(let x=0;x<128;x++){
+      const i=(y*128+x)*4,grain=Math.sin(x*.51+Math.sin(y*.027)*.8)*5+Math.sin(x*1.81+y*.033)*2;
+      const seam=x%32<2?-15:0;
+      im.data[i]=157+grain+seam;im.data[i+1]=119+grain+seam;im.data[i+2]=75+grain+seam;im.data[i+3]=255;
+    }
+    cx.putImageData(im,0,0);const tex=new THREE.CanvasTexture(canvas);tex.colorSpace=THREE.SRGBColorSpace;tex.wrapS=tex.wrapT=THREE.RepeatWrapping;tex.anisotropy=4;soldierMaterials.woodMap=tex;
+  }
+  const shieldWood=new THREE.MeshStandardMaterial({map:soldierMaterials.woodMap || null,color:soldierMaterials.woodMap?0xffffff:0x9d774b,roughness:.93,metalness:0});
+  const steel=M.steel.clone();steel.roughness=.58;steel.metalness=.72;steel.normalScale.setScalar(.32);
+  const steelDark=M.steelDark.clone();steelDark.roughness=.65;steelDark.metalness=.65;steelDark.normalScale.setScalar(.28);
+  const mail=M.mail.clone();mail.roughness=.76;mail.metalness=.55;mail.normalScale.setScalar(.25);
   return {
     skin: new THREE.MeshStandardMaterial({ color: 0xc2916b, roughness: 0.72, metalness: 0 }),
     hair: new THREE.MeshStandardMaterial({ color: 0x2a1d15, roughness: 0.88 }),
     wool: new THREE.MeshStandardMaterial({ color: 0x4b453a, roughness: 0.95 }),
     woolDark: new THREE.MeshStandardMaterial({ color: 0x33302a, roughness: 0.95 }),
-    mail: M.mail.clone(),
-    steel: M.steel.clone(),
-    steelDark: M.steelDark.clone(),
+    mail,
+    steel,
+    steelDark,
     leather: M.leather.clone(),
     cloth,
     shieldWood,
