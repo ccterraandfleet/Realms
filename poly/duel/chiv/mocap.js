@@ -113,11 +113,22 @@ export function applyMocapFrame(rig, joints, opts = {}) {
   }
   rig.root.updateMatrixWorld(true);
 
+  /* A FOOT HAS NO CHILD TO AIM AT IN THIS CAPTURE. LAFAN1's toe joint sits exactly on
+   * the ankle, so the ankle->toe vector is zero and setFromUnitVectors on a zero vector
+   * produced an arbitrary orientation: every man's feet pointed at nothing, the soles
+   * were never flat, and any foot-contact measurement was taken on garbage. When the
+   * direction is degenerate the foot is aimed forward and slightly down instead, which
+   * is what a foot does whether it is standing, stepping or swinging. */
+  const FWD = new THREE.Vector3(0, -0.12, 1).normalize();
+  const rootQ = rig.root ? rig.root.getWorldQuaternion(new THREE.Quaternion()) : null;
   for (const [our, a, b] of MAP) {
     if (!allow(our)) continue;
     const ja = joints[a], jb = joints[b];
     if (!ja || !jb) continue;
-    const dir = V(jb).sub(V(ja));
+    let dir = V(jb).sub(V(ja));
+    if (dir.lengthSq() < 1e-8) {
+      dir = rootQ ? FWD.clone().applyQuaternion(rootQ) : FWD.clone();
+    }
     aim(rig, our, dir, RIGHT);
   }
 
@@ -165,6 +176,57 @@ export class Locomotion {
   constructor(data) { this.d = data || {}; }
   names() { return Object.keys(this.d); }
   stats() { const o = {}; for (const k of Object.keys(this.d)) o[k] = { frames: this.d[k].frames.length, seconds: this.d[k].seconds, stride: this.d[k].stride }; return o; }
+  /* THE CLIP'S OWN GROUND SPEED. Root motion is stripped in the bake, so in place the
+   * planted foot slides backward at exactly the speed the ground must move for the foot
+   * to stick. Rate-matching against anything else is what makes feet skate. */
+  naturalSpeed(name) {
+    const c = this.d[name];
+    if (!c || !c.frames || c.frames.length < 4) return 1;
+    const fr = c.frames, dt = 1 / (c.fps || 30);
+    const feets = ['LeftToe', 'RightToe', 'LeftFoot', 'RightFoot'].filter((k) => fr[0][k]);
+    /* the floor of this clip, from its lowest foot sample: a run has a FLIGHT phase
+     * where both feet are off the ground and the lower one is still travelling fast.
+     * Counting those frames reported a run at 6.4 m/s and made the whole ladder wrong. */
+    let floorY = 9;
+    for (const f of fr) for (const k of feets) floorY = Math.min(floorY, f[k][1]);
+    const v = [];
+    for (let i = 1; i < fr.length; i++) {
+      const a = fr[i - 1], b = fr[i];
+      let low = null, lowY = 9;
+      for (const k of feets) { const y = Math.min(a[k][1], b[k][1]); if (y < lowY) { lowY = y; low = k; } }
+      if (!low) continue;
+      if (lowY > floorY + 0.06) continue;        /* airborne: says nothing about ground speed */
+      const dz = (b[low][2] - a[low][2]) - (b.Hips[2] - a.Hips[2]);
+      const dx = (b[low][0] - a[low][0]) - (b.Hips[0] - a.Hips[0]);
+      const sp = Math.sqrt(dx * dx + dz * dz) / dt;
+      if (sp > 0.05) v.push(sp);
+    }
+    if (!v.length) return 1;
+    /* MEDIAN of the stance foot's backward speed. A high percentile was pulling in
+     * frames where the foot is whipping through and reporting a run at 9 m/s. */
+    v.sort((x, y) => x - y);
+    if (typeof window !== 'undefined') { window.__natDbg = window.__natDbg || {}; window.__natDbg[name] = v.map((x) => +x.toFixed(2)); }
+    return Math.max(0.25, v[Math.floor(v.length * 0.5)]);
+  }
+  /* the gait ladder: walk -> run -> sprint, each with the speed it really moves at */
+  tiers() {
+    if (!this._tiers) {
+      this._nat = this._nat || {};
+      const order = ['walk', 'run', 'sprint'];
+      this._tiers = this.names()
+        .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99))
+        .map((name) => ({ name, speed: (this._nat[name] = this._nat[name] || this.naturalSpeed(name)) }));
+      /* THE LADDER MUST CLIMB. Measured speeds come from a capture where a sprint's
+       * stance is briefer than a run's, which can report sprint slower than run. A gait
+       * ladder that goes downhill would play the run cycle for a sprint, so enforce it. */
+      for (let i = 1; i < this._tiers.length; i++) {
+        if (this._tiers[i].speed <= this._tiers[i - 1].speed * 1.08) {
+          this._tiers[i].speed = this._tiers[i - 1].speed * 1.45;
+        }
+      }
+    }
+    return this._tiers;
+  }
   sample(name, t) {
     const c = this.d[name];
     if (!c || !c.frames || !c.frames.length) return null;

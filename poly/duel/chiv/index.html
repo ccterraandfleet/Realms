@@ -40,7 +40,12 @@
     opacity:0;transition:opacity .06s;text-shadow:0 2px 12px #000}
   #msg{position:fixed;left:50%;top:22%;transform:translate(-50%,0);font-size:15px;letter-spacing:.22em;
     color:#cfe0ee;opacity:0;transition:opacity .2s;text-shadow:0 2px 10px #000}
-  #hint{position:fixed;left:50%;bottom:22px;transform:translate(-50%,0);font-size:11px;color:#7d8d9d;letter-spacing:.1em}
+  #armed{position:fixed;left:50%;transform:translateX(-50%);bottom:74px;z-index:40;
+  font:600 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.22em;
+  color:#f2cf7a;text-shadow:0 1px 6px rgba(0,0,0,.85);opacity:.25;transition:opacity .12s ease;
+  pointer-events:none;text-transform:uppercase}
+#armed.on{opacity:1}
+#hint{position:fixed;left:50%;bottom:22px;transform:translate(-50%,0);font-size:11px;color:#7d8d9d;letter-spacing:.1em}
   #flash{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none}
   #vig{position:fixed;inset:0;box-shadow:inset 0 0 140px 40px #7d1f1f;opacity:0;pointer-events:none}
   #intro{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -67,13 +72,14 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 06:21</div>
+  <div id="build">BUILD 2026-11-15 06:43</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
   </style>
-  <div id="hint"><b>LMB</b> attack by mouse direction: up overhead &middot; left/right cuts &middot; down thrust &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>R</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge &nbsp;|&nbsp; turn <b>with</b> a cut to accel it, <b>against</b> it to drag</div>
+  <div id="armed" aria-live="polite"></div>
+<div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
 <div id="intro">
@@ -90,7 +96,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf } from './soldieractor.js';
+import { initActors, makeActor, lineOf, actorsReady } from './soldieractor.js';
 import { STYLES, styleRule } from './chiv.styles.js';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
@@ -1020,6 +1026,14 @@ const MODEL_NOTE = {
 window.__lab = { model: LAB.model, style: LAB.style };
 
 const ROUND_MSG = $('#msg');
+const armedEl = document.getElementById('armed');
+const ARMED_LABEL = { up: 'overhead', down: 'thrust', left: 'left cut', right: 'right cut' };
+/* measurement hooks: drive the SAME aim path the browser feeds, so a headless test
+ * proves the mapping instead of hoping the synthetic mouse carries movementX */
+if (typeof window !== 'undefined') {
+  window.__aimInject = (dx, dy) => noteAim(dx, dy);
+  window.__aimState = () => ({ dx: +aim.dx.toFixed(1), dy: +aim.dy.toFixed(1), mag: +aim.mag.toFixed(1), line: armedLine(), mouse: mouseDir(), key: moveKeyLine() });
+}
 const loader = new GLTFLoader();
 let ready = false;
 /* THE PURPOSE-BUILT SOLDIER IS THE MODEL NOW. The three GLB rigs were the measuring
@@ -1086,6 +1100,86 @@ function makeSoldier(f, side, tint) {
   });
   scene.add(actor.root);
   return { f, side, root: actor.root, actor, cur: 'idle' };
+}
+
+/* ===========================================================================
+ * YOUR OWN BODY.
+ * In Chivalry you can look down and see the man you are. Everything below the neck
+ * is a real soldier from the same factory as the squad: the captured leg locomotion
+ * walks him, and his own fighter clock drives the torso, so what you see under you
+ * matches what the rules say you are doing. The head, neck and arms are left OFF,
+ * because the camera is where his eyes are and the first-person viewmodel owns the
+ * arms and the blade.
+ * =========================================================================== */
+let playerBody = null;
+const PLAYER_OMIT = ['head', 'neck', 'clav.L', 'clav.R', 'arm.L', 'arm.R', 'fore.L', 'fore.R', 'hand.L', 'hand.R'];
+function buildPlayerBody() {
+  if (playerBody || !ATLAS_READY()) return;
+  playerBody = makeActor({
+    tint: REALM_BLUE, kind: 'sword', helm: 'kettle', shield: 'kite',
+    shadows: false, omitBones: PLAYER_OMIT,
+  });
+  scene.add(playerBody.root);
+}
+function ATLAS_READY() { try { return !!actorsReady(); } catch (e) { return false; } }
+function updatePlayerBody(dt, speed) {
+  if (!playerBody) buildPlayerBody();
+  if (!playerBody) return;
+  playerBody.root.position.set(playerPos.x, 0, playerPos.z);
+  /* the soldier is authored facing +Z, the camera looks down -Z at yaw 0 */
+  playerBody.root.rotation.y = yaw + Math.PI;
+  playerBody.update(dt, liveMe || null, speed);
+  if (typeof window !== 'undefined') window.__bodyFrames = (window.__bodyFrames || 0) + 1;
+}
+if (typeof window !== 'undefined') {
+  /* foot slip, measured: the planted toe's WORLD velocity. No slide means zero. */
+  window.__toeWorld = () => {
+    if (!playerBody) return null;
+    const r = playerBody.rig, out = {};
+    playerBody.root.updateMatrixWorld(true);
+    for (const k of ['toe.L', 'toe.R', 'foot.L', 'foot.R']) {
+      const b = r.byName.get(k);
+      if (b) { const v = new THREE.Vector3(); b.getWorldPosition(v); out[k] = [v.x, v.y, v.z]; }
+    }
+    out.pos = [playerBody.root.position.x, playerBody.root.position.z];
+    return out;
+  };
+  window.__locoTiers = () => window.__locoTiersData || null;
+}
+if (typeof window !== 'undefined') {
+  window.__bodyCheck = () => {
+    if (!playerBody) return { built: false };
+    playerBody.root.updateMatrixWorld(true);
+    const r = playerBody.rig;
+    const toe = r.byName.get('toe.R'), foot = r.byName.get('foot.R'), hips = r.byName.get('hips');
+    const wp = (b) => { const v = new THREE.Vector3(); b.getWorldPosition(v); return v; };
+    const toes = toe ? wp(toe) : null, feet = foot ? wp(foot) : null;
+    /* nothing of your own body may sit inside the lens */
+    let nearest = 9e9, parts = 0;
+    playerBody.root.traverse((n) => {
+      if (!n.isSkinnedMesh) return;
+      parts++;
+      const g = n.geometry;
+      const pos = g.attributes.position;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i += 7) {
+        v.fromBufferAttribute(pos, i);
+        n.applyBoneTransform ? n.applyBoneTransform(i, v) : null;
+        v.applyMatrix4(n.matrixWorld);
+        v.sub(camera.position);
+        nearest = Math.min(nearest, v.length());
+      }
+    });
+    return {
+      built: true, parts, frames: window.__bodyFrames || 0,
+      toe: toes ? [+toes.x.toFixed(2), +toes.y.toFixed(2), +toes.z.toFixed(2)] : null,
+      foot: feet ? [+feet.x.toFixed(2), +feet.y.toFixed(2), +feet.z.toFixed(2)] : null,
+      hipsY: hips ? +wp(hips).y.toFixed(2) : null,
+      nearestToCamera: +nearest.toFixed(2),
+      bodyAt: [+playerBody.root.position.x.toFixed(2), +playerBody.root.position.z.toFixed(2)],
+      yaw: +playerBody.root.rotation.y.toFixed(2),
+    };
+  };
 }
 
 /* superseded: the actor poses itself from the fighter's own phase clock, so a swing
@@ -1264,7 +1358,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 06:21');
+console.log('REALMS KINGDOM BUILD 2026-11-15 06:43');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -1435,17 +1529,40 @@ let foeCircle = 1, foeCircleT = 0, physGap = 4.2;
 const WALK_R = ARENA_R - 0.8;
 const WALK = 4.3, SPRINT = 7.1;
 const mouseHist = [];          /* {t, dx, dy} so a click knows which way the mouse was going */
-function mouseDir() {
-  const now = performance.now();
-  let dx = 0, dy = 0, n = 0;
-  for (const s of mouseHist) {
-    if (now - s.t > 260) break;
-    dx += s.dx; dy += s.dy; n++;
-  }
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 14) return null;
-  if (Math.abs(dy) >= Math.abs(dx)) return dy < 0 ? 'up' : 'down';
-  return dx < 0 ? 'left' : 'right';
+/* WHY THIS IS AN ACCUMULATOR AND NOT A WINDOW. The old read summed the last 260ms of
+ * mouse travel AT THE MOMENT OF THE CLICK. Move the mouse, stop, then click - which is
+ * what a person does - and the window is empty, so the click fell through to a default
+ * and every attack came out the same one. Mason hit exactly that: all thrust.
+ * Now travel is accumulated with a decay, so it survives the pause between aiming and
+ * pressing, and it is read from the same place the HUD reads, so what the indicator
+ * says is what the click does. */
+const AIM_HALF_LIFE = 0.26;    /* seconds for half the accumulated travel to fade */
+const aim = { dx: 0, dy: 0, mag: 0 };
+function noteAim(dx, dy) {
+  aim.dx += dx; aim.dy += dy;
+  aim.mag = Math.max(Math.abs(aim.dx), Math.abs(aim.dy));
 }
+function decayAim(dt) {
+  const k = Math.pow(0.5, dt / AIM_HALF_LIFE);
+  aim.dx *= k; aim.dy *= k;
+  aim.mag = Math.max(Math.abs(aim.dx), Math.abs(aim.dy));
+}
+/* the WASD keys are a SECOND, DETERMINISTIC SOURCE, exactly as Chivalry offers: an
+ * attack direction can come from the way you are moving instead of the way you flicked.
+ * A held key is unambiguous where a flick is not. */
+const MOVE_LINE = { a: 'left', d: 'right', w: 'up', s: 'down' };
+function moveKeyLine() {
+  if (!keys) return null;
+  for (const k of ['w', 'a', 's', 'd']) if (keys[k]) return MOVE_LINE[k];
+  return null;
+}
+function mouseDir() {
+  if (aim.mag < 11) return null;
+  if (Math.abs(aim.dy) >= Math.abs(aim.dx)) return aim.dy < 0 ? 'up' : 'down';
+  return aim.dx < 0 ? 'left' : 'right';
+}
+/* the line a click would produce right now: mouse first, then the key you hold */
+function armedLine() { return mouseDir() || moveKeyLine() || null; }
 const ZONE_OF = { up: 'T', left: 'L', right: 'R', down: 'T' };
 /* one click, one attack; the mouse tells us which one */
 function attackFromClick(kind) {
@@ -1455,7 +1572,8 @@ function attackFromClick(kind) {
    *   Stab     no direction at all
    * So the mouse movement picks the LINE and the button picks the WEIGHT. */
   const heavy = kind === 'heavy';
-  const dir = mouseDir();
+  const dir = armedLine();
+  aim.dx = 0; aim.dy = 0; aim.mag = 0;      /* one flick arms one attack */
   const slash = heavy ? 'SlashHeavy' : 'Slash';
   if (dir === 'down')  { lastZone = 'T'; return { name: heavy ? 'StabHeavy' : 'Stab', alt: false, kind: 'thrust', zone: 'T' }; }
   if (dir === 'up')    { lastZone = 'T'; return { name: heavy ? 'OverheadHeavy' : 'Overhead', alt: false, kind, zone: 'T' }; }
@@ -1659,6 +1777,7 @@ document.addEventListener('mousemove', (e) => {
    * Chivalry, rather than by remembering which key stands for which cut */
   mouseHist.unshift({ t: performance.now(), dx: e.movementX, dy: e.movementY });
   if (mouseHist.length > 22) mouseHist.length = 22;
+  noteAim(e.movementX, e.movementY);
   /* a held guard follows the mouse, so you can move the block to the incoming line */
   if (rmbDown) {
     const d = mouseDir();
@@ -2591,8 +2710,19 @@ function render(dt) {
 
 
   camera.rotation.set(pitch + camPunch * 0.055, yaw, lean * 0.12 + camRoll + (shake * 0.02) - strafe * 0.022, 'YXZ');
+  /* the aim fades on its own clock, and the indicator reads the SAME function the click
+   * does, so a player can see which line is armed before committing to it */
+  decayAim(dt);
+  if (armedEl) {
+    const line = armedLine();
+    armedEl.textContent = line ? ARMED_LABEL[line] : '';
+    armedEl.classList.toggle('on', !!line);
+  }
   camRoll *= Math.pow(0.02, dt);
   dodgeRoll *= 0.86;
+
+  /* your own body walks and arms itself from your fighter state */
+  updatePlayerBody(dt, Math.hypot(playerVel.x, playerVel.z));
 
   /* the opponent stands at the duel's distance, always facing you */
   const d = Math.max(1.2, Math.min(4.4, duel.dist * 1.05));
