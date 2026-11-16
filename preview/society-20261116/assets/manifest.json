@@ -1,0 +1,249 @@
+[
+  {
+    "path": "stone/color.webp",
+    "asset": "old_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/old_stone_wall/old_stone_wall_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "stone/normal.webp",
+    "asset": "old_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/old_stone_wall/old_stone_wall_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "stone/rough.webp",
+    "asset": "old_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/old_stone_wall/old_stone_wall_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wall/color.webp",
+    "asset": "plastered_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/plastered_stone_wall/plastered_stone_wall_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wall/normal.webp",
+    "asset": "plastered_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/plastered_stone_wall/plastered_stone_wall_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wall/rough.webp",
+    "asset": "plastered_stone_wall",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/plastered_stone_wall/plastered_stone_wall_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "road/color.webp",
+    "asset": "mossy_cobblestone",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/mossy_cobblestone/mossy_cobblestone_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "road/normal.webp",
+    "asset": "mossy_cobblestone",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/mossy_cobblestone/mossy_cobblestone_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "road/rough.webp",
+    "asset": "mossy_cobblestone",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/mossy_cobblestone/mossy_cobblestone_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "roof/color.webp",
+    "asset": "grey_roof_tiles_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grey_roof_tiles_02/grey_roof_tiles_02_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wood/color.webp",
+    "asset": "oak_wood_planks",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wood/normal.webp",
+    "asset": "oak_wood_planks",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "wood/rough.webp",
+    "asset": "oak_wood_planks",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/oak_wood_planks/oak_wood_planks_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "roof/normal.webp",
+    "asset": "grey_roof_tiles_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grey_roof_tiles_02/grey_roof_tiles_02_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "roof/rough.webp",
+    "asset": "grey_roof_tiles_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grey_roof_tiles_02/grey_roof_tiles_02_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "bark/color.webp",
+    "asset": "pine_tree_01",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/pine_tree_01/pine_tree_01_bark_diff_1k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "bark/normal.webp",
+    "asset": "pine_tree_01",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/pine_tree_01/pine_tree_01_bark_nor_gl_1k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "bark/rough.webp",
+    "asset": "pine_tree_01",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/1k/pine_tree_01/pine_tree_01_bark_rough_1k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "ground/color.webp",
+    "asset": "forest_floor",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_floor/forest_floor_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "ground/normal.webp",
+    "asset": "forest_floor",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_floor/forest_floor_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "ground/rough.webp",
+    "asset": "forest_floor",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/forest_floor/forest_floor_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "pine/branch.webp",
+    "asset": "pine_tree_01",
+    "source": "https://polyhaven.com/a/pine_tree_01",
+    "license": "CC0-1.0",
+    "derivation": "Diffuse plus publisher alpha, authored card geometry."
+  },
+  {
+    "path": "grass_medium_01/model.gltf",
+    "asset": "grass_medium_01",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/grass_medium_01/grass_medium_01_1k.gltf",
+    "license": "CC0-1.0",
+    "derivation": "Texture recompression; original meshes retained."
+  },
+  {
+    "path": "fern_02/model.gltf",
+    "asset": "fern_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/fern_02/fern_02_1k.gltf",
+    "license": "CC0-1.0",
+    "derivation": "Texture recompression; original meshes retained."
+  },
+  {
+    "path": "wooden_barrels_01/model.gltf",
+    "asset": "wooden_barrels_01",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Models/gltf/1k/wooden_barrels_01/wooden_barrels_01_1k.gltf",
+    "license": "CC0-1.0",
+    "derivation": "Texture recompression; original meshes retained."
+  },
+  {
+    "path": "overcast.hdr",
+    "asset": "kloofendal_overcast_puresky",
+    "source": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloofendal_overcast_puresky_1k.hdr",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "grass/color.webp",
+    "asset": "grass_ground",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_diff_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "grass/normal.webp",
+    "asset": "grass_ground",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_nor_gl_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "grass/rough.webp",
+    "asset": "grass_ground",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/grass_ground/grass_ground_rough_2k.jpg",
+    "license": "CC0-1.0"
+  },
+  {
+    "path": "pine/branch-card.webp",
+    "asset": "pine_tree_01",
+    "source": "https://polyhaven.com/a/pine_tree_01",
+    "license": "CC0-1.0",
+    "derivation": "Isolated connected foliage component from publisher alpha, cropped with corresponding normal map."
+  },
+  {
+    "path": "pine/branch-card-normal.webp",
+    "asset": "pine_tree_01",
+    "source": "https://polyhaven.com/a/pine_tree_01",
+    "license": "CC0-1.0",
+    "derivation": "Isolated connected foliage component from publisher alpha, cropped with corresponding normal map."
+  },
+  {
+    "path": "../anatomy/head.json",
+    "asset": "MakeHuman anatomical head subset",
+    "source": "https://github.com/makehumancommunity/makehuman/blob/master/makehuman/data/3dobjs/base.obj",
+    "license": "CC0-1.0",
+    "license_source": "https://github.com/makehumancommunity/makehuman/blob/master/LICENSE.md"
+  },
+  {
+    "path": "character/steel/color.webp",
+    "asset": "metal_plate_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_diff_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  },
+  {
+    "path": "character/steel/normal.webp",
+    "asset": "metal_plate_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_nor_gl_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  },
+  {
+    "path": "character/steel/rough.webp",
+    "asset": "metal_plate_02",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/metal_plate_02/metal_plate_02_rough_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  },
+  {
+    "path": "character/leather/color.webp",
+    "asset": "brown_leather",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brown_leather/brown_leather_albedo_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  },
+  {
+    "path": "character/leather/normal.webp",
+    "asset": "brown_leather",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brown_leather/brown_leather_nor_gl_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  },
+  {
+    "path": "character/leather/rough.webp",
+    "asset": "brown_leather",
+    "source": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/brown_leather/brown_leather_rough_1k.jpg",
+    "license": "CC0-1.0",
+    "author": "Rob Tuytel",
+    "provider": "Poly Haven"
+  }
+]
