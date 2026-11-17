@@ -1,8 +1,9 @@
+import {cottageDimensions} from './structures.js?v=cargo-frame-20261117';
 import * as THREE from 'three';
-import {RGBELoader} from './lib/loaders/RGBELoader.js';
-import {GLTFLoader} from './lib/loaders/GLTFLoader.js';
-import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js';
-import {hash} from './society.js';
+import {RGBELoader} from './lib/loaders/RGBELoader.js?v=cargo-frame-20261117';
+import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=cargo-frame-20261117';
+import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=cargo-frame-20261117';
+import {hash} from './society.js?v=cargo-frame-20261117';
 const V=THREE.Vector3,M=THREE.Matrix4,Q=THREE.Quaternion;
 const height=(x,z)=>Math.sin(x*.021)*Math.sin(z*.023)*.42;
 export class EnvironmentArt{
@@ -20,7 +21,7 @@ float rDist=min(distance(vRealmXZ,realmCenters[0]),min(distance(vRealmXZ,realmCe
  box(g,x,y,z,w,h,d,mat){const mesh=new THREE.Mesh(this.uv(new THREE.BoxGeometry(w,h,d)),mat);mesh.position.set(x,y,z);mesh.castShadow=true;mesh.receiveShadow=true;g.add(mesh);return mesh;}
  beam(g,a,b,r,mat=this.maps.wood){const A=new V(...a),B=new V(...b),d=B.clone().sub(A),m=new THREE.Mesh(this.uv(new THREE.BoxGeometry(r,d.length(),r)),mat);m.position.copy(A.add(B).multiplyScalar(.5));m.quaternion.setFromUnitVectors(new V(0,1,0),d.normalize());m.castShadow=true;m.receiveShadow=true;g.add(m);return m;}
  merge(g){const groups=new Map();for(const m of [...g.children]){if(!m.isMesh||Array.isArray(m.material)||m.userData.dynamic)continue;m.updateMatrix();const geo=(m.geometry.index?m.geometry.toNonIndexed():m.geometry.clone()).applyMatrix4(m.matrix);for(const k of Object.keys(geo.attributes))if(!['position','normal','uv'].includes(k))geo.deleteAttribute(k);if(!geo.attributes.uv)geo.setAttribute('uv',new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count*2),2));let bucket=groups.get(m.material);if(!bucket)groups.set(m.material,bucket=[]);bucket.push(geo);g.remove(m);m.geometry.dispose();}for(const[mat,geos]of groups){const merged=mergeGeometries(geos,false);if(!merged)throw Error('Environment geometry merge failed');const m=new THREE.Mesh(merged,mat);m.castShadow=true;m.receiveShadow=true;g.add(m);geos.forEach(x=>x.dispose());}return g;}
- cottage(x,z,kind,color){const g=new THREE.Group();g.position.set(x,height(x,z),z);const hall=kind==='hearth',w=hall?9:kind==='housing'?6:5,d=hall?7:4,h=hall?4.2:2.9;
+ cottage(x,z,kind,color){const g=new THREE.Group();g.position.set(x,height(x,z),z);const hall=kind==='hearth',{w,d,h}=cottageDimensions(kind);
  this.box(g,0,.3,0,w+.38,.6,d+.38,this.maps.stone);this.box(g,0,h*.5+.46,0,w,h,d,this.maps.wall);this.box(g,0,.74,0,w+.12,.72,d+.12,this.maps.stone);
  for(const side of [-1,1]){const zf=side*(d/2+.06);for(const xx of [-w/2,0,w/2])this.box(g,xx,h/2+.48,zf,.19,h+.08,.2,this.maps.wood);for(const yy of [1.05,h+.43])this.box(g,0,yy,zf,w+.22,.2,.19,this.maps.wood);for(const xx of [-w*.27,w*.27]){this.box(g,xx,1.97,zf+side*.06,1,.93,.11,this.v.dark);this.box(g,xx,1.47,zf+side*.13,1.2,.13,.34,this.maps.wood);for(const dx of [-.5,.5])this.box(g,xx+dx,1.98,zf+side*.12,.09,1.04,.12,this.maps.wood);this.box(g,xx,2.46,zf+side*.12,1.1,.12,.17,this.maps.wood);this.box(g,xx,1.97,zf+side*.14,.075,.91,.09,this.maps.wood);for(const sh of [-1,1])this.box(g,xx+sh*.65,1.96,zf+side*.08,.27,.87,.11,this.maps.wood);}
  for(const half of [-1,1])this.beam(g,[half*w*.48,1.18,zf],[half*w*.29,h+.32,zf],.13);}

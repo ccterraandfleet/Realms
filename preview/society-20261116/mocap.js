@@ -18,7 +18,7 @@
  * which is what a hand holding a blade actually does through a cut.
  * =========================================================================== */
 import * as THREE from 'three';
-import { BLADE_LOCAL } from './stances.js?v=action-v1';
+import { BLADE_LOCAL } from './stances.js?v=cargo-frame-20261117';
 
 /* our bone -> [source start joint, source end joint] */
 const MAP = [
