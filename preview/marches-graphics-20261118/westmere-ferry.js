@@ -1,0 +1,4 @@
+// A single persistent hull shuttles independent shipment records. Land navigation
+// never treats this lane as a road; only the load assigned to the hull may cross.
+export const F=Object.freeze({z:82,west:-142,east:-101,westDock:-152,eastDock:-91,speed:2.8,capacity:12,cost:Object.freeze({timber:16,iron:2})});
+export function sail(s,dt){const f=s.westmereFerry;if(!f)return;const sh=f.load?s.shipments.find(q=>q.id===f.load):null;if(f.load&&!sh)throw Error('Missing ferry manifest');const goal=sh?F.east:F.west;f.x+=Math.sign(goal-f.x)*Math.min(Math.abs(goal-f.x),dt*F.speed);if(sh){sh.x=f.x;sh.z=F.z;if(f.x===F.east){sh.stage=2;sh.x=F.eastDock;sh.aboard=false;f.load=null;}}else if(f.x===F.west){const next=s.shipments.find(q=>q.via==='ferry'&&q.stage===1&&q.status==='travelling');if(next){next.aboard=true;next.x=f.x;next.z=F.z;f.load=next.id;}}}

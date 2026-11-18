@@ -1,0 +1,47 @@
+[
+  {
+    "id": "weathered",
+    "label": "Freckled light",
+    "maps": {
+      "color": "./anatomy/skins/weathered-color.webp",
+      "normal": "./anatomy/skins/weathered-normal.webp",
+      "rough": "./anatomy/skins/weathered-rough.webp"
+    },
+    "skin_color": "#e1a78b",
+    "author": "Toigo (albedo); Mindfront (normal/specular)",
+    "license": "CC0-1.0",
+    "sources": [
+      "http://www.makehumancommunity.org/node/1325",
+      "http://www.makehumancommunity.org/node/850"
+    ],
+    "official_license_source": "https://github.com/makehumancommunity/makehuman-static-website/blob/master/content/Assets/AssetPacks/skins02.md",
+    "source_sha256": {
+      "toigo_light_skin_male_freckles/young_lightskinned_male_diffuse_Freckles.png": "32d33fab52bda1b6bc8cd134bb34f2980a77d2b51c9f048e8ea00c861b4da604",
+      "mindfront_aksel_skin/Aksel_Skin_NRM.png": "2bf3632a4bfb1631d9ae15568c7de5c7254c780e5168f1546827f32d50f5212d",
+      "mindfront_aksel_skin/Aksel_Skin_SPEC.png": "d34638826d48d6fdb632f3a18296999630edf2879e7301356dfa60e6d61808f7"
+    },
+    "derivation": "Only needed atlas regions exported. Light albedo uses the uninjured freckled source. Roughness is an artistic conversion from source specular maps, not measured roughness."
+  },
+  {
+    "id": "umber",
+    "label": "Weathered deep",
+    "maps": {
+      "color": "./anatomy/skins/umber-color.webp",
+      "normal": "./anatomy/skins/umber-normal.webp",
+      "rough": "./anatomy/skins/umber-rough.webp"
+    },
+    "skin_color": "#69412f",
+    "author": "Mindfront",
+    "license": "CC0-1.0",
+    "sources": [
+      "http://www.makehumancommunity.org/node/526"
+    ],
+    "official_license_source": "https://github.com/makehumancommunity/makehuman-static-website/blob/master/content/Assets/AssetPacks/skins02.md",
+    "source_sha256": {
+      "mindfront_skin_male_african_middleage/skin_male_african_middleage.png": "5130c59aa53fa92044030c6b1c94d8627cddc4fc2512608cbe0bc4380f5198b9",
+      "mindfront_skin_male_african_middleage/skin_male_african_middleage_NRM.png": "5b7e90353022b38cd8f59606f39ca4a5c2af51de3589240ad8592748b58bf102",
+      "mindfront_skin_male_african_middleage/skin_male_african_middleage_SPEC.png": "98b8f5dc6f7e3edbc43501f394f4e84c717d32a70e569a4417a076c2b84fc72a"
+    },
+    "derivation": "Only needed atlas regions exported. Light albedo uses the uninjured freckled source. Roughness is an artistic conversion from source specular maps, not measured roughness."
+  }
+]
