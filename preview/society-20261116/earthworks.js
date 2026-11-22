@@ -1,6 +1,6 @@
 // Conserved-material terrain kernel. Not exposed as playable terrain until mesh,
 // collision, support and interaction integration pass their acceptance checks.
-import{awardSkill}from'./progression.js?v=world-20261122-human1';
+import{awardSkill}from'./progression.js?v=world-20261122-anatomy2';
 export const CELL=.5,CARRY_GRAMS=40000;
 export const MATERIALS={soil:{gramsPerM3:1600000,looseGramsPerM3:1200000},clay:{gramsPerM3:1700000,looseGramsPerM3:1300000},stone:{gramsPerM3:2600000,looseGramsPerM3:1600000}};
 const need=(x,m)=>{if(!x)throw Error(m);},sum=o=>Object.values(o||{}).reduce((a,b)=>a+b,0),key=p=>`${p.x}:${p.y}:${p.z}`,native=p=>p.y>=-4?'soil':p.y>=-8?'clay':'stone',mass=m=>MATERIALS[m].gramsPerM3*CELL**3,point=p=>({x:(p.x+.5)*CELL,y:(p.y+.5)*CELL,z:(p.z+.5)*CELL}),distance=(a,b)=>Math.hypot(a.x-b.x,(a.y||0)-(b.y||0),a.z-b.z);

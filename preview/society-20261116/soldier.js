@@ -1,5 +1,5 @@
-import{shapeFrame}from './resident-anatomy.js?v=world-20261122-human1';import{workerHand}from './anatomy.js?v=world-20261122-human1';
-import{dressResident}from './resident-dress.js?v=world-20261122-human1';
+import{shapeFrame}from './resident-anatomy.js?v=world-20261122-anatomy2';import{workerHand}from './anatomy.js?v=world-20261122-anatomy2';
+import{dressResident}from './resident-dress.js?v=world-20261122-anatomy2';
 /* ===========================================================================
  * SOLDIER: original armour, clothing and rig with a CC0 anatomical head
  * ===========================================================================
@@ -29,8 +29,8 @@ import{dressResident}from './resident-dress.js?v=world-20261122-human1';
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-human1';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-human1';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-anatomy2';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy2';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and

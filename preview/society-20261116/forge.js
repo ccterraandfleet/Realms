@@ -20,7 +20,7 @@
  * =========================================================================== */
 
 import * as THREE from 'three';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-human1';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy2';
 let this_mergeFailures = 0;
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);

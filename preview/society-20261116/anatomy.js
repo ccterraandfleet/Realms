@@ -1,4 +1,4 @@
-import{facePoint}from './resident-anatomy.js?v=world-20261122-human1';
+import{facePoint}from './resident-anatomy.js?v=world-20261122-anatomy2';
 import * as THREE from 'three';
 let data=null,handData=null;const skinSets=new Map();
 export async function loadAnatomy(){if(data&&skinSets.size)return data;const response=await fetch('./anatomy/head.json');if(!response.ok)throw Error(`Head asset unavailable: ${response.status}`);data=await response.json();if(data.license!=='CC0-1.0'||data.positions.length!==data.normals.length)throw Error('Invalid head asset');const hr=await fetch('./anatomy/hand.json');if(!hr.ok)throw Error('Worker hand unavailable');handData=await hr.json();await loadSkinSets();return data;}
