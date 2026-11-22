@@ -1,4 +1,5 @@
-import{dressResident}from './resident-dress.js?v=world-20261122-residents1';
+import{shapeFrame}from './resident-anatomy.js?v=world-20261122-human1';import{workerHand}from './anatomy.js?v=world-20261122-human1';
+import{dressResident}from './resident-dress.js?v=world-20261122-human1';
 /* ===========================================================================
  * SOLDIER: original armour, clothing and rig with a CC0 anatomical head
  * ===========================================================================
@@ -28,8 +29,8 @@ import{dressResident}from './resident-dress.js?v=world-20261122-residents1';
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-residents1';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-residents1';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-human1';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-human1';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
@@ -215,7 +216,7 @@ export function buildSoldier(rig, mats, spec = {}) {
   /* Open, skinned collar: the clean neckline continues beneath the garment. */
   parts.push({geo:loft([{y:1.449,rx:.133,rz:.103},{y:1.474,rx:.104,rz:.094},{y:1.508,rx:.077,rz:.083},{y:1.535,rx:.066,rz:.076}],32,false,false),mat:mats[has('mail')?'mail':'wool'],bone:'chest',skinChain:[{upper:'neck',lower:'chest',y:1.510,band:.026}]});
   /* Connected anatomical head and neck, rather than a rigid cylinder. */
-  parts.push(...anatomicalHead(mats,helm==='great',spec.skinStyle));
+  parts.push(...anatomicalHead(mats,helm==='great',spec.skinStyle,spec.human));
 
   /* ---------------- helmet variants */
   const helmetStart=parts.length,cap=headCapSections(helm==='coif'),rim=cap[0];
@@ -265,7 +266,7 @@ export function buildSoldier(rig, mats, spec = {}) {
         const curve=new THREE.CatmullRomCurve3(points);hp(new THREE.TubeGeometry(curve,9,.0095,7,false),mats.leather);hp(sph(.010,8,6).translate(...points[0].toArray()),spec.civilian?mats.leather:mats.steel);
       }
       hp(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-sign*.045,.035,.018),new THREE.Vector3(-sign*.024,.031,.036),new THREE.Vector3(sign*.004,.017,.028)]),8,.012,7,false),mats.leather);
-    }else{
+    }else if(spec.human){P(workerHand(sign),mats.skin,hand);parts.at(-1).rigid=true;}else{
       P(sph(.048,14,10).scale(.52,1.0,.87).translate(sign*.213,.866,.005),mats.leather,hand);
       for(let finger=0;finger<4;finger++){const z=-.027+finger*.019,len=[.060,.079,.081,.069][finger],A=[sign*.211,.832,z],B=[sign*.218,.832-len*.6,z+.003],C=[sign*.233,.832-len,z+.004];segment(A,B,.0088,mats.leather,hand);segment(B,C,.008,mats.leather,hand);P(sph(.008,7,5).translate(...C),mats.skin,hand);}
       segment([sign*.211,.886,.045],[sign*.223,.851,.059],.011,mats.leather,hand);segment([sign*.223,.851,.059],[sign*.236,.829,.048],.009,mats.skin,hand);
@@ -362,7 +363,7 @@ export function buildSoldier(rig, mats, spec = {}) {
   }
 
   for(let i=shieldStart;i<parts.length;i++)parts[i].equipment='shield';
-  return parts;
+  shapeFrame(parts,spec.human);return parts;
 }
 
 /* =========================================================================

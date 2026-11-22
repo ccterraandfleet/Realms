@@ -1,4 +1,4 @@
-import { zoneOf } from './chiv.styles.js?v=world-20261122-residents1';
+import { zoneOf } from './chiv.styles.js?v=world-20261122-human1';
 /* ===========================================================================
  * A CHIVALRY OPPONENT FOR THE DATA-DRIVEN CORE
  * ===========================================================================

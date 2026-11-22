@@ -1,14 +1,14 @@
-import{dressMarches,marchesLight}from './marches-art.js?v=world-20261122-residents1';
-import{cropStage}from'./grain-plots.js?v=world-20261122-residents1';
-import{patchForStalk}from'./grain-plots.js?v=world-20261122-residents1';
-import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-residents1';
-import {partitionInstances} from './scenery-batching.js?v=world-20261122-residents1';
-import {cottageDimensions} from './structures.js?v=world-20261122-residents1';
+import{dressMarches,marchesLight}from './marches-art.js?v=world-20261122-human1';
+import{cropStage}from'./grain-plots.js?v=world-20261122-human1';
+import{patchForStalk}from'./grain-plots.js?v=world-20261122-human1';
+import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-human1';
+import {partitionInstances} from './scenery-batching.js?v=world-20261122-human1';
+import {cottageDimensions} from './structures.js?v=world-20261122-human1';
 import * as THREE from 'three';
-import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-residents1';
-import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-residents1';
-import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-residents1';
-import {hash} from './society.js?v=world-20261122-residents1';
+import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-human1';
+import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-human1';
+import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-human1';
+import {hash} from './society.js?v=world-20261122-human1';
 const V=THREE.Vector3,M=THREE.Matrix4,Q=THREE.Quaternion;
 const height=groundHeight;
 export class EnvironmentArt{

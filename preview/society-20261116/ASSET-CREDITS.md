@@ -53,3 +53,5 @@ The candidate does not claim that the old public release has been relicensed. Th
 ## Rendering library
 
 Three.js and its loaders/utilities are MIT-licensed. Their source notices are retained in the bundled library files.
+
+Bare working hands use a wrist-cropped derivative of the same CC0 MakeHuman base mesh cited above. The face landmark variation and brow geometry are project-authored.

@@ -1,6 +1,6 @@
-import{onDeck}from'./westmere-bridge.js?v=world-20261122-residents1';
-import{naturalFeatureAt}from'./natural-geography.js?v=world-20261122-residents1';
-import {terrainHeight} from './world-terrain.js?v=world-20261122-residents1';
+import{onDeck}from'./westmere-bridge.js?v=world-20261122-human1';
+import{naturalFeatureAt}from'./natural-geography.js?v=world-20261122-human1';
+import {terrainHeight} from './world-terrain.js?v=world-20261122-human1';
 export const WORLD_BOUNDS=Object.freeze({minX:-170,maxX:170,minZ:-150,maxZ:150});
 export const groundHeight=terrainHeight;
 export const worldRoads=s=>Object.values(s.houses).map(h=>({id:'road:'+h.id,points:[{x:h.x,z:h.z},{x:0,z:0}]}));

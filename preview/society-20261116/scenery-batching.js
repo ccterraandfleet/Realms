@@ -1,4 +1,4 @@
-import * as THREE from './lib/three.module.js?v=world-20261122-residents1';
+import * as THREE from './lib/three.module.js?v=world-20261122-human1';
 /** Static, spatially bounded batches. Geometry, materials, transforms and wind remain identical. */
 export function partitionInstances(source,cellSize=32,padding=.3){
  if(!source.isInstancedMesh)throw Error('Expected an instanced mesh');if(!(cellSize>0))throw Error('Invalid cell size');source.updateMatrix();const groups=new Map(),matrix=new THREE.Matrix4();for(let i=0;i<source.count;i++){source.getMatrixAt(i,matrix);const key=Math.floor(matrix.elements[12]/cellSize)+':'+Math.floor(matrix.elements[14]/cellSize);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(i);}
