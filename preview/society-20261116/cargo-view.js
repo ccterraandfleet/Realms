@@ -1,7 +1,7 @@
-import{grainYardView,tiedBag}from'./grain-yard-view.js?v=world-20261122-marches1';
-import {attachCargoToChest,makeCargoHarness} from './cargo-rig.js?v=world-20261122-marches1';
-import {carriedGoods} from './structures.js?v=world-20261122-marches1';
-import {mergeGeometries} from './lib/BufferGeometryUtils.js?v=world-20261122-marches1';
+import{grainYardView,tiedBag}from'./grain-yard-view.js?v=world-20261122-residents1';
+import {attachCargoToChest,makeCargoHarness} from './cargo-rig.js?v=world-20261122-residents1';
+import {carriedGoods} from './structures.js?v=world-20261122-residents1';
+import {mergeGeometries} from './lib/BufferGeometryUtils.js?v=world-20261122-residents1';
 import * as THREE from 'three';
 const total=g=>Object.values(g||{}).reduce((n,x)=>n+x,0);
 export class CargoView{

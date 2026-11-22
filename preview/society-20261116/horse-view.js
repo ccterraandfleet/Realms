@@ -1,10 +1,10 @@
-import {groundBasis} from './world-terrain.js?v=world-20261122-marches1';
-import {makeSaddleBlanket} from './saddle-blanket.js?v=world-20261122-marches1';
-import {horseAnimationFrame,hoofSamples} from './horse-motion.js?v=world-20261122-marches1';
-import {makeBridle,makeRein,updateRein} from './horse-tack.js?v=world-20261122-marches1';
-import {navigationFor} from './navigation.js?v=world-20261122-marches1';
+import {groundBasis} from './world-terrain.js?v=world-20261122-residents1';
+import {makeSaddleBlanket} from './saddle-blanket.js?v=world-20261122-residents1';
+import {horseAnimationFrame,hoofSamples} from './horse-motion.js?v=world-20261122-residents1';
+import {makeBridle,makeRein,updateRein} from './horse-tack.js?v=world-20261122-residents1';
+import {navigationFor} from './navigation.js?v=world-20261122-residents1';
 import * as THREE from 'three';
-import{GLTFLoader}from'./lib/loaders/GLTFLoader.js?v=world-20261122-marches1';import{clone}from'./lib/utils/SkeletonUtils.js?v=world-20261122-marches1';
+import{GLTFLoader}from'./lib/loaders/GLTFLoader.js?v=world-20261122-residents1';import{clone}from'./lib/utils/SkeletonUtils.js?v=world-20261122-residents1';
 export class HorseView{
  constructor(view){this.v=view;this.instances=new Map();}
  async load(){const size=128,rough=new Uint8Array(size*size*4),norm=new Uint8Array(size*size*4);for(let y=0;y<size;y++)for(let x=0;x<size;x++){const i=(y*size+x)*4,n=Math.sin(x*12.9898+y*78.233)*43758.5453,f=n-Math.floor(n);rough.set([175+f*65,175+f*65,175+f*65,255],i);norm.set([128+Math.sin(x*.62+y*.16)*10,128+(f-.5)*12,254,255],i);}this.coatNormal=new THREE.DataTexture(norm,size,size);this.coatRough=new THREE.DataTexture(rough,size,size);for(const t of[this.coatNormal,this.coatRough]){t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(18,14);t.magFilter=THREE.LinearFilter;t.minFilter=THREE.LinearMipmapLinearFilter;t.generateMipmaps=true;t.needsUpdate=true;}this.source=await new GLTFLoader().loadAsync('./assets/horse/horse-smooth.gltf');const metrics=await fetch('./assets/horse/motion-metrics.json');if(!metrics.ok)throw Error('Horse motion calibration unavailable');this.motion=await metrics.json();this.source.scene.traverse(n=>{if(n.isMesh){n.frustumCulled=false;const g=n.geometry,p=g.attributes.position,uv=[];for(let i=0;i<p.count;i++)uv.push((p.getZ(i)+2.3)/5.8,(p.getY(i)+p.getX(i)*.2)/4.9);g.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));}});}

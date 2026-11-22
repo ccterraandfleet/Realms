@@ -1,6 +1,6 @@
-import{outlook,nextLonghouse}from'./growth-outlook.js?v=world-20261122-marches1';
-import{allowedLoad}from'./material-loads.js?v=world-20261122-marches1';
-import{workforce}from'./work-orders.js?v=world-20261122-marches1';import{SKILLS,skillLevel,nextSkillXP}from'./progression.js?v=world-20261122-marches1';
+import{outlook,nextLonghouse}from'./growth-outlook.js?v=world-20261122-residents1';
+import{allowedLoad}from'./material-loads.js?v=world-20261122-residents1';
+import{workforce}from'./work-orders.js?v=world-20261122-residents1';import{SKILLS,skillLevel,nextSkillXP}from'./progression.js?v=world-20261122-residents1';
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const options=(items)=>items.map(([v,label])=>`<option value="${esc(v)}">${esc(label)}</option>`).join('');
 export function skillsPanel(me){return `<p>Experience belongs to this resident. Completed work earns it; clicking an order does not. Skills persist when a player takes over an NPC seat and when professions change.</p><div class="cards">${Object.entries(SKILLS).map(([id,name])=>{const xp=me.skills?.[id]||0,level=skillLevel(xp),next=nextSkillXP(xp);return `<article><small>${esc(name)}</small><h3>Level ${level}</h3><p>${xp} XP · ${next===null?'Maximum level':`${next-xp} XP to next level`}</p><p>${id==='logistics'?'Earned by delivering a completed load to its destination.':`Production speed bonus: ${Math.round(Math.min(.25,(level-1)*.01)*100)}%. Inputs and output quantities stay real.`}</p></article>`;}).join('')}</div>`;}

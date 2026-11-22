@@ -1,3 +1,4 @@
+import{dressResident}from './resident-dress.js?v=world-20261122-residents1';
 /* ===========================================================================
  * SOLDIER: original armour, clothing and rig with a CC0 anatomical head
  * ===========================================================================
@@ -27,8 +28,8 @@
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-marches1';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-marches1';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-residents1';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-residents1';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
@@ -82,6 +83,7 @@ export function buildSkeleton() {
  * A lofted surface: rings of elliptical cross sections joined into a tube. This
  * is what gives a real torso and head their shape, where a cylinder cannot. */
 function loft(sections, segs = 18, capTop = true, capBottom = true) {
+  if(sections[0].y>sections.at(-1).y)sections=[...sections].reverse();
   const pos = [], idx = [];
   for (const s of sections) {
     for (let i = 0; i < segs; i++) {
@@ -283,7 +285,7 @@ export function buildSoldier(rig, mats, spec = {}) {
       { y: 0.62, rx: 0.168, rz: 0.118 },
     ], 20, false, false), mats.mail, 'hips');
   }
-  if (has('surcoat')) {
+  if(spec.civilian&&spec.dress){dressResident(parts,mats,spec,loft);}else if (has('surcoat')) {
     /* front and back panels, split so the legs can swing through it */
     for (const [zc, rz] of [[1, 0.130], [-1, -0.130]]) {
       P(loft([

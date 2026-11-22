@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import{mergeGeometries}from'./lib/BufferGeometryUtils.js?v=world-20261122-marches1';
+import{mergeGeometries}from'./lib/BufferGeometryUtils.js?v=world-20261122-residents1';
 export function makeStable(view,h,ground){const g=new THREE.Group();g.name='stable-yard:'+h.id;g.position.set(h.x+13,ground(h.x+13,h.z+30),h.z+30);g.userData.cameraSolid=true;const wood=view.art.maps.wood,roof=view.art.maps.roof,stone=view.art.maps.stone,iron=new THREE.MeshStandardMaterial({color:'#4c4b42',metalness:.55,roughness:.55});const box=(x,y,z,w,d,l,mat=wood)=>{const m=new THREE.Mesh(view.art.uv(new THREE.BoxGeometry(w,d,l)),mat);m.position.set(x,y,z);g.add(m);return m;};
  for(const x of[-2.7,2.7])for(const z of[-1.8,1.8]){box(x,.12,z,.45,.24,.45,stone);box(x,1.55,z,.22,3.05,.22);const brace=box(x*.87,2.62,z,.14,1,.16);brace.rotation.z=x>0?-.65:.65;}for(const z of[-1.8,1.8])box(0,2.96,z,5.7,.22,.24);for(const x of[-2.7,2.7])box(x,3,0,.22,.2,4.05);for(let i=0;i<9;i++){const slab=box(0,3.19+(i-4)*.032,(i-4)*.48,5.95,.09,.58,roof);slab.rotation.x=-.065;}for(let i=0;i<8;i++)box(-2.4+i*.69,1.35,1.9,.63,2.35,.07);box(0,.17,1.85,5.7,.30,.4,stone);
  // Hollow trough: separate rim, sides and visible water, not a solid block.

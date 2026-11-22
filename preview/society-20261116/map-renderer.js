@@ -1,9 +1,9 @@
-import{lines}from'./highstone-survey.js?v=world-20261122-marches1';
-import{F}from'./westmere-ferry.js?v=world-20261122-marches1';
-import{B,open}from'./westmere-bridge.js?v=world-20261122-marches1';
-import{NATURAL_FEATURES}from'./natural-geography.js?v=world-20261122-marches1';
-import{MapViewport,groundHeight,visibleTrees,worldRoads,districtPolygons}from'./map-geography.js?v=world-20261122-marches1';
-import{structureFootprints}from'./structures.js?v=world-20261122-marches1';
+import{lines}from'./highstone-survey.js?v=world-20261122-residents1';
+import{F}from'./westmere-ferry.js?v=world-20261122-residents1';
+import{B,open}from'./westmere-bridge.js?v=world-20261122-residents1';
+import{NATURAL_FEATURES}from'./natural-geography.js?v=world-20261122-residents1';
+import{MapViewport,groundHeight,visibleTrees,worldRoads,districtPolygons}from'./map-geography.js?v=world-20261122-residents1';
+import{structureFootprints}from'./structures.js?v=world-20261122-residents1';
 const noise=(x,z)=>{const a=Math.sin(x*127.1+z*311.7)*43758.5453;return a-Math.floor(a);},TAU=Math.PI*2;
 const houseColor=(s,id)=>s.houses[id]?.color||'#687065';
 function path(c,pts,v,close=false){c.beginPath();pts.forEach((a,i)=>{const p=v.project(a);if(i)c.lineTo(p.x,p.y);else c.moveTo(p.x,p.y);});if(close)c.closePath();}

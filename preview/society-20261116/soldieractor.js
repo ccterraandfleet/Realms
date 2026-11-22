@@ -1,14 +1,14 @@
-import{gaitSpeed}from'./gait-speed.js?v=world-20261122-marches1';
+import{gaitSpeed}from'./gait-speed.js?v=world-20261122-residents1';
 /* Realms actor: captured combat layered after captured locomotion, plus grip and foot IK.
  * Retarget vectors use the actor frame, not global axes. End-site offsets must never
  * replace joint offsets. No head-height clamp: legitimate overhead guards remain valid.
  */
 import * as THREE from 'three';
-import { Atlas } from './forge.js?v=world-20261122-marches1';
-import {loadAnatomy} from './anatomy.js?v=world-20261122-marches1';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=world-20261122-marches1';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=world-20261122-marches1';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=world-20261122-marches1';
+import { Atlas } from './forge.js?v=world-20261122-residents1';
+import {loadAnatomy} from './anatomy.js?v=world-20261122-residents1';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=world-20261122-residents1';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=world-20261122-residents1';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=world-20261122-residents1';
 
 let ATLAS = null;
 let LOCO = null;
@@ -147,7 +147,7 @@ export class Actor {
     this.mats = soldierMaterials(ATLAS.m, opts.tint ?? 0x2f6ea6);
     let parts = buildSoldier(this.rig, this.mats, {
       kind: opts.kind || 'sword',riding:!!opts.riding,
-      helm: opts.helm || (opts.civilian?'coif':'nasal'),skinStyle:opts.skinStyle||'weathered',
+      dress:opts.dress,helm: opts.helm || (opts.civilian?'coif':'nasal'),skinStyle:opts.skinStyle||'weathered',
       shield: opts.shield || 'kite',civilian:!!opts.civilian,layers:opts.civilian?['flesh','wool','surcoat']:undefined,
     });
     /* A BODY FOR THE PLAYER'S OWN EYES: the head, neck and arms are omitted rather than
