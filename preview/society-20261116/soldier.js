@@ -283,7 +283,17 @@ export function buildSoldier(rig, mats, spec = {}) {
       { y: 0.62, rx: 0.168, rz: 0.118 },
     ], 20, false, false), mats.mail, 'hips');
   }
-  if (has('surcoat')) {
+  if(spec.workcoat){
+    // A shaped folded garment, fitted over the shoulders and gathered under the belt.
+    mats.cloth.color.set(0x647b65);
+    const woven=(rings,mat,owner,chain,fold=.003)=>{const g=loft(rings.map(([y,rx,rz])=>({y,rx,rz})),40,false,false),a=g.attributes.position;
+      for(let i=0;i<a.count;i++){const x=a.getX(i),z=a.getZ(i),y=a.getY(i),th=Math.atan2(z/.13,x/.19),f=fold*(Math.sin(th*9+y*3)+.45*Math.cos(th*5-y*6));a.setXYZ(i,x+f*Math.cos(th),y,z+f*Math.sin(th));}g.computeVertexNormals();parts.push({geo:g,mat,bone:owner,skinChain:chain});};
+    woven([[.81,.187,.136],[.84,.19,.14],[.94,.179,.128],[1.012,.158,.114],[1.07,.17,.124],[1.23,.19,.135],[1.35,.215,.142],[1.415,.212,.139],[1.46,.173,.121],[1.48,.108,.095]],mats.cloth,'chest',[{upper:'chest',lower:'hips',y:1.18,band:.15}]);
+    woven([[1.394,.221,.148],[1.42,.216,.15],[1.46,.184,.135],[1.49,.134,.112],[1.522,.083,.085]],mats.wool,'chest',null,.002);
+    for(const [sg,side] of [[-1,'L'],[1,'R']]){P(loft([[1.222,.055],[1.23,.061],[1.249,.058],[1.262,.062],[1.272,.054]].map(([y,r])=>({y,rx:r,rz:r*.94,x:sg*.204})),20),mats.cloth,'arm.'+side);}
+    P(sph(.067,16,12).scale(1,.94,.6).translate(-.123,.904,.111),mats.leather,'hips');P(sph(.055,14,8).scale(1,.48,.49).translate(-.124,.94,.139),mats.leather,'hips');P(sph(.008,8,6).translate(-.124,.936,.164),mats.brass,'hips');
+  }
+  if (has('surcoat')&&!spec.workcoat) {
     /* front and back panels, split so the legs can swing through it */
     for (const [zc, rz] of [[1, 0.130], [-1, -0.130]]) {
       P(loft([

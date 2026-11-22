@@ -6,7 +6,7 @@ import{gaitSpeed}from'./gait-speed.js';
 import * as THREE from 'three';
 import { Atlas } from './forge.js';
 import {loadAnatomy} from './anatomy.js?v=cargo-frame-20261117';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=action-v1';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=workcoat1';
 import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=action-v1';
 import { applyMocapFrame, aimBone, Locomotion } from './resident-mocap.js?v=jog2';
 
@@ -146,7 +146,7 @@ export class Actor {
     this.rig = buildSkeleton();this.civilian=!!opts.civilian;this.firstPerson=!!opts.omitBones?.includes('head');this.riding=!!opts.riding;
     this.mats = soldierMaterials(ATLAS.m, opts.tint ?? 0x2f6ea6);
     let parts = buildSoldier(this.rig, this.mats, {
-      kind: opts.kind || 'sword',riding:!!opts.riding,
+      kind: opts.kind || 'sword',workcoat:!!opts.workcoat,riding:!!opts.riding,
       helm: opts.helm || (opts.civilian?'coif':'nasal'),skinStyle:opts.skinStyle||'weathered',
       shield: opts.shield || 'kite',civilian:!!opts.civilian,layers:opts.civilian?['flesh','wool','surcoat']:undefined,
     });
