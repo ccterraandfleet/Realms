@@ -1,4 +1,4 @@
-import{allowedLoad}from'./material-loads.js?v=world-20261122-shovel1';
+import{allowedLoad}from'./material-loads.js?v=world-20261122-harvest1';
 const dist=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),total=g=>Object.values(g||{}).reduce((n,v)=>n+v,0);
 export function interactionFor(s,a){if(!(a?.f.hp>0))return null;const ridden=(s.mounts||[]).find(m=>m.id===a.mountId&&m.rider===a.id);if(ridden)return Math.abs(ridden.speed)<1.1?{type:'dismount',data:{},label:`E: dismount ${ridden.name} · W/S ride/brake · A/D steer · Shift gallop`}:{label:`Riding ${ridden.name} · release W or hold S to slow before E dismount`};
  const cargo=total(a.cargo),h=Object.values(s.houses).filter(h=>dist(a,h)<9).sort((x,y)=>dist(a,x)-dist(a,y))[0];if(cargo&&h)return{type:'deliver',data:{},label:`E: deliver ${cargo} cargo units to ${h.name} · G: set down`};

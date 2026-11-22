@@ -27,8 +27,8 @@
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-shovel1';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-shovel1';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-harvest1';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-harvest1';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and

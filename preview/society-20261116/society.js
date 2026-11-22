@@ -1,24 +1,25 @@
-import{reservePatch,patchSite,cropStage}from'./grain-plots.js?v=world-20261122-shovel1';
-import{nextArrivals}from'./growth-outlook.js?v=world-20261122-shovel1';
-import{bunkAction,tickBunk}from'./spur-bunk.js?v=world-20261122-shovel1';
-import{trackCover}from'./rock-cover.js?v=world-20261122-shovel1';
-import{pilotMove,inside}from'./spur-pilot.js?v=world-20261122-shovel1';
-import{beginLabor,advanceLabor,crewStep}from'./quarry-labor.js?v=world-20261122-shovel1';
+import{startLot,runLot,orphanLot}from'./grain-yard.js?v=world-20261122-harvest1';
+import{reservePatch,patchSite,cropStage}from'./grain-plots.js?v=world-20261122-harvest1';
+import{nextArrivals}from'./growth-outlook.js?v=world-20261122-harvest1';
+import{bunkAction,tickBunk}from'./spur-bunk.js?v=world-20261122-harvest1';
+import{trackCover}from'./rock-cover.js?v=world-20261122-harvest1';
+import{pilotMove,inside}from'./spur-pilot.js?v=world-20261122-harvest1';
+import{beginLabor,advanceLabor,crewStep}from'./quarry-labor.js?v=world-20261122-harvest1';
 
-import{F,sail}from'./westmere-ferry.js?v=world-20261122-shovel1';
-import{B,open,onDeck,floorHeight}from'./westmere-bridge.js?v=world-20261122-shovel1';
-import{naturalFeatureAt}from'./natural-geography.js?v=world-20261122-shovel1';
-import {terrainHeight,TERRAIN_REVISION} from './world-terrain.js?v=world-20261122-shovel1';
-import {initMounts,mountHorse,dismountHorse,feedHorse,stepMounts,assertMounts,constrainMountPassage} from './mounts.js?v=world-20261122-shovel1';
-import {navigationFor} from './navigation.js?v=world-20261122-shovel1';
-import {WORK_SITES,actorRadius} from './structures.js?v=world-20261122-shovel1';
-import {initLoads,spillMaterials,collectLoad,assignRecovery,assertLoads} from './material-loads.js?v=world-20261122-shovel1';
-import {assertEarth,spillEarthCargo} from './earthworks.js?v=world-20261122-shovel1';
-import {awardProduction,awardDelivery,workSeconds,assertProgression} from './progression.js?v=world-20261122-shovel1';
-import {initializeWork,workforce,createWorkOrder,assignWorker,orderBlock,finishWorkOrder,changeOrder,staffingTarget,reserveFloor,assertWork,bestOrder,releaseWorker} from './work-orders.js?v=world-20261122-shovel1';
-import {Fighter,Duel,WEAPONS,CFG} from './chiv.core.js?v=world-20261122-shovel1';
-import {bladeContact,faces} from './chiv.contact.js?v=world-20261122-shovel1';
-import {makeChivBrain,chivThink} from './chiv.ai.js?v=world-20261122-shovel1';
+import{F,sail}from'./westmere-ferry.js?v=world-20261122-harvest1';
+import{B,open,onDeck,floorHeight}from'./westmere-bridge.js?v=world-20261122-harvest1';
+import{naturalFeatureAt}from'./natural-geography.js?v=world-20261122-harvest1';
+import {terrainHeight,TERRAIN_REVISION} from './world-terrain.js?v=world-20261122-harvest1';
+import {initMounts,mountHorse,dismountHorse,feedHorse,stepMounts,assertMounts,constrainMountPassage} from './mounts.js?v=world-20261122-harvest1';
+import {navigationFor} from './navigation.js?v=world-20261122-harvest1';
+import {WORK_SITES,actorRadius} from './structures.js?v=world-20261122-harvest1';
+import {initLoads,spillMaterials,collectLoad,assignRecovery,assertLoads} from './material-loads.js?v=world-20261122-harvest1';
+import {assertEarth,spillEarthCargo} from './earthworks.js?v=world-20261122-harvest1';
+import {awardProduction,awardDelivery,workSeconds,assertProgression} from './progression.js?v=world-20261122-harvest1';
+import {initializeWork,workforce,createWorkOrder,assignWorker,orderBlock,finishWorkOrder,changeOrder,staffingTarget,reserveFloor,assertWork,bestOrder,releaseWorker} from './work-orders.js?v=world-20261122-harvest1';
+import {Fighter,Duel,WEAPONS,CFG} from './chiv.core.js?v=world-20261122-harvest1';
+import {bladeContact,faces} from './chiv.contact.js?v=world-20261122-harvest1';
+import {makeChivBrain,chivThink} from './chiv.ai.js?v=world-20261122-harvest1';
 export const VERSION='houses-0.1';
 export const GOODS=['grain','timber','clay','ore','iron','bricks','arms'];
 export function headwearChoiceOf(a){return a.headwear||(a.helm&&a.helm!=='nasal'?a.helm:'auto');}
@@ -133,10 +134,12 @@ export class Society{
  if(a.recoveryLoad){if(total(a.cargo)>0){const dock={x:h.x+(Number(a.id.split(':').pop())%3-1)*1.2,z:h.z+1.4};if(dist(a,dock)<1.3||this.move(a,dock,2.6,dt))this.deliver(a,h);}else{const load=s.materialLoads.find(l=>l.id===a.recoveryLoad);if(!load){a.recoveryLoad=null;return;}if(dist(a,load)<2.3)collectLoad(s,a,load.id);else if(this.move(a,load,2.65,dt)){if(dist(a,load)<2.5)collectLoad(s,a,load.id);else a.workBlocked='Load is blocked by a solid structure';}}return;}if(!a.work&&total(a.cargo)>0){a.workBlocked='Deliver carried cargo first';return;}
  if(!a.work){if(!a.member&&!a.baseline&&!a.orderPinned){const best=bestOrder(s,a,ROLES);a.orderId=best?.id||null;if(!best&&s.workOrders.some(o=>!o.namedOnly&&o.house===a.house&&o.role===a.role)){a.workBlocked='No ready orders for this profession';return;}}const blocked=orderBlock(s,a,ROLES);if(blocked){a.workBlocked=blocked;return;}const role=a.actingRole||a.role,r=ROLES[role];if(!r?.out)return;a.work={batchId:'batch:'+ ++s.seq,phase:'collect',t:0,inputs:{},recipeRole:role,orderId:a.orderId||null};}
  const w=a.work,r=ROLES[w.recipeRole||a.actingRole||a.role];if(!r?.out)return;const bay=Number(a.id.split(':')[1])%9,site={x:h.x+r.offset[0]+(bay%3-1)*1.1,z:h.z+r.offset[1]+2.3+(Math.floor(bay/3)-1)*1.1},dock={x:h.x+(bay%3-1)*1.2,z:h.z+(Math.floor(bay/3)-1)*1.2};
+ if((w.recipeRole||a.role)==='farmer'&&w.phase==='collect'&&!w.orderId){const l=orphanLot(s,h);if(l){w.batchId=l.id;w.patch=l.patch;l.carried=false;l.worker=a.id;w.phase=l.stage==='haul'?'haulSheaves':l.stage;}}
+ if(h.grainLots?.[w.batchId]){if(runLot(this,h,a,w,dt))awardProduction(a,w.recipeRole||a.role,r.seconds);return;}
  if((w.recipeRole||a.role)==='farmer'&&w.phase!=='deliver'){if(w.patch==null){w.patch=reservePatch(s,h,a);if(w.patch!=null&&cropStage(h,w.patch,s.time)==='bare')w.sow=true;}if(w.patch==null){w.wait='Waiting for ripe grain';return;}Object.assign(site,patchSite(h,r.offset,w.patch));}
  if(w.phase==='collect'){if(w.orderId&&s.workOrders.find(o=>o.id===w.orderId)?.status!=='active'){w.wait='Order paused or complete';return;}if(dist(a,dock)>1.1&&!this.workMove(a,dock,2.4,dt))return;if(!Object.entries(r.input).every(([k,n])=>h.store[k]-n>=(h.reserveFloors[k]||0))){w.wait='Materials or reserved stock needed';return;}if((w.recipeRole||a.role)==='forester'){const tr=s.trees.find(t=>t.stock>=4&&dist(t,site)<38);if(!tr){w.wait='Waiting for regrowth';return;}tr.stock-=4;tr.regrow=s.time+180;}debit(h,r.input);w.inputs=copy(r.input);w.phase='travel';w.wait=null;}
  if(w.phase==='travel'){if(dist(a,site)>.6&&!this.workMove(a,site,2.4,dt))return;w.phase='working';w.t=0;}
- if(w.phase==='working'){w.t+=dt;if(w.sow){if(w.t<3)return;(h.harvested??={})[w.patch]={ready:s.time+90};w.sow=false;w.patch=null;w.phase='collect';w.t=0;return;}if(w.t<workSeconds(a,w.recipeRole||a.role,r.seconds))return;if(w.patch!=null)(h.harvested??={})[w.patch]='bare';a.cargo=copy(r.out);w.inputs={};awardProduction(a,w.recipeRole||a.role,r.seconds);w.outputOrigin={x:a.x,z:a.z};w.phase='deliver';}
+ if(w.phase==='working'){w.t+=dt;if(w.sow){if(w.t<3)return;(h.harvested??={})[w.patch]={ready:s.time+90};w.sow=false;w.patch=null;w.phase='collect';w.t=0;return;}if(w.t<workSeconds(a,w.recipeRole||a.role,r.seconds))return;if(w.patch!=null)(h.harvested??={})[w.patch]='bare';if((w.recipeRole||a.role)==='farmer'){startLot(s,h,a,w,r.out.grain);return;}a.cargo=copy(r.out);w.inputs={};awardProduction(a,w.recipeRole||a.role,r.seconds);w.outputOrigin={x:a.x,z:a.z};w.phase='deliver';}
  if(w.phase==='deliver'){if(dist(a,dock)<1.1||this.workMove(a,dock,2.5,dt))this.deliver(a,h);}
  }
  step(dt){need(Number.isFinite(dt)&&dt>0&&dt<=1,'step range');const s=this.s,before=new Map(Object.values(s.actors).map(a=>[a.id,{x:a.x,z:a.z}]));s.time+=dt;for(const a of Object.values(s.actors))if(s.time-(a.inputAt??-99)>.4)a.input={};

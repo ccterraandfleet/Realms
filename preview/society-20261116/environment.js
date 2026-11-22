@@ -1,13 +1,13 @@
-import{cropStage}from'./grain-plots.js?v=world-20261122-shovel1';
-import{patchForStalk}from'./grain-plots.js?v=world-20261122-shovel1';
-import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-shovel1';
-import {partitionInstances} from './scenery-batching.js?v=world-20261122-shovel1';
-import {cottageDimensions} from './structures.js?v=world-20261122-shovel1';
+import{cropStage}from'./grain-plots.js?v=world-20261122-harvest1';
+import{patchForStalk}from'./grain-plots.js?v=world-20261122-harvest1';
+import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-harvest1';
+import {partitionInstances} from './scenery-batching.js?v=world-20261122-harvest1';
+import {cottageDimensions} from './structures.js?v=world-20261122-harvest1';
 import * as THREE from 'three';
-import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-shovel1';
-import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-shovel1';
-import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-shovel1';
-import {hash} from './society.js?v=world-20261122-shovel1';
+import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-harvest1';
+import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-harvest1';
+import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-harvest1';
+import {hash} from './society.js?v=world-20261122-harvest1';
 const V=THREE.Vector3,M=THREE.Matrix4,Q=THREE.Quaternion;
 const height=groundHeight;
 export class EnvironmentArt{

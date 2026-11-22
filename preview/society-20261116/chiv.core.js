@@ -36,9 +36,9 @@
  *    keep turning at the limit while the hitbox is live.
  * =========================================================================== */
 
-import { WEAPONS, DEFAULTS } from './chiv.data.js?v=world-20261122-shovel1';
+import { WEAPONS, DEFAULTS } from './chiv.data.js?v=world-20261122-harvest1';
 
-import { STYLES, styleById, zoneOf, lineOf } from './chiv.styles.js?v=world-20261122-shovel1';
+import { STYLES, styleById, zoneOf, lineOf } from './chiv.styles.js?v=world-20261122-harvest1';
 
 export const CFG = {
   HP: 100,
