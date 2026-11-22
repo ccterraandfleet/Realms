@@ -1,4 +1,4 @@
-import{terrainHeight}from'./world-terrain.js?v=world-20261122-anatomy2';
+import{terrainHeight}from'./world-terrain.js?v=world-20261122-anatomy3';
 // Game-space pilot on the western approach. A completed slice removes only
 // solid material between the sloping invert and crown, never its overburden.
 export const P={x:104,z:-110,w:2.4,h:2.3,step:.5,max:20};

@@ -1,6 +1,6 @@
-import{open,landBarriers}from'./westmere-bridge.js?v=world-20261122-anatomy2';
-import{NATURAL_FEATURES,inNaturalObstacle,crossesNaturalObstacle,naturalCorners}from'./natural-geography.js?v=world-20261122-anatomy2';
-import{structureFootprints,inside as rectInside,segmentHits as rectSegmentHits,stationaryMount}from'./structures.js?v=world-20261122-anatomy2';
+import{open,landBarriers}from'./westmere-bridge.js?v=world-20261122-anatomy3';
+import{NATURAL_FEATURES,inNaturalObstacle,crossesNaturalObstacle,naturalCorners}from'./natural-geography.js?v=world-20261122-anatomy3';
+import{structureFootprints,inside as rectInside,segmentHits as rectSegmentHits,stationaryMount}from'./structures.js?v=world-20261122-anatomy3';
 const inside=(p,r,pad)=>r.polygon?inNaturalObstacle(p,r,pad):rectInside(p,r,pad),segmentHits=(a,b,r,pad)=>r.polygon?crossesNaturalObstacle(a,b,r,pad):rectSegmentHits(a,b,r,pad);
 const cache=new WeakMap(),distance=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z);
 export class Navigation{

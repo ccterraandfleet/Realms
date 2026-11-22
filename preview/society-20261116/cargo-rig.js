@@ -1,7 +1,7 @@
 /* A back-carried load is supported by a frame, shoulder straps and hip belt.
  * All offsets are chest-local metres. No animation or inventory authority here. */
-import * as THREE from './lib/three.module.js?v=world-20261122-anatomy2';
-import {mergeGeometries} from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy2';
+import * as THREE from './lib/three.module.js?v=world-20261122-anatomy3';
+import {mergeGeometries} from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy3';
 export const CARGO_FIT=Object.freeze({scale:.62,crate:[0,-.245,-.36],frameZ:-.18,railX:.16});
 export function attachCargoToChest(pack,actor){
  const chest=actor.bone('chest');

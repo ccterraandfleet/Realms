@@ -1,7 +1,7 @@
-import{inside,invert}from'./spur-pilot.js?v=world-20261122-anatomy2';
-import{delta}from'./surface-dig.js?v=world-20261122-anatomy2';
-import {NATURAL_FEATURES} from './natural-geography.js?v=world-20261122-anatomy2';
-import {terrainHeight} from './world-terrain.js?v=world-20261122-anatomy2';
+import{inside,invert}from'./spur-pilot.js?v=world-20261122-anatomy3';
+import{delta}from'./surface-dig.js?v=world-20261122-anatomy3';
+import {NATURAL_FEATURES} from './natural-geography.js?v=world-20261122-anatomy3';
+import {terrainHeight} from './world-terrain.js?v=world-20261122-anatomy3';
 export const B=Object.freeze({west:-156,east:-88,z:94,half:4,height:1.5,seconds:40,cost:Object.freeze({timber:36,iron:6,bricks:10})});
 export const open=s=>!!s?.westmereBridge&&s.time>=s.westmereBridge.finish;
 export const onDeck=(s,p,r=0)=>open(s)&&p.x>=B.west&&p.x<=B.east&&Math.abs(p.z-B.z)<=B.half-r;

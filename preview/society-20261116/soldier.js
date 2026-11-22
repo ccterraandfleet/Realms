@@ -1,5 +1,5 @@
-import{shapeFrame}from './resident-anatomy.js?v=world-20261122-anatomy2';import{workerHand}from './anatomy.js?v=world-20261122-anatomy2';
-import{dressResident}from './resident-dress.js?v=world-20261122-anatomy2';
+import{shapeFrame}from './resident-anatomy.js?v=world-20261122-anatomy3';import{workerHand,hairGeometry}from './anatomy.js?v=world-20261122-anatomy3';
+import{dressResident}from './resident-dress.js?v=world-20261122-anatomy3';
 /* ===========================================================================
  * SOLDIER: original armour, clothing and rig with a CC0 anatomical head
  * ===========================================================================
@@ -29,8 +29,8 @@ import{dressResident}from './resident-dress.js?v=world-20261122-anatomy2';
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-anatomy2';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy2';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-anatomy3';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy3';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
@@ -220,7 +220,12 @@ export function buildSoldier(rig, mats, spec = {}) {
 
   /* ---------------- helmet variants */
   const helmetStart=parts.length,cap=headCapSections(helm==='coif'),rim=cap[0];
-  if(helm==='coif'){P(loft(cap,32,false,true),mats.wool,'head');}
+  if(helm==='bare'){/* nothing over the skull: the bare head for anatomy review */}
+  else if(helm==='coif'){
+    /* A resident wears hair, not a wool skullcap. Soldiers keep the cap. */
+    if(spec.civilian){const tones=[0x2a1d15,0x3d2a1c,0x4d3a26,0x5b4a3a,0x6b5f52],hm=mats.hair.clone();hm.color.set(tones[Math.min(4,Math.floor((((spec.human?.nose??0)+1)/2)*5))]);hm.roughness=.94;const hair=hairGeometry(['cropped','shock','crop'][Math.floor((((spec.human?.jaw??0)+1)/2)*3)],(spec.human?.cheek??0)+1.2);P(hair,hm,'head');parts.at(-1).rigid=true;}
+    else P(loft(cap,32,false,true),mats.wool,'head');
+  }
   else if(helm==='nasal'){
     P(loft(cap,28,false,true),mats.steel,'head');
     P(cyl(rim.rx+.002,rim.rx+.003,.014,32).scale(1,1,rim.rz/rim.rx).translate(0,rim.y,rim.z),mats.steelDark,'head');
@@ -251,8 +256,9 @@ export function buildSoldier(rig, mats, spec = {}) {
   const segment=(A,B,r,mat,bone)=>{const av=new THREE.Vector3(...A),bv=new THREE.Vector3(...B),d=bv.clone().sub(av),g=new THREE.CylinderGeometry(r*.92,r,d.length(),7,1);g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize()));g.translate(...av.add(bv).multiplyScalar(.5).toArray());P(g,mat,bone);};
   for(const side of ['L','R']){
     const sign=side==='L'?-1:1,arm='arm.'+side,fore='fore.'+side,hand='hand.'+side;
-    const rings=[{y:1.485,rx:.038,rz:.041,x:sign*.196},{y:1.455,rx:.067,rz:.067,x:sign*.196},{y:1.405,rx:.073,rz:.068,x:sign*.197},{y:1.34,rx:.063,rz:.058,x:sign*.199},{y:1.24,rx:.052,rz:.049,x:sign*.203},{y:1.20,rx:.047,rz:.046,x:sign*.205},{y:1.165,rx:.044,rz:.043,x:sign*.206},{y:1.13,rx:.045,rz:.044,x:sign*.207},{y:1.10,rx:.049,rz:.046,x:sign*.208},{y:1.02,rx:.045,rz:.041,x:sign*.210},{y:.945,rx:.032,rz:.034,x:sign*.211},{y:.895,rx:.030,rz:.031,x:sign*.211}];
+    const rings=[{y:1.500,rx:.044,rz:.046,x:sign*.188},{y:1.478,rx:.064,rz:.064,x:sign*.193},{y:1.450,rx:.070,rz:.068,x:sign*.196},{y:1.405,rx:.066,rz:.063,x:sign*.197},{y:1.34,rx:.063,rz:.058,x:sign*.199},{y:1.24,rx:.052,rz:.049,x:sign*.203},{y:1.20,rx:.047,rz:.046,x:sign*.205},{y:1.165,rx:.044,rz:.043,x:sign*.206},{y:1.13,rx:.045,rz:.044,x:sign*.207},{y:1.10,rx:.049,rz:.046,x:sign*.208},{y:1.02,rx:.045,rz:.041,x:sign*.210},{y:.945,rx:.032,rz:.034,x:sign*.211},{y:.895,rx:.030,rz:.031,x:sign*.211}];
     soft(loft(rings,20),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:fore,y:1.155,band:.065});
+    soft(sph(.069,18,14).scale(1.06,.96,.92).translate(sign*.193,1.462,0),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:'chest',y:1.472,band:.055});
     P(loft([{y:1.115,rx:.050,rz:.046,x:sign*.207},{y:1.02,rx:.046,rz:.044,x:sign*.21},{y:.934,rx:.035,rz:.037,x:sign*.211}],16),mats.leather,fore);
     if(!spec.civilian)P(loft([{y:1.456,rx:.061,rz:.063,x:sign*.2},{y:1.431,rx:.078,rz:.075,x:sign*.203},{y:1.381,rx:.073,rz:.069,x:sign*.211}],20),mats.steel,arm);
     const armed=kind!=='none'||spec.riding;

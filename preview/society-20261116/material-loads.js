@@ -1,4 +1,4 @@
-import {navigationFor} from './navigation.js?v=world-20261122-anatomy2';
+import {navigationFor} from './navigation.js?v=world-20261122-anatomy3';
 const need=(v,m)=>{if(!v)throw Error(m);};const copy=x=>JSON.parse(JSON.stringify(x));export const LOAD_LIMIT=20;const total=x=>Object.values(x||{}).reduce((n,v)=>n+v,0);
 export function initLoads(s){s.materialLoads??=[];}
 export function allowedLoad(s,a,l){return l.house===a.house||s.wars.some(p=>p.includes(a.house)&&p.includes(l.house));}

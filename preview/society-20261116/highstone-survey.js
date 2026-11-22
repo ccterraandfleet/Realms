@@ -1,5 +1,5 @@
-import {terrainHeight} from './world-terrain.js?v=world-20261122-anatomy2';
-import {delta} from './surface-dig.js?v=world-20261122-anatomy2';
+import {terrainHeight} from './world-terrain.js?v=world-20261122-anatomy3';
+import {delta} from './surface-dig.js?v=world-20261122-anatomy3';
 export const lines=[{name:'Central ridge',a:{x:94,z:-126},b:{x:165,z:-116}},{name:'Southern spur',a:{x:97,z:-111},b:{x:158,z:-101}}];
 // Read-only terrain section; samples never enter the navigation graph or ledger.
 export function survey(s,id=0){const {name,a,b}=lines[id],span=Math.hypot(b.x-a.x,b.z-a.z),h=p=>terrainHeight(p.x,p.z)+delta(s,p.x,p.z),ya=h(a),yb=h(b),n=Math.ceil(span*2),samples=[];let cover=0,roofed=0,volume=0;for(let i=0;i<=n;i++){const t=i/n,x=a.x+(b.x-a.x)*t,z=a.z+(b.z-a.z)*t,ground=h({x,z}),floor=ya+(yb-ya)*t,depth=ground-floor;samples.push({t,ground,floor});cover=Math.max(cover,depth-2.5);if(i){const prev=samples[i-1],d0=prev.ground-prev.floor,d1=depth;let fraction=d0>=2.5&&d1>=2.5?1:0;if((d0>=2.5)!==(d1>=2.5))fraction=(Math.max(d0,d1)-2.5)/Math.abs(d1-d0);roofed+=fraction*span/n;volume+=(Math.max(0,Math.min(2.5,d1))+Math.max(0,Math.min(2.5,d0)))*1.5*span/n;}}return{name,a,b,span,cover,roofed,volume,samples};}
