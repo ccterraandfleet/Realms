@@ -1,13 +1,14 @@
-import{cropStage}from'./grain-plots.js?v=world-20261122-harvest1';
-import{patchForStalk}from'./grain-plots.js?v=world-20261122-harvest1';
-import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-harvest1';
-import {partitionInstances} from './scenery-batching.js?v=world-20261122-harvest1';
-import {cottageDimensions} from './structures.js?v=world-20261122-harvest1';
+import{dressMarches,marchesLight}from './marches-art.js?v=world-20261122-marches1';
+import{cropStage}from'./grain-plots.js?v=world-20261122-marches1';
+import{patchForStalk}from'./grain-plots.js?v=world-20261122-marches1';
+import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-marches1';
+import {partitionInstances} from './scenery-batching.js?v=world-20261122-marches1';
+import {cottageDimensions} from './structures.js?v=world-20261122-marches1';
 import * as THREE from 'three';
-import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-harvest1';
-import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-harvest1';
-import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-harvest1';
-import {hash} from './society.js?v=world-20261122-harvest1';
+import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-marches1';
+import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-marches1';
+import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-marches1';
+import {hash} from './society.js?v=world-20261122-marches1';
 const V=THREE.Vector3,M=THREE.Matrix4,Q=THREE.Quaternion;
 const height=groundHeight;
 export class EnvironmentArt{
@@ -17,7 +18,7 @@ export class EnvironmentArt{
  const pmrem=new THREE.PMREMGenerator(this.v.renderer);pmrem.compileEquirectangularShader();hdr.mapping=THREE.EquirectangularReflectionMapping;this.v.scene.environment=pmrem.fromEquirectangular(hdr).texture;this.v.scene.background=hdr;this.v.scene.backgroundBlurriness=.025;this.v.scene.backgroundIntensity=.8;pmrem.dispose();this.v.scene.fog=new THREE.FogExp2('#b2bec0',.0043);this.v.renderer.toneMappingExposure=.98;
  for(const light of this.v.scene.children.filter(x=>x.isHemisphereLight))light.intensity=.16;this.v.sun.color.set('#e5decd');this.v.sun.intensity=1.1;this.v.sun.shadow.normalBias=.025;this.v.sun.shadow.bias=-.0001;this.v.sun.shadow.radius=3;this.v.renderer.shadowMap.enabled=true;this.v.sun.castShadow=true;this.v.sun.shadow.mapSize.set(this.v.low?1024:2048,this.v.low?1024:2048);Object.assign(this.v.sun.shadow.camera,{left:-32,right:32,top:32,bottom:-32,far:170});this.v.sun.shadow.camera.updateProjectionMatrix();
  ['grass','fern','barrels'].forEach((k,i)=>this.props[k]=models[i].scene);for(const k of ['grass','fern'])this.props[k].traverse(n=>{if(n.isMesh){n.material.side=THREE.DoubleSide;n.material.alphaTest=.4;n.material.roughness=1;this.animateMaterial(n.material,.035);}});
- this.maps.wood.color.set('#65574a');Object.assign(this.v,{stone:this.maps.stone,wood:this.maps.wood,plaster:this.maps.wall,roof:this.maps.roof});this.ready=true;}
+ marchesLight(this.v);this.maps.roof.color.set('#777b78');this.maps.wall.color.set('#c9bc9f');this.maps.wood.color.set('#77624b');Object.assign(this.v,{stone:this.maps.stone,wood:this.maps.wood,plaster:this.maps.wall,roof:this.maps.roof});this.ready=true;}
  terrain(s){const centers=Object.values(s.houses).map(h=>new THREE.Vector2(h.x,h.z));this.maps.ground.color.set('#8d8674');this.maps.ground.onBeforeCompile=shader=>{shader.uniforms.realmGrass={value:this.maps.grass.map};shader.uniforms.realmRock={value:this.maps.stone.map};shader.uniforms.realmCenters={value:centers};shader.vertexShader='varying vec2 vRealmXZ;\nvarying vec3 vRealmPos;\nvarying vec3 vRealmNormal;\n'+shader.vertexShader;shader.vertexShader=shader.vertexShader.replace('#include <worldpos_vertex>','#include <worldpos_vertex>\nvRealmXZ=(modelMatrix*vec4(transformed,1.)).xz;vRealmPos=transformed;vRealmNormal=normal;');shader.fragmentShader='varying vec2 vRealmXZ;\nvarying vec3 vRealmPos;\nvarying vec3 vRealmNormal;\nuniform sampler2D realmRock;\nuniform sampler2D realmGrass;\nuniform vec2 realmCenters[3];\n'+shader.fragmentShader;shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
 float rDist=min(distance(vRealmXZ,realmCenters[0]),min(distance(vRealmXZ,realmCenters[1]),distance(vRealmXZ,realmCenters[2])));float rNoise=sin(vRealmXZ.x*.31)*cos(vRealmXZ.y*.27)*2.5;vec3 grassy=texture2D(realmGrass,vRealmXZ*.37).rgb*vec3(.64,.72,.59);diffuseColor.rgb=mix(diffuseColor.rgb,grassy,smoothstep(12.,27.,rDist+rNoise));vec3 w=abs(normalize(vRealmNormal));w/=max(.001,w.x+w.y+w.z);vec3 rock=texture2D(realmRock,vRealmPos.yz*.35).rgb*w.x+texture2D(realmRock,vRealmPos.xz*.35).rgb*w.y+texture2D(realmRock,vRealmPos.xy*.35).rgb*w.z;float stoneBlend=max(smoothstep(.04,.27,1.-abs(normalize(vRealmNormal).y)),smoothstep(23.,42.,vRealmPos.y));diffuseColor.rgb=mix(diffuseColor.rgb,rock*.78,stoneBlend);diffuseColor.rgb=mix(diffuseColor.rgb,vec3(.79,.83,.83),smoothstep(52.,68.,vRealmPos.y)*.85);`);};this.maps.ground.customProgramCacheKey=()=> 'realm-terrain-splat-natural-2';this.maps.ground.needsUpdate=true;}
  animateMaterial(material,strength){material.onBeforeCompile=shader=>{shader.uniforms.realmWind=this.wind;shader.vertexShader='uniform float realmWind;\n'+shader.vertexShader;shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>',`#include <begin_vertex>\nfloat sway=sin(realmWind*.72+position.x*2.1+position.z*1.4)*${strength.toFixed(4)}*clamp(position.y,0.,2.);transformed.x+=sway;transformed.z+=sway*.4;`);};material.customProgramCacheKey=()=>`realm-wind-${strength}`;}
@@ -36,20 +37,13 @@ float rDist=min(distance(vRealmXZ,realmCenters[0]),min(distance(vRealmXZ,realmCe
  this.box(g,0,h+rise+.48,0,.18,.15,depth+.2,this.maps.roof);this.box(g,-w*.3,h+1.35,-d*.22,.65,2.8,.68,this.maps.stone);this.box(g,-w*.3,h+2.78,-d*.22,.85,.18,.88,this.maps.stone);this.box(g,-w*.3,h+2.9,-d*.22,.5,.11,.52,this.v.dark);
  // The founders' hall is a small civic landmark, not a miniature fortress.
  if(kind==='townHall'){
- const ridge=h+rise+.4,z=.46,bronze=this.bellBronze??=new THREE.MeshStandardMaterial({color:0x897149,metalness:.63,roughness:.49});
- this.box(g,0,ridge-.22,z,1.35,.62,1.35,this.maps.wood);
- for(const xx of [-.5,.5])for(const zz of [-.5,.5]){this.box(g,xx,ridge+.53,z+zz,.13,1.25,.13,this.maps.wood);this.beam(g,[xx,ridge+.64,z+zz],[xx*.46,ridge+.99,z+zz],.09);}
- this.box(g,0,ridge+1.09,z,1.42,.15,1.42,this.maps.wood);
- const bell=new THREE.Mesh(new THREE.LatheGeometry([[.09,.63],[.20,.58],[.23,.38],[.27,.18],[.36,.11],[.37,.05],[.30,.07],[.22,.21]].map(([r,y])=>new THREE.Vector2(r,y)),20),bronze);bell.position.set(0,ridge+.06,z);bell.castShadow=true;g.add(bell);this.beam(g,[0,ridge+.6,z],[0,ridge+1.11,z],.07);
- const cap=new THREE.Mesh(new THREE.ConeGeometry(1.15,.86,4),this.maps.roof);cap.rotation.y=Math.PI/4;cap.position.set(0,ridge+1.57,z);cap.castShadow=true;g.add(cap);
- for(const sign of [-1,1])this.beam(g,[sign*.14,h+.50,d/2+.56],[sign*w*.31,h+1.06,d/2+.56],.12);
  g.userData.artProfile='founders-belfry';
  }else if(kind==='housing'){
  // Close-fitting gable timbers, and cut firewood in a low rack against the side wall.
  const face=d/2+.56;this.beam(g,[0,h+.48,face],[0,h+rise+.32,face],.16);for(const sign of [-1,1])this.beam(g,[sign*w*.34,h+.5,face],[0,h+rise*.72,face],.11);
  for(let row=0;row<3;row++)for(let j=0;j<4-row;j++){const log=new THREE.Mesh(new THREE.CylinderGeometry(.11,.13,.9+(j%2)*.09,8),this.maps.wood);log.rotation.x=Math.PI/2;log.position.set(w/2+.2+j*.22+row*.10,.25+row*.19,-.6);g.add(log);}g.userData.artProfile='dwelling-woodrack';}
  if(hall){this.v.banner(g,-w/2-.75,d/2,color,6.5);this.v.banner(g,w/2+.75,d/2,color,6.5);const awning=this.box(g,0,3.1,d/2+1.15,2.2,.16,2.4,this.maps.roof);awning.rotation.x=.16;for(const xx of [-1,1])this.box(g,xx,1.55,d/2+2,.13,3,.13,this.maps.wood);}
- this.merge(g);this.v.scene.add(g);if(this.props.barrels)this.placeProp(this.props.barrels,g.position.x+w*.5+.9,g.position.z+d*.3,.92,'wooden_barrels_01_barrel01');return g;}
+ dressMarches(this,g,kind,w,h,d,color);this.merge(g);this.v.scene.add(g);if(this.props.barrels)this.placeProp(this.props.barrels,g.position.x+w*.5+.9,g.position.z+d*.3,.92,'wooden_barrels_01_barrel01');return g;}
  tower(x,z,color){const g=new THREE.Group();g.position.set(x,height(x,z),z);this.box(g,0,.42,0,4.65,.84,4.65,this.maps.stone);this.box(g,0,4.3,0,3.9,8,3.9,this.maps.stone);this.box(g,0,7.95,0,4.5,.48,4.5,this.maps.stone);for(const yy of [2.6,5.4])for(const side of [-1,1]){this.box(g,0,yy,side*1.96,.2,.9,.04,this.v.dark);this.box(g,side*1.96,yy,0,.04,.9,.2,this.v.dark);}for(let i=-1;i<=1;i++)for(const sign of [-1,1]){this.box(g,i*1.6,8.7,sign*2,.75,1.05,.55,this.maps.stone);this.box(g,sign*2,8.7,i*1.6,.55,1.05,.75,this.maps.stone);}this.v.banner(g,0,0,color,12);this.merge(g);this.v.scene.add(g);return g;}
  well(x,z){const g=new THREE.Group();g.userData.cameraSolid=true;g.position.set(x,height(x,z),z);const ring=new THREE.Mesh(new THREE.CylinderGeometry(1.1,1.18,1.05,18,1,true),this.maps.stone);ring.position.y=.55;g.add(ring);const water=new THREE.Mesh(new THREE.CircleGeometry(.98,20),new THREE.MeshStandardMaterial({color:'#29494c',metalness:.22,roughness:.22}));water.rotation.x=-Math.PI/2;water.position.y=.28;g.add(water);for(const side of [-1,1])this.box(g,side*1.12,1.6,0,.15,3.2,.15,this.maps.wood);this.box(g,0,3.18,0,2.5,.18,.2,this.maps.wood);const roof=this.box(g,0,3.4,0,3,.12,2.2,this.maps.roof);roof.rotation.z=.13;this.beam(g,[0,2.9,0],[0,.65,0],.028,this.maps.wood);this.merge(g);this.v.scene.add(g);return g;}
  updateCrops(s){for(const f of this.cropFields||[]){const h=s.houses[f.house];for(let k=0;k<25;k++){const stage=cropStage(h,k,s.time),hidden=stage==='bare';f.stages??=[];if(stage===f.stages[k])continue;f.stages[k]=stage;f.hidden[k]=hidden;for(const mesh of f.meshes){for(const i of f.indices[k]){const arr=mesh.instanceMatrix.array,j=16*i;arr.set(f.base.subarray(j,j+16),j);const scale=hidden?0:stage==='shoots'?.16:stage==='green'?.53:1;for(let c=0;c<12;c++)arr[j+c]*=scale;}mesh.instanceMatrix.needsUpdate=true;}}}}

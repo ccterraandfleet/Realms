@@ -1,4 +1,4 @@
-import{roofAt}from'./rock-cover.js?v=world-20261122-harvest1';
+import{roofAt}from'./rock-cover.js?v=world-20261122-marches1';
 export const berth={x:112,z:-110.65};
 const near=a=>Math.hypot(a.x-berth.x,a.z-berth.z)<1.05;
 const ready=(s,a)=>a.f.alive&&a.f.hp>0&&!a.inCombat&&!a.mountId&&!a.formation&&!a.labor&&!a.quarryLoad&&s.highstoneYard?.worker!==a.id&&!a.input?.x&&!a.input?.z&&!a.input?.guard&&!a.f.attack;

@@ -1,22 +1,22 @@
-import{updateSoilMesh,updateShovels}from'./shovel-view.js?v=world-20261122-harvest1';
-import{remotePose}from'./actor-playback.js?v=world-20261122-harvest1';
-import{inside as insidePilot}from'./spur-pilot.js?v=world-20261122-harvest1';import{updatePilot}from'./spur-view.js?v=world-20261122-harvest1';
-import{delta}from'./surface-dig.js?v=world-20261122-harvest1';
-import{F}from'./westmere-ferry.js?v=world-20261122-harvest1';
-import{B,open,floorHeight}from'./westmere-bridge.js?v=world-20261122-harvest1';
-import{NATURAL_FEATURES}from'./natural-geography.js?v=world-20261122-harvest1';
-import {TERRAIN_GRID,groundBasis,terrainCameraLimit} from './world-terrain.js?v=world-20261122-harvest1';
-import {groundHeight,worldRoads} from './map-geography.js?v=world-20261122-harvest1';
-import {makeStable} from './stable-art.js?v=world-20261122-harvest1';
-import {HorseView} from './horse-view.js?v=world-20261122-harvest1';
-import {actorRadius} from './structures.js?v=world-20261122-harvest1';
-import {navigationFor} from './navigation.js?v=world-20261122-harvest1';
-import {CargoView} from './cargo-view.js?v=world-20261122-harvest1';
+import{updateSoilMesh,updateShovels}from'./shovel-view.js?v=world-20261122-marches1';
+import{remotePose}from'./actor-playback.js?v=world-20261122-marches1';
+import{inside as insidePilot}from'./spur-pilot.js?v=world-20261122-marches1';import{updatePilot}from'./spur-view.js?v=world-20261122-marches1';
+import{delta}from'./surface-dig.js?v=world-20261122-marches1';
+import{F}from'./westmere-ferry.js?v=world-20261122-marches1';
+import{B,open,floorHeight}from'./westmere-bridge.js?v=world-20261122-marches1';
+import{NATURAL_FEATURES}from'./natural-geography.js?v=world-20261122-marches1';
+import {TERRAIN_GRID,groundBasis,terrainCameraLimit} from './world-terrain.js?v=world-20261122-marches1';
+import {groundHeight,worldRoads} from './map-geography.js?v=world-20261122-marches1';
+import {makeStable} from './stable-art.js?v=world-20261122-marches1';
+import {HorseView} from './horse-view.js?v=world-20261122-marches1';
+import {actorRadius} from './structures.js?v=world-20261122-marches1';
+import {navigationFor} from './navigation.js?v=world-20261122-marches1';
+import {CargoView} from './cargo-view.js?v=world-20261122-marches1';
 import * as THREE from 'three';
-import {initActors,makeActor} from './soldieractor.js?v=world-20261122-harvest1';
-import {Fighter} from './chiv.core.js?v=world-20261122-harvest1';
-import {hash,ROLES,skinStyleOf,headwearOf} from './society.js?v=world-20261122-harvest1';
-import {EnvironmentArt} from './environment.js?v=world-20261122-harvest1';
+import {initActors,makeActor} from './soldieractor.js?v=world-20261122-marches1';
+import {Fighter} from './chiv.core.js?v=world-20261122-marches1';
+import {hash,ROLES,skinStyleOf,headwearOf} from './society.js?v=world-20261122-marches1';
+import {EnvironmentArt} from './environment.js?v=world-20261122-marches1';
 const V=THREE.Vector3;
 export const ground=groundHeight;
 export class WorldView{
@@ -37,5 +37,5 @@ export class WorldView{
  for(const sh of s.shipments){let cart=this.carts.get(sh.id);if(!cart){cart=new THREE.Group();this.box(cart,0,.7,0,1.4,.25,2.1,this.wood);for(const x of [-.78,.78])for(const z of [-.65,.65]){const w=new THREE.Mesh(new THREE.CylinderGeometry(.42,.42,.14,10),this.dark);w.rotation.z=Math.PI/2;w.position.set(x,.43,z);cart.add(w);}for(let i=0;i<4;i++)this.box(cart,(i%2)*.55-.275,1.1,Math.floor(i/2)*.7-.35,.5,.65,.6,this.wood);this.scene.add(cart);this.carts.set(sh.id,cart);}cart.visible=sh.status==='travelling'&&!sh.aboard;cart.position.set(sh.x,ground(sh.x,sh.z),sh.z);const target=sh.route[Math.min(sh.stage+1,sh.route.length-1)];const basis=groundBasis(sh.x,sh.z,Math.atan2(target.x-sh.x,target.z-sh.z),ground);cart.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new V(...basis.right),new V(...basis.up),new V(...basis.forward)));}
  const existing=new Set(s.drops.map(d=>d.id));for(const[id,m]of this.drops)if(!existing.has(id)){this.scene.remove(m);this.drops.delete(id);}for(const d of s.drops){let m=this.drops.get(d.id);if(!m){m=new THREE.Group();this.box(m,0,.12,0,.065,.025,.95,this.mat('#bdc2c1',.35));this.box(m,0,.13,.28,.3,.04,.06,this.gold);this.scene.add(m);this.drops.set(d.id,m);}m.position.set(d.x,ground(d.x,d.z)+.03,d.z);}
  updateShovels(this,s,ground);this.cargoView.update(s,me,ground);this.horseView.updateReins(s,this.actors);
- if(me){const r=this.actors.get(me.id);const x=r?.x??me.x,z=r?.z??me.z,y=me.mountId?(this.horseView.seatFor(me.mountId)?.getWorldPosition(new V()).y||ground(x,z)+1.74)-.98:ground(x,z),angle=yaw??me.yaw;const under=insidePilot(s,x,z);if(under&&r)r.model.root.visible=false;if(this.third&&!under){const elevation=Math.max(-.7,Math.min(.95,.337-pitch)),arm=5.3*Math.cos(elevation);this.camera.position.set(x-Math.sin(angle)*arm,y+1.45+5.3*Math.sin(elevation),z-Math.cos(angle)*arm);const target=new V(x,y+1.45,z),delta=this.camera.position.clone().sub(target),length=delta.length(),revision=Object.values(s.houses).reduce((n,h)=>n+h.buildings.length,0);if(this.cameraRevision!==revision){this.cameraBlockers=[];this.scene.traverse(n=>{if(n.userData.cameraSolid)n.traverse(m=>{if(m.isMesh&&!m.isSkinnedMesh)this.cameraBlockers.push(m);});});this.cameraRevision=revision;}this.scene.updateMatrixWorld(true);this.cameraRay.set(target,delta.normalize());this.cameraRay.near=.08;this.cameraRay.far=length;const hit=this.cameraRay.intersectObjects(this.cameraBlockers,false)[0];if(hit){this.camera.position.copy(target).addScaledVector(delta,Math.max(.12,hit.distance-.15));if(hit.distance<.65&&r)r.model.root.visible=false;}const safeCamera=terrainCameraLimit(target,this.camera.position,.12,ground);this.camera.position.copy(safeCamera);if(this.camera.position.distanceTo(target)<.65&&r)r.model.root.visible=false;this.camera.lookAt(target);}else{if(me.mountId&&r){const eye=r.model.bone('head').getWorldPosition(new V());this.camera.position.set(eye.x,eye.y-.025,eye.z);}else this.camera.position.set(x,y+1.68,z);this.camera.rotation.set(pitch,angle+Math.PI,0,'YXZ');}this.sun.position.set(x-45,75,z-35);this.sun.target.position.set(x,0,z);}else{this.camera.position.set(-77+Math.sin(this.t*.03)*4,14,52);this.camera.lookAt(-55,1,24);}this.renderer.render(this.scene,this.camera);}
+ if(me){const r=this.actors.get(me.id);const x=r?.x??me.x,z=r?.z??me.z,y=me.mountId?(this.horseView.seatFor(me.mountId)?.getWorldPosition(new V()).y||ground(x,z)+1.74)-.98:ground(x,z),angle=yaw??me.yaw;const under=insidePilot(s,x,z);if(under&&r)r.model.root.visible=false;if(this.third&&!under){const elevation=Math.max(-.7,Math.min(.95,.337-pitch)),arm=5.3*Math.cos(elevation);this.camera.position.set(x-Math.sin(angle)*arm,y+1.45+5.3*Math.sin(elevation),z-Math.cos(angle)*arm);const target=new V(x,y+1.45,z),delta=this.camera.position.clone().sub(target),length=delta.length(),revision=Object.values(s.houses).reduce((n,h)=>n+h.buildings.length,0);if(this.cameraRevision!==revision){this.cameraBlockers=[];this.scene.traverse(n=>{if(n.userData.cameraSolid)n.traverse(m=>{if(m.isMesh&&!m.isSkinnedMesh)this.cameraBlockers.push(m);});});this.cameraRevision=revision;}this.scene.updateMatrixWorld(true);this.cameraRay.set(target,delta.normalize());this.cameraRay.near=.08;this.cameraRay.far=length;const hit=this.cameraRay.intersectObjects(this.cameraBlockers,false)[0];if(hit){this.camera.position.copy(target).addScaledVector(delta,Math.max(.12,hit.distance-.15));if(hit.distance<.65&&r)r.model.root.visible=false;}const safeCamera=terrainCameraLimit(target,this.camera.position,.12,ground);this.camera.position.copy(safeCamera);if(this.camera.position.distanceTo(target)<.65&&r)r.model.root.visible=false;this.camera.lookAt(target);}else{if(me.mountId&&r){const eye=r.model.bone('head').getWorldPosition(new V());this.camera.position.set(eye.x,eye.y-.025,eye.z);}else this.camera.position.set(x,y+1.68,z);this.camera.rotation.set(pitch,angle+Math.PI,0,'YXZ');}this.sun.position.set(x-52,39,z+32);this.sun.target.position.set(x,0,z);}else{this.camera.position.set(-77+Math.sin(this.t*.03)*4,14,52);this.camera.lookAt(-55,1,24);}this.renderer.render(this.scene,this.camera);}
 }

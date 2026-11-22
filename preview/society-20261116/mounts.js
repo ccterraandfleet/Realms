@@ -1,5 +1,5 @@
-import {actorRadius} from './structures.js?v=world-20261122-harvest1';
-import{navigationFor}from'./navigation.js?v=world-20261122-harvest1';
+import {actorRadius} from './structures.js?v=world-20261122-marches1';
+import{navigationFor}from'./navigation.js?v=world-20261122-marches1';
 export const HORSE_RADIUS=1.7;
 const need=(v,m)=>{if(!v)throw Error(m);},dist=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z),sum=a=>Object.values(a.cargo||{}).reduce((n,v)=>n+v,0),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 export function initMounts(s){if(s.mounts)return;s.mounts=Object.values(s.houses).map((h,i)=>({id:'horse:'+h.id,house:h.id,name:['Alder','Ember','Willow'][i]||'Courser',x:h.x+13,z:h.z+24,yaw:Math.PI,rider:null,speed:0,stamina:100,forage:100,distance:0}));}

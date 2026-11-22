@@ -1,14 +1,14 @@
-import{gaitSpeed}from'./gait-speed.js?v=world-20261122-harvest1';
+import{gaitSpeed}from'./gait-speed.js?v=world-20261122-marches1';
 /* Realms actor: captured combat layered after captured locomotion, plus grip and foot IK.
  * Retarget vectors use the actor frame, not global axes. End-site offsets must never
  * replace joint offsets. No head-height clamp: legitimate overhead guards remain valid.
  */
 import * as THREE from 'three';
-import { Atlas } from './forge.js?v=world-20261122-harvest1';
-import {loadAnatomy} from './anatomy.js?v=world-20261122-harvest1';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=world-20261122-harvest1';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=world-20261122-harvest1';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=world-20261122-harvest1';
+import { Atlas } from './forge.js?v=world-20261122-marches1';
+import {loadAnatomy} from './anatomy.js?v=world-20261122-marches1';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=world-20261122-marches1';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=world-20261122-marches1';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=world-20261122-marches1';
 
 let ATLAS = null;
 let LOCO = null;
