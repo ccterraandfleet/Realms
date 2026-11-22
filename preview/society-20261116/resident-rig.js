@@ -321,6 +321,12 @@ export class Actor {
     const inContact=this._contactFlags.L || this._contactFlags.R;
     const correction=Math.max(...toePoints.map(p=>floorAt(p.x,p.z)+.032-p.y));
     this.bone('hips').position.y+=Math.max(inContact?-.10:0,Math.min(.12,correction));
+    if(this.civilian && speed>1.9 && globalThis.residentSoftApex!==false){
+      const hip=this.bone('hips'),raw=hip.position.y;
+      const mean=this._heightMean??raw;this._heightMean=lerp(mean,raw,1-Math.exp(-dt*3));
+      const target=mean+(raw-mean)*(raw>mean?.42:.85);
+      this._heightSoft=lerp(this._heightSoft??target,target,1-Math.exp(-dt*24));hip.position.y=this._heightSoft;
+    }else{this._heightMean=this._heightSoft=null;}
     this.root.updateWorldMatrix(true,true);
     this._footLocks=this._footLocks || {};
     for(const side of ['L','R']) {
