@@ -18,7 +18,7 @@
  * which is what a hand holding a blade actually does through a cut.
  * =========================================================================== */
 import * as THREE from 'three';
-import { BLADE_LOCAL } from './stances.js?v=cargo-frame-20261117';
+import { BLADE_LOCAL } from './stances.js?v=world-20261122-shovel1';
 
 /* our bone -> [source start joint, source end joint] */
 const MAP = [
@@ -240,7 +240,7 @@ export class Locomotion {
     const c = this.d[name];
     if (!c || !c.frames || !c.frames.length) return null;
     const P = c.frames.length;
-    const f = (((t * (c.fps || 30)) % P) + P) % P;
+    const f = (((t * (c.seconds>0?P/c.seconds:(c.fps||30))) % P) + P) % P;
     const i0 = Math.floor(f), i1 = (i0 + 1) % P, u = f - i0;
     const a = c.frames[i0], b = c.frames[i1], out = {};
     for (const j of Object.keys(a)) {

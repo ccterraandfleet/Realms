@@ -1,0 +1,3 @@
+// A finite loose outcrop at the west approach, not the intact massif.
+export const yard={x:97,z:-111},capacity=8;
+export function sampleRock(s,a){if(!s.highstoneYard)throw Error('Stake the southern worksite first.');if(!a.f.alive||a.inCombat||a.mountId||Math.hypot(a.x-yard.x,a.z-yard.z)>3)throw Error('Work on foot at the west survey stakes.');const y=s.highstoneYard;if(y.cuts>=capacity)throw Error('Loose sample outcrop exhausted. The mountain face remains solid.');if(a.f.stam<5||s.time<(a.nextSample||0))throw Error('Rest before taking another sample.');y.cuts++;y.rockLitres+=125;a.nextSample=s.time+3;a.f.stam-=5;}

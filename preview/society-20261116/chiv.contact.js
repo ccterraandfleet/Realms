@@ -16,7 +16,7 @@ export function bladeAt(traces,attack,u,space){
 }
 export function bladeContact(traces,attack,from,to,att,def){
  const key=traceKey(attack),gap=Math.hypot(att.x-def.x,att.z-def.z);
- if(!key)return gap<=(attack.type==='kick'||attack.type==='jab'?1.12:1.5) && (attack.release<=0 || to>=.4);
+ if(!key)return Math.abs((att.y||0)-(def.y||0))<=1.0 && gap<=(attack.type==='kick'||attack.type==='jab'?1.12:1.5) && (attack.release<=0 || to>=.4);
  if(!traces)return false;
  const A=[def.x,(def.y||0)+.48,def.z],B=[def.x,(def.y||0)+1.48,def.z],radius=.29;
  const steps=Math.max(1,Math.ceil(Math.abs(to-from)*120));

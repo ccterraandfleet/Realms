@@ -1,13 +1,14 @@
+import{gaitSpeed}from'./gait-speed.js?v=world-20261122-shovel1';
 /* Realms actor: captured combat layered after captured locomotion, plus grip and foot IK.
  * Retarget vectors use the actor frame, not global axes. End-site offsets must never
  * replace joint offsets. No head-height clamp: legitimate overhead guards remain valid.
  */
 import * as THREE from 'three';
-import { Atlas } from './forge.js?v=cargo-frame-20261117';
-import {loadAnatomy} from './anatomy.js?v=cargo-frame-20261117';
-import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=cargo-frame-20261117';
-import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=cargo-frame-20261117';
-import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=cargo-frame-20261117';
+import { Atlas } from './forge.js?v=world-20261122-shovel1';
+import {loadAnatomy} from './anatomy.js?v=world-20261122-shovel1';
+import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=world-20261122-shovel1';
+import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=world-20261122-shovel1';
+import { applyMocapFrame, aimBone, Locomotion } from './mocap.js?v=world-20261122-shovel1';
 
 let ATLAS = null;
 let LOCO = null;
@@ -123,12 +124,12 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 // Analytic two-bone leg IK: fix planted feet without stretching the skeleton.
-function placeFoot(rig,side,target,footWorldQ) {
+function placeFoot(rig,side,target,footWorldQ,poleHint=null) {
   const thigh=rig.byName.get('thigh.'+side),shin=rig.byName.get('shin.'+side),foot=rig.byName.get('foot.'+side);
   const S=thigh.getWorldPosition(new THREE.Vector3());
   const L1=shin.position.length(),L2=foot.position.length();
   const dir=target.clone().sub(S);const distance=Math.max(Math.abs(L1-L2)+.001,Math.min(L1+L2-.001,dir.length()));dir.normalize();
-  const pole=new THREE.Vector3(side==='R'?.08:-.08,0,1).applyQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()));pole.addScaledVector(dir,-pole.dot(dir));
+  const pole=(poleHint?.clone()||new THREE.Vector3(side==='R'?.08:-.08,0,1)).applyQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()));pole.addScaledVector(dir,-pole.dot(dir));
   if(pole.lengthSq()<1e-8)pole.set(1,0,0);pole.normalize();
   const along=(L1*L1+distance*distance-L2*L2)/(2*distance);
   const E=S.clone().addScaledVector(dir,along).addScaledVector(pole,Math.sqrt(Math.max(0,L1*L1-along*along)));
@@ -142,10 +143,10 @@ function placeFoot(rig,side,target,footWorldQ) {
 
 export class Actor {
   constructor(opts = {}) {
-    this.rig = buildSkeleton();this.civilian=!!opts.civilian;
+    this.rig = buildSkeleton();this.civilian=!!opts.civilian;this.firstPerson=!!opts.omitBones?.includes('head');this.riding=!!opts.riding;
     this.mats = soldierMaterials(ATLAS.m, opts.tint ?? 0x2f6ea6);
     let parts = buildSoldier(this.rig, this.mats, {
-      kind: opts.kind || 'sword',
+      kind: opts.kind || 'sword',riding:!!opts.riding,
       helm: opts.helm || (opts.civilian?'coif':'nasal'),skinStyle:opts.skinStyle||'weathered',
       shield: opts.shield || 'kite',civilian:!!opts.civilian,layers:opts.civilian?['flesh','wool','surcoat']:undefined,
     });
@@ -214,12 +215,19 @@ export class Actor {
     this.t=0;this._lastWp=null;this._previousWp=null;this._previous=null;this._gait=0;
     this._movingBlend=0;this._motionLower=null;this._footLocks={};this._footRelease={};this._previousToeZ={};
   }
-  update(dt, f, moving = 0) {
+  reinGrip(side){return this.bone('hand.'+side).localToWorld(new THREE.Vector3(side==='R'?.042:-.042,0,.004));}
+  updateRider(dt,seat){
+    this.t+=dt;animate(this.rig,this.t,'stand');this._lastWp=null;this._footLocks={};this._movingBlend=0;
+    const q=seat.getWorldQuaternion(new THREE.Quaternion()),p=seat.getWorldPosition(new THREE.Vector3());this.root.quaternion.copy(q);this.root.position.copy(p).sub(new THREE.Vector3(0,.98,0).applyQuaternion(q));this.bone('hips').position.y=.98;this.root.updateMatrixWorld(true);
+    for(const side of ['L','R']){const sign=side==='R'?1:-1,target=seat.localToWorld(new THREE.Vector3(sign*.46,-.68,.10));placeFoot(this.rig,side,target,q,new THREE.Vector3(sign*1.7,0,1));this.root.updateMatrixWorld(true);const hand=seat.localToWorld(new THREE.Vector3(sign*.13,.25,.34));const chest=this.bone('chest');solveArm(this.rig,side,{hand:chest.worldToLocal(hand).toArray(),pole:[sign*.35,-1,-.2]});const wrist=this.bone('hand.'+side);wrist.quaternion.copy(wrist.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(q));wrist.updateMatrixWorld(true);}
+    if(this.shield)this.shield.visible=false;this.root.updateMatrixWorld(true);this.built.skeleton.update();
+  }
+  update(dt, f, moving = 0, terrain = null) {
     if(!f)return;
     this.t+=dt;
     this.root.updateWorldMatrix(true,true);
     const wp=this.root.getWorldPosition(new THREE.Vector3());
-    const speed=this._lastWp?Math.min(9,wp.distanceTo(this._lastWp)/Math.max(dt,1e-4)):0;
+    const speed=gaitSpeed(this._lastWp,wp,dt);
     this._lastWp=wp.clone();
     const dead=f.alive===false || f.state==='dead';
     animate(this.rig,this.t,dead?'dead':'stand');
@@ -307,10 +315,11 @@ export class Actor {
     this._previous=new Map(this.rig.bones.map(b=>[b.name,b.quaternion.clone()]));
     this.root.updateWorldMatrix(true,true);
     // Preserve flight phases, but never let a sole penetrate the ground.
-    const toes=['toe.L','toe.R'].map(n=>this.bone(n).getWorldPosition(new THREE.Vector3()).y);
+    const toePoints=['toe.L','toe.R'].map(n=>this.bone(n).getWorldPosition(new THREE.Vector3()));
     const ground=this.root.getWorldPosition(new THREE.Vector3()).y;
+    const floorAt=(x,z)=>terrain?terrain(x,z):ground;
     const inContact=this._contactFlags.L || this._contactFlags.R;
-    const correction=ground+.032-Math.min(...toes);
+    const correction=Math.max(...toePoints.map(p=>floorAt(p.x,p.z)+.032-p.y));
     this.bone('hips').position.y+=Math.max(inContact?-.10:0,Math.min(.12,correction));
     this.root.updateWorldMatrix(true,true);
     this._footLocks=this._footLocks || {};
@@ -318,27 +327,28 @@ export class Actor {
       const foot=this.bone('foot.'+side),toe=this.bone('toe.'+side),shin=this.bone('shin.'+side);
       const F=foot.getWorldPosition(new THREE.Vector3()),T=toe.getWorldPosition(new THREE.Vector3());
       const fq=foot.getWorldQuaternion(new THREE.Quaternion());
+      if(terrain&&(speed<.08||this._contactFlags[side])){const e=.15,n=new THREE.Vector3(-(floorAt(F.x+e,F.z)-floorAt(F.x-e,F.z))/(2*e),1,-(floorAt(F.x,F.z+e)-floorAt(F.x,F.z-e))/(2*e)).normalize(),up=new THREE.Vector3(0,1,0).applyQuaternion(fq);fq.premultiply(new THREE.Quaternion().setFromUnitVectors(up,n));}
       const contact=speed>.08 && this._movingBlend>.95 && this._contactFlags[side];
       this._footRelease=this._footRelease || {};
       if(!contact){
         if(this._footLocks[side])this._footRelease[side]=this._footLocks[side].clone().sub(T);
         delete this._footLocks[side];
       }
-      else if(!this._footLocks[side])this._footLocks[side]=T.clone().setY(ground+.032);
+      else if(!this._footLocks[side])this._footLocks[side]=T.clone().setY(floorAt(T.x,T.z)+.032);
       const lock=this._footLocks[side];
       const ankle=lock?lock.clone().add(F.clone().sub(T)):F;
       if(!lock && this._footRelease[side]){this._footRelease[side].multiplyScalar(Math.exp(-dt*24));ankle.add(this._footRelease[side]);}
       if(lock)delete this._footRelease[side];
       // Keep knees bending forward during strafes/backpedals too.
       // Contact follows the actual boot sole, not the toe marker alone.
-      let soleOffset=Infinity;
-      for(let i=0;i<20;i++){const angle=i*Math.PI*2/20,point=new THREE.Vector3(.047*Math.cos(angle),-.071,.056+.122*Math.sin(angle)).applyQuaternion(fq);soleOffset=Math.min(soleOffset,point.y);}
-      const soleLift=Math.max(0,ground+.007-(ankle.y+soleOffset));ankle.y+=soleLift;
+      let soleOffset=Infinity,groundUnderSole=-Infinity;
+      for(let i=0;i<20;i++){const angle=i*Math.PI*2/20,point=new THREE.Vector3(.047*Math.cos(angle),-.071,.056+.122*Math.sin(angle)).applyQuaternion(fq);soleOffset=Math.min(soleOffset,point.y);groundUnderSole=Math.max(groundUnderSole,floorAt(ankle.x+point.x,ankle.z+point.z)-point.y);}
+      const soleLift=Math.max(0,groundUnderSole+.007-ankle.y);ankle.y+=soleLift;
       if(speed>.08||soleLift>1e-6)placeFoot(this.rig,side,ankle,fq);
     }
     this.root.updateWorldMatrix(true,true);
-    const finalLow=Math.min(...['toe.L','toe.R'].map(n=>this.bone(n).getWorldPosition(new THREE.Vector3()).y));
-    this.bone('hips').position.y+=Math.max(0,ground+.032-finalLow);
+    const finalLift=Math.max(...['toe.L','toe.R'].map(n=>{const p=this.bone(n).getWorldPosition(new THREE.Vector3());return floorAt(p.x,p.z)+.032-p.y;}));
+    this.bone('hips').position.y+=Math.max(0,finalLift);
     this.root.updateWorldMatrix(true,true);
     if(this.shield){
       const wrist=this.root.worldToLocal(this.bone('hand.L').getWorldPosition(new THREE.Vector3()));

@@ -1,0 +1,16 @@
+// Fixed initial geography for the internal Marches scenario. Crossings are not
+// permission flags: future bridges/boats/excavations must supply real geometry.
+export const NATURAL_REVISION='marches-barriers-1';
+export const NATURAL_FEATURES=[
+ {id:'highstone',name:'Highstone massif',kind:'mountain',peak:72,margin:2,polygon:[{x:98,z:-130},{x:110,z:-146},{x:142,z:-148},{x:166,z:-134},{x:160,z:-111},{x:132,z:-102},{x:109,z:-110}]},
+ {id:'mere',name:'Westmere',kind:'water',level:0,depth:4,margin:2,polygon:[{x:-146,z:84},{x:-136,z:66},{x:-116,z:64},{x:-99,z:78},{x:-96,z:100},{x:-111,z:118},{x:-134,z:121},{x:-148,z:106}]}
+].map(f=>({...f,minX:Math.min(...f.polygon.map(p=>p.x)),maxX:Math.max(...f.polygon.map(p=>p.x)),minZ:Math.min(...f.polygon.map(p=>p.z)),maxZ:Math.max(...f.polygon.map(p=>p.z)),x:f.polygon.reduce((n,p)=>n+p.x,0)/f.polygon.length,z:f.polygon.reduce((n,p)=>n+p.z,0)/f.polygon.length}));
+const cross=(a,b,c)=>(b.x-a.x)*(c.z-a.z)-(b.z-a.z)*(c.x-a.x);
+export function segmentDistance(p,a,b){const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.z-a.z)*dz)/(dx*dx+dz*dz||1)));return Math.hypot(p.x-a.x-dx*t,p.z-a.z-dz*t);}
+export function polygonContains(p,poly){let sign=0;for(let i=0;i<poly.length;i++){const c=cross(poly[i],poly[(i+1)%poly.length],p);if(Math.abs(c)<1e-9)continue;const n=Math.sign(c);if(sign&&n!==sign)return false;sign=n;}return true;}
+export function polygonDistance(p,poly){return Math.min(...poly.map((a,i)=>segmentDistance(p,a,poly[(i+1)%poly.length])));}
+export function inNaturalObstacle(p,f,pad=0){const margin=pad+(f.margin||0);if(p.x<f.minX-margin||p.x>f.maxX+margin||p.z<f.minZ-margin||p.z>f.maxZ+margin)return false;return polygonContains(p,f.polygon)||polygonDistance(p,f.polygon)<=margin;}
+export function crossesNaturalObstacle(a,b,f,pad=0){const m=pad+(f.margin||0);if(Math.max(a.x,b.x)<f.minX-m||Math.min(a.x,b.x)>f.maxX+m||Math.max(a.z,b.z)<f.minZ-m||Math.min(a.z,b.z)>f.maxZ+m)return false;if(inNaturalObstacle(a,f,pad)||inNaturalObstacle(b,f,pad))return true;const margin=pad+(f.margin||0);return f.polygon.some((c,i)=>{const d=f.polygon[(i+1)%f.polygon.length],ca=cross(a,b,c),da=cross(a,b,d),ac=cross(c,d,a),bc=cross(c,d,b);if(ca*da<0&&ac*bc<0)return true;return Math.min(segmentDistance(a,c,d),segmentDistance(b,c,d),segmentDistance(c,a,b),segmentDistance(d,a,b))<=margin;});}
+export function naturalCorners(f,pad=0){const offset=pad+(f.margin||0);return f.polygon.map((p,i)=>{const a=f.polygon[(i+f.polygon.length-1)%f.polygon.length],b=f.polygon[(i+1)%f.polygon.length],n=(a,b)=>{const x=b.z-a.z,z=a.x-b.x,l=Math.hypot(x,z);return{x:x/l,z:z/l};},u=n(a,p),v=n(p,b),x=u.x+v.x,z=u.z+v.z,d=x*v.x+z*v.z;return{x:p.x+offset*x/d,z:p.z+offset*z/d};});}
+export function naturalFeatureAt(p,pad=0){return NATURAL_FEATURES.find(f=>inNaturalObstacle(p,f,pad))||null;}
+export function naturalElevation(x,z,base){const p={x,z};let h=base,rise=0;for(const f of NATURAL_FEATURES){const inside=polygonContains(p,f.polygon),distance=polygonDistance(p,f.polygon);if(f.kind==='water'){if(inside)return f.level-Math.min(f.depth,distance*.3);h=Math.min(h,f.level+distance*.22);}else if(inside){const centreDistance=polygonDistance({x:f.x,z:f.z},f.polygon);rise+=f.peak*Math.min(1,distance/centreDistance)**.72;}}return h+rise;}

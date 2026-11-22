@@ -3,3 +3,5 @@
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:14px}.cards article{padding:18px;border:1px solid #9c927440;background:#18282baa}.cards h3{font:26px Georgia;margin:8px 0}select[multiple]{min-width:185px}#panelBody form label{max-width:100%}
 
 #buildStamp{font-size:8px;color:#aebcb5;letter-spacing:.8px}.qualityLabel{margin:10px 0 4px}.qualityLabel select{padding:7px;margin-top:4px}.welcome{max-height:94vh;overflow-y:auto}@media(max-width:800px){#buildStamp{display:none}}
+
+#panel :focus-visible{outline:2px solid #f4cc80;outline-offset:2px} @media(max-width:900px){#panel #tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;overflow:visible;white-space:normal}#panel #tabs button{min-width:0;padding:4px 2px;font-size:12px;line-height:1.2}}

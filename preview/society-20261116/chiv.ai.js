@@ -1,4 +1,4 @@
-import { zoneOf } from './chiv.styles.js?v=cargo-frame-20261117';
+import { zoneOf } from './chiv.styles.js?v=world-20261122-shovel1';
 /* ===========================================================================
  * A CHIVALRY OPPONENT FOR THE DATA-DRIVEN CORE
  * ===========================================================================

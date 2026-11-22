@@ -27,8 +27,8 @@
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=cargo-frame-20261117';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=cargo-frame-20261117';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-shovel1';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-shovel1';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
@@ -252,7 +252,7 @@ export function buildSoldier(rig, mats, spec = {}) {
     soft(loft(rings,20),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:fore,y:1.155,band:.065});
     P(loft([{y:1.115,rx:.050,rz:.046,x:sign*.207},{y:1.02,rx:.046,rz:.044,x:sign*.21},{y:.934,rx:.035,rz:.037,x:sign*.211}],16),mats.leather,fore);
     if(!spec.civilian)P(loft([{y:1.456,rx:.061,rz:.063,x:sign*.2},{y:1.431,rx:.078,rz:.075,x:sign*.203},{y:1.381,rx:.073,rz:.069,x:sign*.211}],20),mats.steel,arm);
-    const armed=kind!=='none';
+    const armed=kind!=='none'||spec.riding;
     if(armed){
       const tx=sign*.253,ty=.900,tz=.004;
       const handMatrix=new THREE.Matrix4().makeTranslation(tx,ty,tz).multiply(new THREE.Matrix4().makeRotationZ(sign*-.20)).multiply(new THREE.Matrix4().makeRotationX(.22));
@@ -275,7 +275,7 @@ export function buildSoldier(rig, mats, spec = {}) {
   }
 
   /* ---------------- the mail skirt and the surcoat: the layers that read */
-  if (has('mail')) {
+  if (has('mail')&&!spec.riding) {
     P(loft([
       { y: 1.00, rx: 0.170, rz: 0.118 },
       { y: 0.86, rx: 0.180, rz: 0.126 },
@@ -283,24 +283,14 @@ export function buildSoldier(rig, mats, spec = {}) {
       { y: 0.62, rx: 0.168, rz: 0.118 },
     ], 20, false, false), mats.mail, 'hips');
   }
-  if(spec.workcoat){
-    // A shaped folded garment, fitted over the shoulders and gathered under the belt.
-    mats.cloth.color.set(0x647b65);
-    const woven=(rings,mat,owner,chain,fold=.003)=>{const g=loft(rings.map(([y,rx,rz])=>({y,rx,rz})),40,false,false),a=g.attributes.position;
-      for(let i=0;i<a.count;i++){const x=a.getX(i),z=a.getZ(i),y=a.getY(i),th=Math.atan2(z/.13,x/.19),f=fold*(Math.sin(th*9+y*3)+.45*Math.cos(th*5-y*6));a.setXYZ(i,x+f*Math.cos(th),y,z+f*Math.sin(th));}g.computeVertexNormals();parts.push({geo:g,mat,bone:owner,skinChain:chain});};
-    woven([[.81,.187,.136],[.84,.19,.14],[.94,.179,.128],[1.012,.158,.114],[1.07,.17,.124],[1.23,.19,.135],[1.35,.215,.142],[1.415,.212,.139],[1.46,.173,.121],[1.48,.108,.095]],mats.cloth,'chest',[{upper:'chest',lower:'hips',y:1.18,band:.15}]);
-    woven([[1.394,.221,.148],[1.42,.216,.15],[1.46,.184,.135],[1.49,.134,.112],[1.522,.083,.085]],mats.wool,'chest',null,.002);
-    for(const [sg,side] of [[-1,'L'],[1,'R']]){P(loft([[1.222,.055],[1.23,.061],[1.249,.058],[1.262,.062],[1.272,.054]].map(([y,r])=>({y,rx:r,rz:r*.94,x:sg*.204})),20),mats.cloth,'arm.'+side);}
-    P(sph(.067,16,12).scale(1,.94,.6).translate(-.123,.904,.111),mats.leather,'hips');P(sph(.055,14,8).scale(1,.48,.49).translate(-.124,.94,.139),mats.leather,'hips');P(sph(.008,8,6).translate(-.124,.936,.164),mats.brass,'hips');
-  }
-  if (has('surcoat')&&!spec.workcoat) {
+  if (has('surcoat')) {
     /* front and back panels, split so the legs can swing through it */
     for (const [zc, rz] of [[1, 0.130], [-1, -0.130]]) {
       P(loft([
         { y: 1.42, rx: 0.160, rz: 0.022, z: zc * 0.113 },
         { y: 1.10, rx: 0.170, rz: 0.022, z: zc * 0.119 },
-        { y: 0.92, rx: 0.172, rz: 0.022, z: zc * 0.121 },
-        { y: 0.74, rx: 0.152, rz: 0.020, z: zc * 0.119 },
+        { y: spec.riding?1.03:0.92, rx: 0.172, rz: 0.022, z: zc * 0.121 },
+        { y: spec.riding?1.00:0.74, rx: 0.152, rz: 0.020, z: zc * 0.119 },
       ], 16), mats.cloth, 'hips');
     }
     /* the device sits on the chest, where it reads from the front */
