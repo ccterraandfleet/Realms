@@ -66,7 +66,7 @@
 #hint{display:none;bottom:48px;width:min(640px,calc(100vw - 64px));box-sizing:border-box;line-height:1.6}
 #hint.shown{display:block}
 #combatHelp{position:fixed;left:20px;bottom:20px;color:#d4dce0;background:#101820aa;border-radius:4px;padding:5px 8px;font-size:10px;letter-spacing:.05em}
-</style></head>
+</style><style>#guardCompass{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:96px;height:96px;pointer-events:none;z-index:5;filter:drop-shadow(0 1px 2px #101820)}#guardCompass path{fill:none;stroke:#cedde43b;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}#guardCompass .incoming{stroke:#ff9567;stroke-width:4}#guardCompass .release{stroke:#fff0b5;stroke-width:6}#guardCompass .selected{stroke:#82e8ff;stroke-width:4}#tel,#armed{display:none!important}body:has(#intro:not([style*="display: none"])) #guardCompass{visibility:hidden}</style></head>
 <body>
 <div id="hud">
   <span class="lbl" id="lblMe">YOU</span><span class="lbl" id="lblFoe">OPPONENT</span>
@@ -79,13 +79,13 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD · COUNTER STUDY 01</div>
+  <div id="build">BUILD · GUARD COMPASS 02</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
   </style>
-  <div id="readCoach" style="position:fixed;left:50%;top:63%;transform:translateX(-50%);color:#ffe0a2;background:#141b22dd;border-radius:4px;padding:6px 12px;font:600 14px system-ui;pointer-events:none" hidden></div><div id="armed" aria-live="polite"></div>
+  <svg id="guardCompass" role="img" aria-label="Guard compass" viewBox="-50 -50 100 100"><circle r="38" fill="none" stroke="#c2d5de55" stroke-width="1"/><g id="foeBearing"><circle cy="-38" r="3" fill="white" stroke="#111"/></g><g transform="rotate(0)"><path id="warn-up" d="M-10 -32 L0 -23 L10 -32"/><path id="self-up" d="M-5 -12 L0 -17 L5 -12"/></g><g transform="rotate(90)"><path id="warn-right" d="M-10 -32 L0 -23 L10 -32"/><path id="self-right" d="M-5 -12 L0 -17 L5 -12"/></g><g transform="rotate(180)"><path id="warn-down" d="M-10 -32 L0 -23 L10 -32"/><path id="self-down" d="M-5 -12 L0 -17 L5 -12"/></g><g transform="rotate(270)"><path id="warn-left" d="M-10 -32 L0 -23 L10 -32"/><path id="self-left" d="M-5 -12 L0 -17 L5 -12"/></g></svg><div id="armed" aria-live="polite"></div>
 <div id="combatHelp">H controls &nbsp;·&nbsp; Esc pause</div><div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>hold LMB / MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
@@ -103,7 +103,7 @@
 
 <script type="module">
 import * as THREE from 'three';
-import {bladeContact,faces} from './chiv.contact.js?v=action-v1';
+import {bladeAt,bladeContact,faces} from './chiv.contact.js?v=action-v1';
 let combatTraces=null;fetch('./combat-traces.json?v=action-v1').then(r=>{if(!r.ok)throw Error('Blade traces unavailable');return r.json();}).then(j=>combatTraces=j).catch(e=>console.error(e));
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
@@ -1537,7 +1537,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD · COUNTER STUDY 01');
+console.log('REALMS KINGDOM BUILD · GUARD COMPASS 02');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -2468,7 +2468,13 @@ function tick(dt) {
   ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
   const events = duel.step(dt, ia, ib) || [];
   window.__exchangeLog=window.__exchangeLog||[];window.__exchangeLog.push(...events);if(window.__exchangeLog.length>600)window.__exchangeLog.splice(0,window.__exchangeLog.length-600);
-  if(coached){const el=document.getElementById('readCoach'),a=foe.attack;el.hidden=false;const tell=a&&['holding','windup','release'].includes(foe.state)&&!a.resolved;const label={slash:'SIDE CUT · flick sideways',overhead:'OVERHEAD · flick up',stab:'THRUST · flick down'};const msg=tell?(foe.state==='holding'?'Read: ':'Answer: ')+(label[a.type]||a.name):'Hold right mouse · match the swing with left click';if(el.textContent!==msg)el.textContent=msg;}
+  {const a=foe.attack,A=mainSpatial(foe),B=mainSpatial(me),angle=Math.atan2(A.x-B.x,-(A.z-B.z))+yaw;
+    $('#foeBearing').setAttribute('transform',`rotate(${angle*180/Math.PI})`);
+    const selected=armedLine()||({L:'left',R:'right',T:'up'}[lastZone]);let incoming=null;
+    if(a&&!a.resolved&&['holding','windup','release'].includes(foe.state)&&faces(A,B)){
+      if(a.type==='overhead')incoming='up';if(a.type==='stab')incoming='down';if(a.type==='slash'){const tip=bladeAt(combatTraces,a,0,A)?.[1];if(tip)incoming=(tip[0]-A.x)*Math.cos(yaw)-(tip[2]-A.z)*Math.sin(yaw)>0?'right':'left';}}
+    for(const d of ['left','right','up','down']){$('#self-'+d).classList.toggle('selected',d===selected);const n=$('#warn-'+d);n.classList.toggle('incoming',d===incoming);n.classList.toggle('release',d===incoming&&foe.state==='release');}}
+
   pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
 
   for (const e of events) {
