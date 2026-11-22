@@ -1,4 +1,4 @@
-import{naturalElevation}from'./natural-geography.js?v=world-20261122-anatomy3';
+import{naturalElevation}from'./natural-geography.js?v=world-20261122-anatomy4';
 // One sampled land surface for rendering, grounding, combat and cartography.
 // This is initial geography. The separate excavation kernel is not yet a playable surface.
 export const TERRAIN_REVISION='marches-natural-defences-1';

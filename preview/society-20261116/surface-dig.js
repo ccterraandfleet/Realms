@@ -1,4 +1,4 @@
-import{naturalFeatureAt,segmentDistance}from'./natural-geography.js?v=world-20261122-anatomy3';import{regionAt}from'./map-geography.js?v=world-20261122-anatomy3';
+import{naturalFeatureAt,segmentDistance}from'./natural-geography.js?v=world-20261122-anatomy4';import{regionAt}from'./map-geography.js?v=world-20261122-anatomy4';
 const key=(x,z)=>`${x},${z}`,need=(v,m)=>{if(!v)throw Error(m);};
 export const CELL=.25,CAP=6; // litres, compacted equivalent; one fine vertex integrates to CELL²
 export function shovelTarget(a,yaw=a.input?.yaw??a.yaw){return {x:CELL*Math.round((a.x+.85*Math.sin(yaw))/CELL),z:CELL*Math.round((a.z+.85*Math.cos(yaw))/CELL)}}

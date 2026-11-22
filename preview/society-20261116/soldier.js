@@ -1,5 +1,5 @@
-import{shapeFrame}from './resident-anatomy.js?v=world-20261122-anatomy3';import{workerHand,hairGeometry}from './anatomy.js?v=world-20261122-anatomy3';
-import{dressResident}from './resident-dress.js?v=world-20261122-anatomy3';
+import{shapeFrame}from './resident-anatomy.js?v=world-20261122-anatomy4';import{workerHand,hairGeometry}from './anatomy.js?v=world-20261122-anatomy4';
+import{dressResident}from './resident-dress.js?v=world-20261122-anatomy4';
 /* ===========================================================================
  * SOLDIER: original armour, clothing and rig with a CC0 anatomical head
  * ===========================================================================
@@ -29,8 +29,8 @@ import{dressResident}from './resident-dress.js?v=world-20261122-anatomy3';
  * =========================================================================== */
 
 import * as THREE from 'three';
-import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-anatomy3';
-import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy3';
+import {anatomicalHead,headCapSections,skinColor} from './anatomy.js?v=world-20261122-anatomy4';
+import { mergeGeometries } from './lib/BufferGeometryUtils.js?v=world-20261122-anatomy4';
 
 /* ------------------------------------------------------------------ skeleton
  * Heights in metres for a 1.80m man. Bone rest positions are absolute here and
@@ -43,13 +43,13 @@ export const RIG_DEF = [
   ['neck',     'chest',     0,         1.50,  0.006],
   ['head',     'neck',      0,         1.575, 0.008],
   ['clav.L',   'chest',    -0.055,     1.45,  0.004],
-  ['arm.L',    'clav.L',   -0.196,     1.435, 0],
-  ['fore.L',   'arm.L',    -0.206,     1.155, 0],
-  ['hand.L',   'fore.L',   -0.211,     0.900, 0],
+  ['arm.L',    'clav.L',   -0.172,     1.435, 0],
+  ['fore.L',   'arm.L',    -0.182,     1.155, 0],
+  ['hand.L',   'fore.L',   -0.187,     0.900, 0],
   ['clav.R',   'chest',     0.055,     1.45,  0.004],
-  ['arm.R',    'clav.R',    0.196,     1.435, 0],
-  ['fore.R',   'arm.R',     0.206,     1.155, 0],
-  ['hand.R',   'fore.R',    0.211,     0.900, 0],
+  ['arm.R',    'clav.R',    0.172,     1.435, 0],
+  ['fore.R',   'arm.R',     0.182,     1.155, 0],
+  ['hand.R',   'fore.R',    0.187,     0.900, 0],
   ['thigh.L',  'hips',     -0.092,     0.965, 0],
   ['shin.L',   'thigh.L',  -0.098,     0.525, 0],
   ['foot.L',   'shin.L',   -0.100,     0.095, 0],
@@ -256,14 +256,14 @@ export function buildSoldier(rig, mats, spec = {}) {
   const segment=(A,B,r,mat,bone)=>{const av=new THREE.Vector3(...A),bv=new THREE.Vector3(...B),d=bv.clone().sub(av),g=new THREE.CylinderGeometry(r*.92,r,d.length(),7,1);g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0),d.normalize()));g.translate(...av.add(bv).multiplyScalar(.5).toArray());P(g,mat,bone);};
   for(const side of ['L','R']){
     const sign=side==='L'?-1:1,arm='arm.'+side,fore='fore.'+side,hand='hand.'+side;
-    const rings=[{y:1.500,rx:.044,rz:.046,x:sign*.188},{y:1.478,rx:.064,rz:.064,x:sign*.193},{y:1.450,rx:.070,rz:.068,x:sign*.196},{y:1.405,rx:.066,rz:.063,x:sign*.197},{y:1.34,rx:.063,rz:.058,x:sign*.199},{y:1.24,rx:.052,rz:.049,x:sign*.203},{y:1.20,rx:.047,rz:.046,x:sign*.205},{y:1.165,rx:.044,rz:.043,x:sign*.206},{y:1.13,rx:.045,rz:.044,x:sign*.207},{y:1.10,rx:.049,rz:.046,x:sign*.208},{y:1.02,rx:.045,rz:.041,x:sign*.210},{y:.945,rx:.032,rz:.034,x:sign*.211},{y:.895,rx:.030,rz:.031,x:sign*.211}];
+    const rings=[{y:1.472,rx:.012,rz:.013,x:sign*.148},{y:1.458,rx:.028,rz:.029,x:sign*.160},{y:1.442,rx:.042,rz:.041,x:sign*.168},{y:1.426,rx:.047,rz:.045,x:sign*.172},{y:1.408,rx:.047,rz:.045,x:sign*.173},{y:1.34,rx:.046,rz:.044,x:sign*.176},{y:1.24,rx:.043,rz:.041,x:sign*.180},{y:1.20,rx:.040,rz:.039,x:sign*.181},{y:1.165,rx:.038,rz:.037,x:sign*.182},{y:1.13,rx:.039,rz:.038,x:sign*.182},{y:1.10,rx:.042,rz:.040,x:sign*.182},{y:1.02,rx:.039,rz:.036,x:sign*.184},{y:.945,rx:.029,rz:.031,x:sign*.186},{y:.895,rx:.028,rz:.029,x:sign*.187}];
     soft(loft(rings,20),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:fore,y:1.155,band:.065});
-    soft(sph(.069,18,14).scale(1.06,.96,.92).translate(sign*.193,1.462,0),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:'chest',y:1.472,band:.055});
-    P(loft([{y:1.115,rx:.050,rz:.046,x:sign*.207},{y:1.02,rx:.046,rz:.044,x:sign*.21},{y:.934,rx:.035,rz:.037,x:sign*.211}],16),mats.leather,fore);
-    if(!spec.civilian)P(loft([{y:1.456,rx:.061,rz:.063,x:sign*.2},{y:1.431,rx:.078,rz:.075,x:sign*.203},{y:1.381,rx:.073,rz:.069,x:sign*.211}],20),mats.steel,arm);
+    soft(sph(.052,18,14).scale(1.06,.88,.94).translate(sign*.173,1.408,0),has('mail')?mats.mail:mats.wool,arm,{upper:arm,lower:'chest',y:1.472,band:.055});
+    P(loft([{y:1.115,rx:.050,rz:.046,x:sign*.183},{y:1.02,rx:.046,rz:.044,x:sign*.186},{y:.934,rx:.035,rz:.037,x:sign*.187}],16),mats.leather,fore);
+    if(!spec.civilian)P(loft([{y:1.458,rx:.050,rz:.052,x:sign*.186},{y:1.432,rx:.059,rz:.058,x:sign*.189},{y:1.384,rx:.057,rz:.055,x:sign*.197}],20),mats.steel,arm);
     const armed=kind!=='none'||spec.riding;
     if(armed){
-      const tx=sign*.253,ty=.900,tz=.004;
+      const tx=sign*.229,ty=.900,tz=.004;
       const handMatrix=new THREE.Matrix4().makeTranslation(tx,ty,tz).multiply(new THREE.Matrix4().makeRotationZ(sign*-.20)).multiply(new THREE.Matrix4().makeRotationX(.22));
       const hp=(g,mat)=>{P(g.applyMatrix4(handMatrix),mat,hand);parts[parts.length-1].rigid=true;};
       hp(sph(.045,14,10).scale(.68,1.0,.65).translate(-sign*.039,-.006,.014),mats.leather);
@@ -273,9 +273,9 @@ export function buildSoldier(rig, mats, spec = {}) {
       }
       hp(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(-sign*.045,.035,.018),new THREE.Vector3(-sign*.024,.031,.036),new THREE.Vector3(sign*.004,.017,.028)]),8,.012,7,false),mats.leather);
     }else if(spec.human){P(workerHand(sign),mats.skin,hand);parts.at(-1).rigid=true;}else{
-      P(sph(.048,14,10).scale(.52,1.0,.87).translate(sign*.213,.866,.005),mats.leather,hand);
-      for(let finger=0;finger<4;finger++){const z=-.027+finger*.019,len=[.060,.079,.081,.069][finger],A=[sign*.211,.832,z],B=[sign*.218,.832-len*.6,z+.003],C=[sign*.233,.832-len,z+.004];segment(A,B,.0088,mats.leather,hand);segment(B,C,.008,mats.leather,hand);P(sph(.008,7,5).translate(...C),mats.skin,hand);}
-      segment([sign*.211,.886,.045],[sign*.223,.851,.059],.011,mats.leather,hand);segment([sign*.223,.851,.059],[sign*.236,.829,.048],.009,mats.skin,hand);
+      P(sph(.048,14,10).scale(.52,1.0,.87).translate(sign*.189,.866,.005),mats.leather,hand);
+      for(let finger=0;finger<4;finger++){const z=-.027+finger*.019,len=[.060,.079,.081,.069][finger],A=[sign*.187,.832,z],B=[sign*.194,.832-len*.6,z+.003],C=[sign*.209,.832-len,z+.004];segment(A,B,.0088,mats.leather,hand);segment(B,C,.008,mats.leather,hand);P(sph(.008,7,5).translate(...C),mats.skin,hand);}
+      segment([sign*.187,.886,.045],[sign*.199,.851,.059],.011,mats.leather,hand);segment([sign*.199,.851,.059],[sign*.212,.829,.048],.009,mats.skin,hand);
     }
     const thigh='thigh.'+side,shin='shin.'+side;
     soft(loft([{y:1.02,rx:.073,rz:.077,x:sign*.092},{y:.965,rx:.089,rz:.081,x:sign*.092},{y:.87,rx:.086,rz:.078,x:sign*.093},{y:.74,rx:.074,rz:.069,x:sign*.095},{y:.62,rx:.062,rz:.059,x:sign*.097},{y:.56,rx:.058,rz:.058,x:sign*.098},{y:.525,rx:.058,rz:.057,x:sign*.098},{y:.49,rx:.060,rz:.057,x:sign*.098},{y:.43,rx:.065,rz:.060,x:sign*.099},{y:.33,rx:.059,rz:.054,x:sign*.100},{y:.23,rx:.047,rz:.046,x:sign*.100},{y:.13,rx:.043,rz:.043,x:sign*.100}],20),mats.wool,thigh,{upper:thigh,lower:shin,y:.525,band:.075});

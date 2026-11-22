@@ -1,5 +1,5 @@
-import{startPilot,finishPilot,P,end}from'./spur-pilot.js?v=world-20261122-anatomy3';
-import {soilStart,moveSoil} from './surface-dig.js?v=world-20261122-anatomy3';
+import{startPilot,finishPilot,P,end}from'./spur-pilot.js?v=world-20261122-anatomy4';
+import {soilStart,moveSoil} from './surface-dig.js?v=world-20261122-anatomy4';
 const face={x:97,z:-111},bay={x:93,z:-112},near=(a,b)=>Math.hypot(a.x-b.x,a.z-b.z)<2.4;
 const need=(ok,message)=>{if(!ok)throw Error(message);};
 export function beginLabor(s,a,kind){need(a.f.alive&&!a.inCombat&&!a.mountId&&!a.formation,'Work on foot outside combat and company duty.');need(!a.labor,'Finish or interrupt the current task.');let phase,seconds;

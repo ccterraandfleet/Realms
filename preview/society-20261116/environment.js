@@ -1,14 +1,14 @@
-import{dressMarches,marchesLight}from './marches-art.js?v=world-20261122-anatomy3';
-import{cropStage}from'./grain-plots.js?v=world-20261122-anatomy3';
-import{patchForStalk}from'./grain-plots.js?v=world-20261122-anatomy3';
-import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-anatomy3';
-import {partitionInstances} from './scenery-batching.js?v=world-20261122-anatomy3';
-import {cottageDimensions} from './structures.js?v=world-20261122-anatomy3';
+import{dressMarches,marchesLight}from './marches-art.js?v=world-20261122-anatomy4';
+import{cropStage}from'./grain-plots.js?v=world-20261122-anatomy4';
+import{patchForStalk}from'./grain-plots.js?v=world-20261122-anatomy4';
+import {groundHeight,visibleTrees} from './map-geography.js?v=world-20261122-anatomy4';
+import {partitionInstances} from './scenery-batching.js?v=world-20261122-anatomy4';
+import {cottageDimensions} from './structures.js?v=world-20261122-anatomy4';
 import * as THREE from 'three';
-import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-anatomy3';
-import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-anatomy3';
-import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-anatomy3';
-import {hash} from './society.js?v=world-20261122-anatomy3';
+import {RGBELoader} from './lib/loaders/RGBELoader.js?v=world-20261122-anatomy4';
+import {GLTFLoader} from './lib/loaders/GLTFLoader.js?v=world-20261122-anatomy4';
+import {mergeGeometries} from './lib/utils/BufferGeometryUtils.js?v=world-20261122-anatomy4';
+import {hash} from './society.js?v=world-20261122-anatomy4';
 const V=THREE.Vector3,M=THREE.Matrix4,Q=THREE.Quaternion;
 const height=groundHeight;
 export class EnvironmentArt{
