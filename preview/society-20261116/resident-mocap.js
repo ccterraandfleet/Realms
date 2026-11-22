@@ -245,7 +245,10 @@ export class Locomotion {
     const a = c.frames[i0], b = c.frames[i1], out = {};
     for (const j of Object.keys(a)) {
       const p = a[j], q = b[j] || p;
-      out[j] = [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u, p[2] + (q[2] - p[2]) * u];
+      if(globalThis.residentSmoothPose===false){out[j]=[0,1,2].map(i=>p[i]+(q[i]-p[i])*u);continue;}
+      const prev=c.frames[(i0+P-1)%P][j]||p,next=c.frames[(i1+1)%P][j]||q;
+      const tangent=(x,y)=>x*y>0?2*x*y/(x+y):0, u2=u*u,u3=u2*u;
+      out[j]=[0,1,2].map(i=>{const v=q[i]-p[i];return p[i]+(3*u2-2*u3)*v+(u3-2*u2+u)*tangent(p[i]-prev[i],v)+(u3-u2)*tangent(v,next[i]-q[i]);});
     }
     return out;
   }

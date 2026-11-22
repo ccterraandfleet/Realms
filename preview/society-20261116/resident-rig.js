@@ -8,7 +8,7 @@ import { Atlas } from './forge.js';
 import {loadAnatomy} from './anatomy.js?v=cargo-frame-20261117';
 import { buildSkeleton, buildSoldier, assemble, soldierMaterials, animate } from './soldier.js?v=action-v1';
 import { stanceForAttack, poseAt, applyPose, GUARD_POSE, stanceById, solveArm, rollShieldClear } from './stances.js?v=action-v1';
-import { applyMocapFrame, aimBone, Locomotion } from './resident-mocap.js';
+import { applyMocapFrame, aimBone, Locomotion } from './resident-mocap.js?v=jog2';
 
 let ATLAS = null;
 let LOCO = null;
