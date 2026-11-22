@@ -37,8 +37,8 @@ if (typeof window !== 'undefined') {
 const UPPER_MASK = ['spine','chest','neck','clav.R','arm.R','fore.R','hand.R'];
 const smooth = (u) => {u=Math.max(0,Math.min(1,u));return u*u*(3-2*u);};
 function clipTimeFor(phase,u) {
-  if(phase==='holding') return 0.08*smooth(u);
-  if(phase==='windup') return 0.08+0.22*u;
+  if(phase==='holding') return 0.22*smooth(Math.min(1,u/.7));
+  if(phase==='windup') return 0.22+0.08*smooth(u);
   if(phase==='release') return 0.30+0.58*u;
   return 0.88+0.12*u;
 }
@@ -68,7 +68,7 @@ export function capturedMotion(attack,phase,u) {
   if(!SWINGS) {loadSwings();return null;}
   const clip=swingFor(stanceForAttack(attack)); if(!clip)return null;
   let weight=1;
-  if(phase==='holding')weight=smooth(u);
+  if(phase==='holding')weight=smooth(Math.min(1,u/.7));
   if(phase==='windup' && attack.hold===0)weight=smooth(u/.35);
   if(phase==='recovery')weight=1-smooth((u-.15)/.85);
   let time=clipTimeFor(phase,u);

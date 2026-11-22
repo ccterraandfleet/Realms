@@ -234,7 +234,7 @@ export class Fighter {
       t: 0,
     };
     this.guard = false;
-    this.counterAttemptUntil = counterAttempt ? clock + Math.max(windup, 0.12) : -99;
+    this.counterAttemptUntil = counterAttempt ? clock + Math.max(windup, 0.12) + Math.min(.12,ph.release*.3) : -99;
     if(riposting) this.activeParryUntil=clock+0.5;
     this.chained = !!chaining;
     this.riposting = riposting;

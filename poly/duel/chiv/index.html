@@ -79,13 +79,13 @@
   <div id="dots"><i></i><i></i><i></i><i></i><i></i></div>
   <div id="drag">ACCEL</div>
   <div id="errbox" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);max-width:70vw;display:none;background:#3b0d0d;color:#ffd7d7;border:1px solid #a33;padding:10px 14px;font:600 12px/1.4 ui-monospace,monospace;z-index:99"></div>
-  <div id="build">BUILD 2026-11-15 11:15</div>
+  <div id="build">BUILD · COUNTER STUDY 01</div>
   <style>
     #drag { position: fixed; left: 50%; transform: translateX(-50%); top: 52px; font: 700 12px/1 ui-monospace, monospace;
       letter-spacing: .2em; color: #fde68a; opacity: 0; transition: opacity .12s; z-index: 60; pointer-events: none; }
     #build { position: fixed; left: 10px; top: 8px; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .08em; color: #cbd5e1; opacity: .62; z-index: 60; pointer-events: none; }
   </style>
-  <div id="armed" aria-live="polite"></div>
+  <div id="readCoach" style="position:fixed;left:50%;top:63%;transform:translateX(-50%);color:#ffe0a2;background:#141b22dd;border-radius:4px;padding:6px 12px;font:600 14px system-ui;pointer-events:none" hidden></div><div id="armed" aria-live="polite"></div>
 <div id="combatHelp">H controls &nbsp;·&nbsp; Esc pause</div><div id="hint"><b>LMB</b> attack &mdash; flick <b>up</b> overhead &middot; <b>left/right</b> cuts &middot; <b>down</b> thrust, or hold <b>WASD</b> to pick the line &nbsp;|&nbsp; <b>RMB</b> guard &nbsp;|&nbsp; <b>hold LMB / MMB</b> heavy &middot; <b>K</b> kick &middot; <b>J</b> jab &middot; <b>Q</b> feint &middot; <b>Shift</b> sprint &middot; <b>Space</b> dodge</div>
 </div>
 <div id="flash"></div><div id="vig"></div>
@@ -108,7 +108,7 @@ let combatTraces=null;fetch('./combat-traces.json?v=action-v1').then(r=>{if(!r.o
 import { GLTFLoader } from './lib/GLTFLoader.js';
 import { clone as skeletonClone } from './lib/SkeletonUtils.js';
 import { bindRig, applySwing, resetRig, autoFit, forwardSign } from './rigpose.js';
-import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=action-v1';
+import { initActors, makeActor, lineOf, actorsReady, armSweep, poseSweep, capturedMotion } from './soldieractor.js?v=read01';
 import { STYLES, styleRule } from './chiv.styles.js?v=action-v1';
 import { Atlas, buildKit, dressRig, indexBones } from './forge.js';
 import { RGBELoader } from './lib/RGBELoader.js';
@@ -117,7 +117,7 @@ import { RenderPass } from './lib/RenderPass.js';
 import { ShaderPass } from './lib/ShaderPass.js';
 import { UnrealBloomPass } from './lib/UnrealBloomPass.js';
 import { SMAAPass } from './lib/SMAAPass.js';
-import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js?v=action-v1';
+import { CFG, Duel, Fighter, phases, WEAPONS, TYPE_OF } from './chiv.core.js?v=read01';
 import { makeChivBrain, chivThink, TEMPERAMENTS } from './chiv.ai.js?v=action-v1';
 
 /* ===========================================================================
@@ -1537,7 +1537,7 @@ const kHudEl = (() => {
   return d;
 })();
 
-console.log('REALMS KINGDOM BUILD 2026-11-15 11:15');
+console.log('REALMS KINGDOM BUILD · COUNTER STUDY 01');
 
 /* ============================== SOUND ==============================
  * The build had NO audio at all. In Chivalry the weapon data itself says "a grunt is
@@ -2428,6 +2428,8 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+const coached=new URLSearchParams(location.search).get('practice')==='counter';let practiceNext=0,practiceIndex=0,practiceRound=null;
+function drillIntent(d,f){if(practiceRound!==d){practiceRound=d;practiceNext=d.clock+1;practiceIndex=0;}if(d.clock<practiceNext||d.dist>2||f.state!=='idle')return{};const attack=['Slash','Overhead','Stab'][practiceIndex++%3];practiceNext=d.clock+2.8;return{attack};}
 function tick(dt) {
   if(!duel || (!running && !window.__forceInput))return;
   if(roundTransition>0){
@@ -2462,10 +2464,11 @@ function tick(dt) {
     feint: pendingFeint,
     dodge: pendingDodge,
   };
-  const ib=exchangeLab?{...labIntent}:chivThink(brain, foe, me, duel.dist, duel.clock, dt, duel.style);if(exchangeLab){delete labIntent.attack;delete labIntent.feint;}
+  const ib=exchangeLab?{...labIntent}:coached?drillIntent(duel,foe):chivThink(brain, foe, me, duel.dist, duel.clock, dt, duel.style);if(exchangeLab){delete labIntent.attack;delete labIntent.feint;}
   ib.move = 0;   /* the opponent walks with his own body, not with a distance slider */
   const events = duel.step(dt, ia, ib) || [];
   window.__exchangeLog=window.__exchangeLog||[];window.__exchangeLog.push(...events);if(window.__exchangeLog.length>600)window.__exchangeLog.splice(0,window.__exchangeLog.length-600);
+  if(coached){const el=document.getElementById('readCoach'),a=foe.attack;el.hidden=false;const tell=a&&['holding','windup','release'].includes(foe.state)&&!a.resolved;const label={slash:'SIDE CUT · flick sideways',overhead:'OVERHEAD · flick up',stab:'THRUST · flick down'};const msg=tell?(foe.state==='holding'?'Read: ':'Answer: ')+(label[a.type]||a.name):'Hold right mouse · match the swing with left click';if(el.textContent!==msg)el.textContent=msg;}
   pressGuard = false; pendingAttack = null; pendingFeint = false; pendingDodge = null;
 
   for (const e of events) {
