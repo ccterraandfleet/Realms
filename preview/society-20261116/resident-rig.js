@@ -143,7 +143,7 @@ function placeFoot(rig,side,target,footWorldQ,poleHint=null) {
 
 export class Actor {
   constructor(opts = {}) {
-    this.rig = buildSkeleton();this.civilian=!!opts.civilian;this.firstPerson=!!opts.omitBones?.includes('head');this.riding=!!opts.riding;
+    this.rig = buildSkeleton();this.civilian=!!opts.civilian;this.infantry=!!opts.infantry;this.firstPerson=!!opts.omitBones?.includes('head');this.riding=!!opts.riding;
     this.mats = soldierMaterials(ATLAS.m, opts.tint ?? 0x2f6ea6);
     let parts = buildSoldier(this.rig, this.mats, {
       kind: opts.kind || 'sword',workcoat:!!opts.workcoat,riding:!!opts.riding,
@@ -305,7 +305,14 @@ export class Actor {
     }
     if(this.civilian&&!f.attack&&!f.guard&&f.state==='idle'){const frame=this._capturedBody||LOCO?.d?.walk?.frames?.[0];if(frame){applyMocapFrame(this.rig,frame,{mask:UPPER_MASK});if(typeof window!=='undefined')window.__civilianMotionUses=(window.__civilianMotionUses||0)+1;}}
     // The off-hand carries a shield. It must not perform the source performer's two-hand sword grip.
-    if(this.shield){solveArm(this.rig,'L',GUARD_POSE.ik.L);rollShieldClear(this.rig);}
+    if(this.infantry&&!f.attack&&f.state==='idle'){
+      // Let the captured gait turn the ribs; keep the gaze level and the gear supported.
+      const frame=this._capturedBody;if(frame){const names=['spine','chest'],qs=names.map(n=>this.bone(n).quaternion.clone());applyMocapFrame(this.rig,frame,{mask:names});names.forEach((n,i)=>this.bone(n).quaternion.slerp(qs[i],.72));}
+      this.bone('chest').rotation.x-=.035;this.root.updateWorldMatrix(true,true);
+      const neck=this.bone('neck'),upright=this.root.getWorldQuaternion(new THREE.Quaternion());neck.quaternion.copy(neck.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(upright));this.bone('head').quaternion.identity();
+      solveArm(this.rig,'R',{...GUARD_POSE.ik.R,hand:[.23,-.22,.19],blade:[.24,.92,.29]});
+    }
+    if(this.shield){solveArm(this.rig,'L',this.infantry&&!f.attack?{...GUARD_POSE.ik.L,hand:[-.16,-.17,.23]}:GUARD_POSE.ik.L);rollShieldClear(this.rig);}
     // Frame-rate-independent transition damping, including interrupts and feints.
     const alpha=1-Math.exp(-Math.max(0,dt)*32);
     if(this._previous && !this.noSmoothing && !f.attack)for(const b of this.rig.bones){
@@ -321,7 +328,7 @@ export class Actor {
     const inContact=this._contactFlags.L || this._contactFlags.R;
     const correction=Math.max(...toePoints.map(p=>floorAt(p.x,p.z)+.032-p.y));
     this.bone('hips').position.y+=Math.max(inContact?-.10:0,Math.min(.12,correction));
-    if(this.civilian && speed>1.9 && globalThis.residentSoftApex!==false){
+    if((this.civilian||this.infantry) && speed>1.9 && globalThis.residentSoftApex!==false){
       const hip=this.bone('hips'),raw=hip.position.y;
       const mean=this._heightMean??raw;this._heightMean=lerp(mean,raw,1-Math.exp(-dt*3));
       const target=mean+(raw-mean)*(raw>mean?.42:.85);
